@@ -13,7 +13,7 @@
 //! leaks into its neighbours), then refined against the filters' true
 //! response (large attenuations aren't linear in dB).
 
-use stave_dsp::{Biquad, FilterSpec};
+use stave::dsp::{Biquad, FilterSpec, Stage};
 
 pub(super) const OCTAVES: usize = 7;
 const CENTRES: [f32; OCTAVES] = [125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
@@ -77,10 +77,10 @@ impl Design {
     pub(super) fn new(sr: f32) -> Self {
         let mut interaction = [[0.0; OCTAVES]; OCTAVES];
         for f in 0..OCTAVES {
-            let mut bq = Biquad::new();
-            bq.set(spec(f, PROTO_DB), sr);
+            let mut bq = Biquad::new(spec(f, PROTO_DB));
+            bq.prepare(sr);
             for (c, row) in interaction.iter_mut().enumerate() {
-                row[f] = db(bq.magnitude_at(CENTRES[c].min(0.45 * sr), sr)) / PROTO_DB;
+                row[f] = db(bq.magnitude_at(CENTRES[c].min(0.45 * sr))) / PROTO_DB;
             }
         }
         let grid = core::array::from_fn(|k| (20.0 * 1000f32.powf(k as f32 / (GRID - 1) as f32)).min(0.45 * sr));
@@ -97,12 +97,12 @@ impl Design {
             *v = v.clamp(-MAX_DEV_DB, MAX_DEV_DB);
         }
         for (k, f) in filters.iter_mut().enumerate() {
-            f.set(spec(k, g[k]), self.sr);
+            f.set(spec(k, g[k]));
         }
         // Refine against the true response until within 0.2 dB (typical
         // rooms: once; extreme ones: a few times).
         for _ in 0..REFINE {
-            let resp: [f32; OCTAVES] = core::array::from_fn(|c| filters.iter().map(|f| db(f.magnitude_at(CENTRES[c].min(0.45 * self.sr), self.sr))).sum());
+            let resp: [f32; OCTAVES] = core::array::from_fn(|c| filters.iter().map(|f| db(f.magnitude_at(CENTRES[c].min(0.45 * self.sr)))).sum());
             let resid: [f32; OCTAVES] = core::array::from_fn(|c| dev[c] - resp[c]);
             if resid.iter().all(|r| r.abs() < 0.2) {
                 break;
@@ -110,14 +110,14 @@ impl Design {
             let dg = solve(self.interaction, resid);
             for (k, f) in filters.iter_mut().enumerate() {
                 g[k] = (g[k] + dg[k]).clamp(-MAX_DEV_DB, MAX_DEV_DB);
-                f.set(spec(k, g[k]), self.sr);
+                f.set(spec(k, g[k]));
             }
         }
         // STABILITY, guaranteed: the fit is exact at the centres but can
         // overshoot between them; anywhere the loop gain reached 0 dB
         // the tail would never decay (measured: one room rang forever).
         // So the whole response, on a dense grid, stays below −MARGIN.
-        let resp = |hz: f32| mean + filters.iter().map(|f| db(f.magnitude_at(hz, self.sr))).sum::<f32>();
+        let resp = |hz: f32| mean + filters.iter().map(|f| db(f.magnitude_at(hz))).sum::<f32>();
         let coarse: [f32; GRID] = core::array::from_fn(|k| resp(self.grid[k]));
         let mut peak = coarse.iter().copied().fold(f32::MIN, f32::max);
         // Ripples can be narrower than the grid: search finely around
@@ -152,8 +152,14 @@ pub(super) struct DecayEq {
 }
 
 impl DecayEq {
-    pub(super) fn new() -> Self {
-        Self { gain: 1.0, filters: core::array::from_fn(|_| Biquad::new()) }
+    /// Flat (every filter a passthrough), run at `sample_rate`.
+    pub(super) fn new(sample_rate: f32) -> Self {
+        let filters = core::array::from_fn(|_| {
+            let mut f = Biquad::passthrough();
+            f.prepare(sample_rate);
+            f
+        });
+        Self { gain: 1.0, filters }
     }
 
     /// The cascade alone — the SHAPE of the attenuation, its broadband
@@ -163,7 +169,7 @@ impl DecayEq {
     pub(super) fn shape(&mut self, x: f32) -> f32 {
         let mut y = x;
         for f in &mut self.filters {
-            y = f.process(y);
+            y = f.tick(y);
         }
         y
     }
@@ -199,11 +205,11 @@ mod tests {
         for _ in 0..300 {
             let len = (5.0 + 200.0 * rnd()) * 0.001 * sr;
             let t60: [f32; OCTAVES] = core::array::from_fn(|_| 0.1 * 300f32.powf(rnd()));
-            let mut eq = DecayEq::new();
+            let mut eq = DecayEq::new(sr);
             eq.gain = d.fit(&DecayEq::targets(len, sr, &t60), &mut eq.filters);
             for k in 0..400 {
                 let hz = 20.0 * 1000f32.powf(k as f32 / 399.0);
-                let g = db(eq.gain) + eq.filters.iter().map(|f| db(f.magnitude_at(hz.min(0.45 * sr), sr))).sum::<f32>();
+                let g = db(eq.gain) + eq.filters.iter().map(|f| db(f.magnitude_at(hz.min(0.45 * sr)))).sum::<f32>();
                 assert!(g < 0.05, "{hz:.0} Hz gains {g:.2} dB (len {len:.0}, t60 {t60:?})");
             }
         }
@@ -221,11 +227,11 @@ mod tests {
         ] {
             let len = len_ms * 0.001 * sr;
             let target = DecayEq::targets(len, sr, &t60);
-            let mut eq = DecayEq::new();
+            let mut eq = DecayEq::new(sr);
             eq.gain = d.fit(&target, &mut eq.filters);
             let _ = eq.shape(0.0);
             for (k, &c) in CENTRES.iter().enumerate() {
-                let got = db(eq.gain) + eq.filters.iter().map(|f| db(f.magnitude_at(c, sr))).sum::<f32>();
+                let got = db(eq.gain) + eq.filters.iter().map(|f| db(f.magnitude_at(c))).sum::<f32>();
                 assert!((got - target[k]).abs() < tol, "len {len_ms} ms, {c} Hz: {got:.2} dB vs {:.2}", target[k]);
             }
         }

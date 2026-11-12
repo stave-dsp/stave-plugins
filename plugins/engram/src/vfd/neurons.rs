@@ -3,20 +3,20 @@
 //! glowing with their energy and tethered to where plasticity has
 //! pulled them. Grab a neuron and drag it to place it.
 //!
-//! The nodes move, so the window places its grab targets from live
-//! values (`Part::hit`): a press near a neuron's drawn (or live)
-//! position becomes a pad on that neuron's x/y over the field. The
+//! The nodes move, so the window places its grabs from live values
+//! (`Part::grabs`): a press near a neuron's drawn (or live) position
+//! becomes a pad on that neuron's x/y over the field. The
 //! field draws y DOWN (as the pedal face did), so its pad area is the
 //! field flipped (bottom edge, negative height): the runtime's pad maps
 //! y bottom→top over its area, which over a flipped area is top→bottom
 //! — the value a press sets is the one drawn under the pointer.
 
-use stave_core::face::part::Bake;
-use stave_core::face::prelude::*;
-use stave_core::face::{leaf, Bind, Gesture, Part};
+use stave::face::part::Bake;
+use stave::face::{leaf, Area, Gesture, Grab, Part};
+use stave::prelude::*;
 
-use super::{glow, Feed, Pt, TextAlign, LINES, SCREEN_H};
-use crate::FIELD_ASPECT;
+use super::{glow, print, Anchor, Feed, LINES, SCREEN_H};
+use crate::{EngramTaps, FIELD_ASPECT};
 
 /// The window's screen width (its height is [`SCREEN_H`]).
 pub const W: f64 = 340.0;
@@ -55,8 +55,8 @@ pub fn field(sc: Rect) -> Rect {
 }
 
 /// A field point (x right, y down) on screen.
-pub fn at(fr: Rect, (u, v): (f64, f64)) -> Pt {
-    pt(fr.x + u * fr.w, fr.y + v * fr.h)
+pub fn at(fr: Rect, (u, v): (f64, f64)) -> (f64, f64) {
+    (fr.x + u * fr.w, fr.y + v * fr.h)
 }
 
 /// The pad area for field `fr`: the field flipped, so the runtime's
@@ -65,11 +65,11 @@ pub fn pad_area(fr: Rect) -> Rect {
     Rect { x: fr.x, y: fr.y + fr.h, w: fr.w, h: -fr.h }
 }
 
-fn ellipse(c: Pt, rx: f64, ry: f64) -> Path {
-    let pts: Vec<Pt> = (0..=72)
+fn ellipse((cx, cy): (f64, f64), rx: f64, ry: f64) -> Path {
+    let pts: Vec<_> = (0..=72)
         .map(|k| {
             let a = core::f64::consts::TAU * f64::from(k) / 72.0;
-            pt(c.x + rx * a.cos(), c.y + ry * a.sin())
+            pt(cx + rx * a.cos(), cy + ry * a.sin())
         })
         .collect();
     Path::polyline(&pts)
@@ -100,18 +100,10 @@ impl Part for Network {
             cx.scene.stroke(ellipse(c, ring * fr.w / 2.0, ring * fr.h / 2.0), Stroke::new(glow(th, 0.07), 0.8));
         }
         let cross = Stroke::new(glow(th, 0.05), 0.8);
-        cx.scene.stroke(Path::new().move_to(pt(fr.x, c.y)).line_to(pt(fr.x + fr.w, c.y)), cross);
-        cx.scene.stroke(Path::new().move_to(pt(c.x, fr.y)).line_to(pt(c.x, fr.y + fr.h)), cross);
-        let ty = &th.type_;
-        let font = ty.caption.align(TextAlign::Left);
-        cx.scene.text_in(pt(sc.x + 12.0, sc.y + 17.0), "NEURONS", 7.0, glow(th, 0.6), font);
-        cx.scene.text_in(
-            pt(sc.x + sc.w - 12.0, sc.y + 17.0),
-            "DRAG A NEURON TO PLACE IT",
-            7.0,
-            glow(th, 0.6),
-            font.align(TextAlign::Right),
-        );
+        cx.scene.stroke(Path::new().move_to(pt(fr.x, c.1)).line_to(pt(fr.x + fr.w, c.1)), cross);
+        cx.scene.stroke(Path::new().move_to(pt(c.0, fr.y)).line_to(pt(c.0, fr.y + fr.h)), cross);
+        print(th, cx.scene, (sc.x + 12.0, sc.y + 17.0), "NEURONS", 7.0, glow(th, 0.6), Anchor::Start);
+        print(th, cx.scene, (sc.x + sc.w - 12.0, sc.y + 17.0), "DRAG A NEURON TO PLACE IT", 7.0, glow(th, 0.6), Anchor::End);
     }
 
     fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {
@@ -119,6 +111,10 @@ impl Part for Network {
         let sc = screen(r);
         let fr = field(sc);
         let feed = Feed::read(f);
+        let at = |uv| {
+            let (x, y) = at(fr, uv);
+            pt(x, y)
+        };
         let energy = |i: usize| feed.energy.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
         let nodes: Vec<_> = (0..LINES).map(|i| self.node_at(f, &feed, i)).collect();
 
@@ -131,7 +127,7 @@ impl Part for Network {
                 if c > 0.06 {
                     let lit = (energy(i) * energy(j)).sqrt();
                     s.stroke(
-                        Path::new().move_to(at(fr, a)).line_to(at(fr, b)),
+                        Path::new().move_to(at(a)).line_to(at(b)),
                         Stroke::round(glow(th, 0.10 + 0.25 * c + 0.45 * c * lit), 0.6 + 1.4 * c),
                     );
                 }
@@ -139,14 +135,14 @@ impl Part for Network {
         }
         // Tethers from the drawing to where plasticity pulled each one.
         for (drawn, live) in &nodes {
-            let (pd, pl) = (at(fr, *drawn), at(fr, *live));
+            let (pd, pl) = (at(*drawn), at(*live));
             if (pd.x - pl.x).hypot(pd.y - pl.y) > 2.0 {
                 s.stroke(Path::new().move_to(pd).line_to(pl), Stroke::round(glow(th, 0.3), 0.6));
                 s.stroke(Path::circle(pd, 3.5), Stroke::new(glow(th, 0.35), 0.8));
             }
         }
         for (i, (_, live)) in nodes.iter().enumerate() {
-            let p = at(fr, *live);
+            let p = at(*live);
             let e = energy(i);
             s.solid(Path::circle(p, 6.0 + 8.0 * e), glow(th, 0.06 + 0.22 * e));
             s.solid(Path::circle(p, 3.0 + 1.5 * e), glow(th, 0.55 + 0.45 * e));
@@ -155,31 +151,27 @@ impl Part for Network {
         glass_over(f, s, sc, RADIUS);
     }
 
-    fn hit(&self, r: Rect, f: &Frame<'_>, p: Pt) -> Option<Gesture> {
+    /// Every neuron is grabbable at its drawn and its live position
+    /// (topmost last: the higher-numbered neuron wins an overlap).
+    fn grabs(&self, r: Rect, f: &Frame<'_>, out: &mut Vec<Grab>) {
         let fr = field(screen(r));
         let feed = Feed::read(f);
-        let mut best: Option<(usize, f64)> = None;
         for i in 0..LINES {
             let (drawn, live) = self.node_at(f, &feed, i);
+            let (x, y) = self.nodes[i];
             for spot in [drawn, live] {
-                let q = at(fr, spot);
-                let d = (q.x - p.x).hypot(q.y - p.y);
-                if d <= GRAB && best.is_none_or(|(_, b)| d < b) {
-                    best = Some((i, d));
-                }
+                let (cx, cy) = at(fr, spot);
+                out.push(Grab {
+                    area: Area::Circle { c: pt(cx, cy), r: GRAB },
+                    gesture: Gesture::Pad { x, y, area: pad_area(fr) },
+                });
             }
         }
-        let (i, _) = best?;
-        let (x, y) = self.nodes[i];
-        Some(Gesture::Pad { x, y, area: pad_area(fr) })
     }
 
-    fn probes(&self) -> Vec<&'static str> {
-        crate::FACE_TAPS.to_vec()
-    }
-
-    fn reads(&self) -> Vec<Bind> {
-        self.nodes.iter().flat_map(|&(x, y)| [x, y]).collect()
+    fn reads(&self) -> Reads {
+        let params: Vec<Bind> = self.nodes.iter().flat_map(|&(x, y)| [x, y]).collect();
+        Reads::params(&params).and_taps(EngramTaps::ALL)
     }
 }
 
@@ -203,8 +195,8 @@ mod tests {
         // over the flipped area that is the y-down drawing's value.
         let fr = field(SC);
         let a = pad_area(fr);
-        let p = at(fr, (0.25, 0.8));
-        let (nx, ny) = ((p.x - a.x) / a.w, 1.0 - (p.y - a.y) / a.h);
+        let (px, py) = at(fr, (0.25, 0.8));
+        let (nx, ny) = ((px - a.x) / a.w, 1.0 - (py - a.y) / a.h);
         assert!((nx - 0.25).abs() < 1e-9 && (ny - 0.8).abs() < 1e-9);
     }
 }

@@ -2,9 +2,9 @@
 //! the ear HEARS (twelve pitch classes and the PULSE lamp), and the
 //! RECALL and NOVELTY strips.
 
-use stave_core::face::prelude::*;
+use stave::prelude::*;
 
-use super::{glow, label, unlit, Feed, Pt, TextAlign, SLOTS};
+use super::{glow, label, print, unlit, Anchor, Feed, SLOTS};
 
 /// The window's screen width (its height is [`super::SCREEN_H`]).
 pub const W: f64 = 238.0;
@@ -45,9 +45,9 @@ pub fn strip_segment(r: Rect, k: usize, s: usize) -> Rect {
     Rect { x: x0 + s as f64 * pitch, y: r.y + STRIP_Y[k] - 3.5, w: pitch - 2.2, h: 7.0 }
 }
 
-fn pulse_at(r: Rect) -> Pt {
+fn pulse_at(r: Rect) -> (f64, f64) {
     let h = hear_slot(r, 0);
-    pt(h.x + h.w - 3.0, r.y + 16.0)
+    (h.x + h.w - 3.0, r.y + 16.0)
 }
 
 fn rect(s: &mut Scene, r: Rect, c: Color) {
@@ -65,7 +65,7 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let off = unlit(th);
 
     // MEMORY: the bank, cell by cell — held, and attended.
-    label(f, s, pt(r.x + PAD + grid_w() / 2.0, r.y + 18.0), "MEMORY", 0.6, TextAlign::Center);
+    label(f, s, (r.x + PAD + grid_w() / 2.0, r.y + 18.0), "MEMORY", 0.6, Anchor::Middle);
     for k in 0..SLOTS {
         let c = cell(r, k);
         if !feed.held(k) {
@@ -82,15 +82,15 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // HEARING: the query's twelve pitch classes, dimmed as what you play
     // turns percussive (harmony then counts for less); PULSE on a hit.
     let h0 = hear_slot(r, 0);
-    label(f, s, pt(h0.x - 10.0, r.y + 18.0), "HEARING", 0.6, TextAlign::Left);
+    label(f, s, (h0.x - 10.0, r.y + 18.0), "HEARING", 0.6, Anchor::Start);
     let p = pulse_at(r);
+    let p = pt(p.0, p.1);
     s.solid(Path::circle(p, 2.2), super::amber(0.08));
     if feed.pulse > 0.05 {
         s.solid(Path::circle(p, 5.0), super::amber(0.3 * feed.pulse));
         s.solid(Path::circle(p, 2.2), super::amber(0.4 + 0.6 * feed.pulse));
     }
     let tonal = 0.3 + 0.7 * feed.tonal;
-    let ty = &th.type_;
     for (c, note) in NOTES.iter().enumerate() {
         let slot = hear_slot(r, c);
         rect(s, slot, off);
@@ -98,18 +98,12 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
         if v > 0.02 {
             rect(s, Rect { w: slot.w * v, ..slot }, glow(th, (0.35 + 0.65 * v) * tonal));
         }
-        s.text_in(
-            pt(slot.x - 4.0, slot.y + slot.h - 0.5),
-            *note,
-            5.5,
-            glow(th, 0.45),
-            ty.caption.align(TextAlign::Right),
-        );
+        print(th, s, (slot.x - 4.0, slot.y + slot.h - 0.5), *note, 5.5, glow(th, 0.45), Anchor::End);
     }
 
     // RECALL (how loudly it remembers) and NOVELTY (how new this is).
     for (k, (value, name)) in [(feed.recalling, "RECALL"), (feed.novelty, "NOVELTY")].iter().enumerate() {
-        label(f, s, pt(r.x + PAD, r.y + STRIP_Y[k] + 2.5), *name, 0.75, TextAlign::Left);
+        label(f, s, (r.x + PAD, r.y + STRIP_Y[k] + 2.5), *name, 0.75, Anchor::Start);
         let e = value * STRIP_SEGS as f64;
         for seg in 0..STRIP_SEGS {
             let at = strip_segment(r, k, seg);

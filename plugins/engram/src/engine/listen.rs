@@ -26,7 +26,7 @@
 //! It also tells PRESENCE: whether you are playing, held through the
 //! gaps between hits (a sparse groove is still playing).
 
-use stave_dsp::Svf;
+use stave::dsp::{tau_coeff, Stage, Svf};
 
 use super::describe::{Describe, D};
 
@@ -65,7 +65,7 @@ fn class_hz(class: usize, octave: i32) -> f32 {
 }
 
 fn coef(ms: f32, rate: f32) -> f32 {
-    1.0 - (-1000.0 / (ms * rate)).exp()
+    tau_coeff(ms * 0.001, rate)
 }
 
 /// The ear's three fingerprints at one moment, and how tonal it is.
@@ -121,9 +121,9 @@ impl Listen {
     pub(super) fn new() -> Self {
         Self {
             rate: 12_000.0,
-            classes: core::array::from_fn(|_| core::array::from_fn(|_| Svf::new())),
+            classes: core::array::from_fn(|_| core::array::from_fn(|_| Svf::default())),
             chroma_env: [0.0; CLASSES],
-            bands: core::array::from_fn(|_| Svf::new()),
+            bands: core::array::from_fn(|_| Svf::default()),
             band_env: [0.0; BANDS],
             logs: [SILENT_LOG; BANDS],
             log_mean: [SILENT_LOG; BANDS],
@@ -156,25 +156,23 @@ impl Listen {
     /// window).
     pub(super) fn prepare(&mut self, host: f32, rate: f32, grain_s: f32) {
         self.rate = rate;
-        let res = 1.0 - 1.0 / (2.0 * Q);
         for (c, row) in self.classes.iter_mut().enumerate() {
             for (k, f) in row.iter_mut().enumerate() {
                 f.prepare(rate);
-                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * rate), res);
+                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * rate), Q);
             }
         }
-        let band_res = 1.0 - 1.0 / (2.0 * BAND_Q);
         for (b, f) in self.bands.iter_mut().enumerate() {
             let hz = BAND_LO_HZ * (BAND_HI_HZ / BAND_LO_HZ).powf(b as f32 / (BANDS - 1) as f32);
             f.prepare(host);
-            f.set(hz.min(0.45 * host), band_res);
+            f.set(hz.min(0.45 * host), BAND_Q);
         }
         self.chroma_env = [0.0; CLASSES];
         self.band_env = [0.0; BANDS];
         self.logs = [SILENT_LOG; BANDS];
         self.log_mean = [SILENT_LOG; BANDS];
         self.log_sq = [SILENT_LOG * SILENT_LOG; BANDS];
-        self.timbre_k = 1.0 - (-1.0 / (TIMBRE_TAU_S * rate)).exp();
+        self.timbre_k = tau_coeff(TIMBRE_TAU_S, rate);
         self.att = coef(ATTACK_MS, rate);
         self.rel = coef(RELEASE_MS, rate);
         self.band_att = coef(5.0, host);
@@ -200,7 +198,7 @@ impl Listen {
     #[inline]
     pub(super) fn air(&mut self, x: f32) {
         for b in 0..BANDS {
-            let a = (self.bands[b].process(x, 0).bp / BAND_Q).abs();
+            let a = (self.bands[b].taps(x).bp / BAND_Q).abs();
             let k = if a > self.band_env[b] { self.band_att } else { self.band_rel };
             self.band_env[b] += (a - self.band_env[b]) * k;
         }
@@ -210,7 +208,7 @@ impl Listen {
     #[inline]
     pub(super) fn hear(&mut self, u: f32) {
         for c in 0..CLASSES {
-            let s: f32 = self.classes[c].iter_mut().map(|f| f.process(u, 0).bp).sum::<f32>() / Q;
+            let s: f32 = self.classes[c].iter_mut().map(|f| f.taps(u).bp).sum::<f32>() / Q;
             let a = s.abs();
             let k = if a > self.chroma_env[c] { self.att } else { self.rel };
             self.chroma_env[c] += (a - self.chroma_env[c]) * k;

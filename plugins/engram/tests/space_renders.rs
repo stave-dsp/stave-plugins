@@ -7,50 +7,48 @@
 
 use std::path::PathBuf;
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_engram_vst3::Engram;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 const SECONDS: f32 = 12.0;
 const DIRECT: f32 = 1.0;
 
-fn render_ir(set: &[(&str, f64)]) -> [Vec<f32>; 2] {
-    let mut plugin = stave_engram_vst3::Engram::new();
-    plugin.debug_attach(DebugBus::new());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table.by_name(n).unwrap_or_else(|| panic!("param '{n}'")).set_plain(*v);
+/// Engram at 48 kHz, blocks of BLOCK, started at `set` (in order: a
+/// later value wins).
+fn engram(set: &[(&str, f64)]) -> PluginHarness<Engram> {
+    set.iter().fold(PluginHarness::<Engram>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v)).build()
+}
+
+/// Run `x` (both channels) through `h`; before each block, `path` (by
+/// its first frame) may move the map cursor. Both outputs.
+fn stream(h: &mut PluginHarness<Engram>, x: &[f32], path: &dyn Fn(usize) -> Option<(f64, f64)>) -> [Vec<f32>; 2] {
+    let mut out = [Vec::with_capacity(x.len()), Vec::with_capacity(x.len())];
+    for (blk, chunk) in x.chunks(BLOCK).enumerate() {
+        if let Some((px, py)) = path(blk * BLOCK) {
+            h.set("space x", px);
+            h.set("space y", py);
+        }
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        for (o, c) in out.iter_mut().zip(h.outputs()) {
+            o.extend_from_slice(&c[..chunk.len()]);
+        }
     }
-    plugin.activate(FS, BLOCK);
+    out
+}
+
+fn render_ir(set: &[(&str, f64)]) -> [Vec<f32>; 2] {
     let n = (SECONDS * FS) as usize;
-    let mut out = [Vec::with_capacity(n), Vec::with_capacity(n)];
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
     // Two silent blocks first: the room settles where the params say.
     let lead = 2 * BLOCK;
-    for at in (0..n + lead).step_by(BLOCK) {
-        il.fill(0.0);
-        if at == lead {
-            il[0] = 1.0;
-        }
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        if at >= lead {
-            out[0].extend_from_slice(&ol);
-            out[1].extend_from_slice(&or);
-        }
-    }
+    let mut x = vec![0.0f32; lead + n.next_multiple_of(BLOCK)];
+    x[lead] = 1.0;
+    let mut out = stream(&mut engram(set), &x, &|_| None).map(|c| c[lead..].to_vec());
     out[0].truncate(n);
     out[1].truncate(n);
     // The DIRECT sound (the dry path's job, at MIX 1 absent): measured
@@ -80,8 +78,8 @@ fn render_space_irs() {
             ("mix", 1.0), ("recall", 0.0), ("plasticity", 0.0), ("drift", 0.0), ("steer", 0.0),
             ("space", amount), ("space x", x), ("space y", y), ("size", size),
         ]);
-        let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: ir.to_vec() };
-        stave_measure::wav::write(&dir.join(format!("{name}.wav")), &audio).unwrap();
+        let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: ir.to_vec() };
+        stave_host::wav::write(&dir.join(format!("{name}.wav")), &audio).unwrap();
         n += 1;
     }
     println!("{n} impulse responses -> {}", dir.display());
@@ -101,7 +99,7 @@ fn render_space_tour() {
     };
     let dir = PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let a = stave_measure::wav::read(std::path::Path::new(&input)).unwrap();
+    let a = stave_host::wav::read(std::path::Path::new(&input)).unwrap();
     assert_eq!(a.sample_rate, FS as u32, "tour input must be 48 kHz");
     let k = 1.0 / a.channels.len() as f32;
     let mut x: Vec<f32> = (0..a.channels[0].len()).map(|i| a.channels.iter().map(|c| c[i]).sum::<f32>() * k).collect();
@@ -116,43 +114,14 @@ fn render_space_tour() {
         let out = render_stream(&set, &x);
         let peak = out.iter().flatten().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-9);
         let g = 0.89 / peak;
-        let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: out.iter().map(|c| c.iter().map(|v| v * g).collect()).collect() };
-        stave_measure::wav::write(&dir.join(format!("{}.wav", f[0])), &audio).unwrap();
+        let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: out.iter().map(|c| c.iter().map(|v| v * g).collect()).collect() };
+        stave_host::wav::write(&dir.join(format!("{}.wav", f[0])), &audio).unwrap();
         println!("{}", f[0]);
     }
 }
 
 fn render_stream(set: &[(&str, f64)], x: &[f32]) -> [Vec<f32>; 2] {
-    let mut plugin = stave_engram_vst3::Engram::new();
-    plugin.debug_attach(DebugBus::new());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table.by_name(n).unwrap_or_else(|| panic!("param '{n}'")).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let mut out = [Vec::with_capacity(x.len()), Vec::with_capacity(x.len())];
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
-    for chunk in x.chunks(BLOCK) {
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out[0].extend_from_slice(&ol[..chunk.len()]);
-        out[1].extend_from_slice(&or[..chunk.len()]);
-    }
-    out
+    stream(&mut engram(set), x, &|_| None)
 }
 
 /// MORPH quality: pink-ish noise through the generated room, (a) static,
@@ -197,44 +166,12 @@ fn render_morphs() {
         .collect();
     let base = [("mix", 1.0), ("recall", 0.0), ("plasticity", 0.0), ("steer", 0.0), ("space", 1.0)];
     let render = |set: &[(&str, f64)], path: &dyn Fn(usize) -> Option<(f64, f64)>| -> [Vec<f32>; 2] {
-        let mut plugin = stave_engram_vst3::Engram::new();
-        plugin.debug_attach(DebugBus::new());
-        let table = plugin.param_table();
-        for (k, v) in base.iter().chain(set) {
-            table.by_name(k).unwrap().set_plain(*v);
-        }
-        plugin.activate(FS, BLOCK);
-        let mut out = [Vec::with_capacity(n), Vec::with_capacity(n)];
-        let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
-        for (blk, chunk) in x.chunks(BLOCK).enumerate() {
-            if let Some((px, py)) = path(blk * BLOCK) {
-                table.by_name("space x").unwrap().set_plain(px);
-                table.by_name("space y").unwrap().set_plain(py);
-            }
-            il[..chunk.len()].copy_from_slice(chunk);
-            il[chunk.len()..].fill(0.0);
-            ir.copy_from_slice(&il);
-            let mut ip = [core::ptr::null_mut(); 2];
-            let mut op = [core::ptr::null_mut(); 2];
-            let mut ctx = ProcessCtx {
-                sample_rate: FS,
-                frames: BLOCK,
-                transport: None,
-                input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-                output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-                aux: &[],
-                params: stave_core::ParamBlock::empty(),
-                events: &[],
-            };
-            plugin.process(&mut ctx);
-            out[0].extend_from_slice(&ol[..chunk.len()]);
-            out[1].extend_from_slice(&or[..chunk.len()]);
-        }
-        out
+        let all: Vec<(&str, f64)> = base.iter().chain(set).copied().collect();
+        stream(&mut engram(&all), &x, path)
     };
     let write = |name: &str, o: [Vec<f32>; 2]| {
-        let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: o.to_vec() };
-        stave_measure::wav::write(&dir.join(format!("{name}.wav")), &audio).unwrap();
+        let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: o.to_vec() };
+        stave_host::wav::write(&dir.join(format!("{name}.wav")), &audio).unwrap();
     };
     write("morph-static", render(&[("drift", 0.0), ("space x", 0.5), ("space y", 0.5)], &|_| None));
     // A loop through the map, after 1 s settled at its start.

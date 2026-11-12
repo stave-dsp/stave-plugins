@@ -22,46 +22,34 @@
 //!   it: a recalled moment pulls the room toward where it was heard.
 //!   (The knob-room properties above pin SPACE 0.)
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_engram_vst3::Engram;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
+/// Run `input` (both channels) through Engram started at `set`, moving
+/// the params `at` (time s, name, value) as automation does; the left
+/// output.
 fn render(set: &[(&str, f64)], at: &[(f32, &str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_engram_vst3::Engram::new();
-    plugin.debug_attach(DebugBus::new());
-    let table = plugin.param_table();
-    let find = |n: &str| table.by_name(n).unwrap_or_else(|| panic!("param '{n}'"));
-    for (n, v) in set {
-        find(n).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Engram>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let mut out = Vec::with_capacity(input.len());
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
     for (b, chunk) in input.chunks(BLOCK).enumerate() {
         let t = (b * BLOCK) as f32 / FS;
         for (s, n, v) in at {
             if t >= *s && t < *s + BLOCK as f32 / FS {
-                find(n).set_plain(*v);
+                h.set(*n, *v);
             }
         }
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&ol[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0][..chunk.len()]);
     }
     out
 }
@@ -126,6 +114,7 @@ fn t60(out: &[f32]) -> f32 {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn mix_zero_is_bit_exact_and_silence_is_silent() {
     let input = noise(24_000, 0.5);
     let out = render(&[("mix", 0.0), ("decay", 1.0), ("recall", 1.0)], &[], &input);
@@ -137,6 +126,7 @@ fn mix_zero_is_bit_exact_and_silence_is_silent() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn it_is_a_reverb_and_decay_sets_the_tail() {
     let short = t60(&render(&with(wet(), &[("decay", 1.0), ("space", 0.0)]), &[], &click(6.0)));
     let long = t60(&render(&with(wet(), &[("decay", 4.0), ("space", 0.0)]), &[], &click(12.0)));
@@ -145,6 +135,7 @@ fn it_is_a_reverb_and_decay_sets_the_tail() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn hold_freezes_the_room() {
     let out = render(&with(wet(), &[("decay", 1.0), ("space", 0.0)]), &[(0.3, "hold", 1.0)], &click(8.0));
     let late = rms(&out[(FS * 6.0) as usize..(FS * 7.0) as usize]);
@@ -154,6 +145,7 @@ fn hold_freezes_the_room() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_drawing_shapes_the_room_and_every_drawing_is_stable() {
     // Every node dragged to the centre (a tiny, tightly coupled room)
     // vs every node at the rim (a big, sparse one).
@@ -190,6 +182,7 @@ const NODE_Y: [&str; 16] = [
 ];
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn everything_maxed_stays_bounded() {
     let out = render(&[("mix", 1.0), ("decay", 30.0), ("recall", 1.0), ("focus", 0.0), ("deja", 0.0), ("size", 1.0), ("tone", 1.0), ("plasticity", 1.0)], &[(2.0, "hold", 1.0)], &noise((FS * 5.0) as usize, 0.7));
     let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
@@ -267,6 +260,7 @@ fn during_second_a(m: &[f32]) -> &[f32] {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn it_remembers_by_harmony() {
     let m = memory_part(&[("focus", 0.9)], &[], &a_b_a());
     let w = during_second_a(&m);
@@ -276,6 +270,7 @@ fn it_remembers_by_harmony() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn focus_is_attentions_temperature() {
     let share = |focus: f64| {
         let m = memory_part(&[("focus", focus)], &[], &a_b_a());
@@ -289,6 +284,7 @@ fn focus_is_attentions_temperature() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn deja_gates_recall_by_age() {
     // DÉJÀ 30 s: every memory is younger than that — nothing to recall.
     let m = memory_part(&[("focus", 0.9), ("deja", 30.0)], &[], &a_b_a());
@@ -297,6 +293,7 @@ fn deja_gates_recall_by_age() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn forget_wipes_the_bank() {
     // Press FORGET in the breath before the second A.
     let m = memory_part(&[("focus", 0.9)], &[(6.8, "forget", 1.0)], &a_b_a());
@@ -305,6 +302,7 @@ fn forget_wipes_the_bank() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_memory_lets_go_when_you_stop() {
     // The input ends at 9.5 s; DECAY 3 s (the recall fades at the
     // room's T60).
@@ -367,6 +365,7 @@ fn low_high(x: &[f32], lo: f64, hi: f64) -> (f64, f64) {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn it_remembers_drums_by_their_sound() {
     let m = memory_part(&[("focus", 0.9), ("texture", 0.1)], &[], &k_h_k());
     let w = during_second_a(&m);
@@ -376,6 +375,7 @@ fn it_remembers_drums_by_their_sound() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn percussive_memories_answer_your_hits() {
     // The tightest room (recalled memories mostly play INTO the room,
     // and a big one smears hits 250 ms apart into each other).
@@ -424,6 +424,7 @@ fn voiced(freqs: [f32; 3], secs: f32, bright: bool) -> Vec<f32> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn match_decides_what_alike_means() {
     // Memories: A played BRIGHT, then B played DARK. Query: A played
     // DARK — the harmony says A, the sound says B.
@@ -445,6 +446,7 @@ fn match_decides_what_alike_means() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn texture_runs_from_seamless_to_shattered() {
     // A pure-sine A remembered, then recalled: at TEXTURE 1 the grains
     // leap octaves — energy appears an octave away from the notes.
@@ -475,6 +477,7 @@ fn map_t60(x: f64, y: f64, secs: f32) -> f32 {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_generated_room_is_a_reverb_and_decay_stretches_it() {
     let base = t60(&render(&with(generated(), &[("decay", 3.0)]), &[], &click(12.0)));
     let long = t60(&render(&with(generated(), &[("decay", 6.0)]), &[], &click(20.0)));
@@ -489,6 +492,7 @@ fn the_generated_room_is_a_reverb_and_decay_stretches_it() {
 /// is proven in decay_eq's `no_frequency_ever_gains`.) And the map spans
 /// rooms from small to vast.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_map_spans_small_to_vast_rooms_all_bounded() {
     let input = noise((FS * 3.0) as usize, 0.7);
     let peak = |out: &[f32]| out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
@@ -515,6 +519,7 @@ fn the_map_spans_small_to_vast_rooms_all_bounded() {
 /// on the vast room): with STEER the room is pulled back toward where A
 /// was heard, and the tail after the second A is shorter.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn memory_steers_the_room_to_where_it_heard_you() {
     // The smallest and the largest room on a coarse scan.
     let mut pts = Vec::new();
@@ -547,6 +552,7 @@ fn memory_steers_the_room_to_where_it_heard_you() {
 
 /// HOLD in the generated room: once held, the tail neither dies nor grows.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn hold_freezes_the_generated_room() {
     let out = render(&with(generated(), &[("decay", 3.0)]), &[(0.05, "hold", 1.0)], &click(8.0));
     let (a, b) = (rms(&out[(FS * 3.0) as usize..(FS * 4.0) as usize]), rms(&out[(FS * 7.0) as usize..(FS * 8.0) as usize]));

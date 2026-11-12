@@ -1,47 +1,104 @@
-//! Telemetry — the display's feed, PACKED: the debug bus has 64 probe
-//! slots and the face needs ~150 values, so several quantised values
-//! ride in each probe (`crate::pack`, exact in an f64's 53-bit
-//! integer range). Out go: each line's energy (48 dB window), every
-//! node's live position, what the ear hears (chroma), every memory's
-//! attention weight, whether it holds a memory (and a percussive one),
-//! how loudly it is recalling, how NOVEL what you play is to it, the
-//! onset pulse, and how tonal what you play is. Zero-cost with no
-//! bus attached.
+//! The display's feed, PACKED: telemetry has 64 tap slots and the face
+//! needs ~150 values, so several quantised values ride in each tap
+//! (`crate::pack`, exact in an f64's 53-bit integer range). Out go: each
+//! line's energy (48 dB window), every node's live position, what the
+//! ear hears (chroma), every memory's attention weight, whether it holds
+//! a memory (and a percussive one), how loudly it is recalling, how
+//! NOVEL what you play is to it, the onset pulse, how tonal what you
+//! play is, and the SPACE map's feed. Writes to detached taps (no
+//! telemetry) are dropped.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::{DebugBus, Tap};
+use stave::prelude::*;
 
 use super::bank::{Bank, SLOTS};
 use super::geometry::Geometry;
 use super::listen::CLASSES;
 use super::room::{Room, LINES};
 use super::space_model::SPACES;
-use crate::{pack, FACE_TAPS, TAP_HEARD_AT, TAP_SPACE, TAP_SPACE_INFO, TAP_ATTN, TAP_ENERGY, TAP_FILLED, TAP_HEARING, TAP_NOVELTY, TAP_PERC, TAP_POS, TAP_PULSE, TAP_RECALLING, TAP_TONAL};
+use crate::{pack, TAP_HEARD_AT, TAP_SPACE, TAP_SPACE_INFO, TAP_ATTN, TAP_ENERGY, TAP_FILLED, TAP_HEARING, TAP_NOVELTY, TAP_PERC, TAP_POS, TAP_PULSE, TAP_RECALLING, TAP_TONAL};
 
-pub(super) struct Telemetry {
-    bus: Option<Arc<DebugBus>>,
-    taps: [Tap; FACE_TAPS.len()],
+/// The display's taps. A multi-tap group (`energy_0..3`, …) is one
+/// packed value split across taps; the `crate::TAP_*` consts say where
+/// each group starts in [`EngramTaps::ALL`] (field order).
+#[derive(Taps)]
+pub struct EngramTaps {
+    pub energy_0: Tap,
+    pub energy_1: Tap,
+    pub energy_2: Tap,
+    pub energy_3: Tap,
+    pub pos_0: Tap,
+    pub pos_1: Tap,
+    pub pos_2: Tap,
+    pub pos_3: Tap,
+    pub pos_4: Tap,
+    pub pos_5: Tap,
+    pub pos_6: Tap,
+    pub pos_7: Tap,
+    pub hearing_0: Tap,
+    pub hearing_1: Tap,
+    pub hearing_2: Tap,
+    pub attn_0: Tap,
+    pub attn_1: Tap,
+    pub attn_2: Tap,
+    pub attn_3: Tap,
+    pub attn_4: Tap,
+    pub attn_5: Tap,
+    pub attn_6: Tap,
+    pub attn_7: Tap,
+    pub attn_8: Tap,
+    pub attn_9: Tap,
+    pub attn_10: Tap,
+    pub filled_0: Tap,
+    pub filled_1: Tap,
+    pub recalling: Tap,
+    pub novelty: Tap,
+    pub percussive_0: Tap,
+    pub percussive_1: Tap,
+    pub pulse: Tap,
+    pub tonal: Tap,
+    pub space: Tap,
+    pub space_info: Tap,
+    pub heard_at_0: Tap,
+    pub heard_at_1: Tap,
+    pub heard_at_2: Tap,
+    pub heard_at_3: Tap,
+    pub heard_at_4: Tap,
+    pub heard_at_5: Tap,
+    pub heard_at_6: Tap,
+    pub heard_at_7: Tap,
+    pub heard_at_8: Tap,
+    pub heard_at_9: Tap,
+    pub heard_at_10: Tap,
+    pub heard_at_11: Tap,
+    pub heard_at_12: Tap,
+    pub heard_at_13: Tap,
+    pub heard_at_14: Tap,
+    pub heard_at_15: Tap,
+    pub heard_at_16: Tap,
+    pub heard_at_17: Tap,
+    pub heard_at_18: Tap,
+    pub heard_at_19: Tap,
+    pub heard_at_20: Tap,
+    pub heard_at_21: Tap,
 }
+
+/// How many taps the display reads.
+pub const TAPS: usize = 58;
 
 fn db01(x: f32) -> f64 {
     let db = 20.0 * x.max(1e-7).log10();
     f64::from((1.0 + db / 48.0).clamp(0.0, 1.0))
 }
 
-impl Telemetry {
-    pub(super) fn new() -> Self {
-        Self { bus: None, taps: core::array::from_fn(|i| Tap::new(FACE_TAPS[i])) }
-    }
-
-    pub(super) fn attach(&mut self, bus: Arc<DebugBus>) {
-        self.bus = Some(bus);
+impl EngramTaps {
+    /// Every tap, in field order (as [`EngramTaps::ALL`]).
+    fn slots(&self) -> [&Tap; TAPS] {
+        [&self.energy_0, &self.energy_1, &self.energy_2, &self.energy_3, &self.pos_0, &self.pos_1, &self.pos_2, &self.pos_3, &self.pos_4, &self.pos_5, &self.pos_6, &self.pos_7, &self.hearing_0, &self.hearing_1, &self.hearing_2, &self.attn_0, &self.attn_1, &self.attn_2, &self.attn_3, &self.attn_4, &self.attn_5, &self.attn_6, &self.attn_7, &self.attn_8, &self.attn_9, &self.attn_10, &self.filled_0, &self.filled_1, &self.recalling, &self.novelty, &self.percussive_0, &self.percussive_1, &self.pulse, &self.tonal, &self.space, &self.space_info, &self.heard_at_0, &self.heard_at_1, &self.heard_at_2, &self.heard_at_3, &self.heard_at_4, &self.heard_at_5, &self.heard_at_6, &self.heard_at_7, &self.heard_at_8, &self.heard_at_9, &self.heard_at_10, &self.heard_at_11, &self.heard_at_12, &self.heard_at_13, &self.heard_at_14, &self.heard_at_15, &self.heard_at_16, &self.heard_at_17, &self.heard_at_18, &self.heard_at_19, &self.heard_at_20, &self.heard_at_21]
     }
 
     pub(super) fn publish(&self, room: &Room, geometry: &Geometry, bank: &Bank, recalling: f32, pulse: f32, tonal: f32) {
-        let Some(bus) = &self.bus else { return };
-        let set = |k: usize, v: f64| self.taps[k].set(bus, v);
+        let taps = self.slots();
+        let set = |k: usize, v: f64| taps[k].set(v);
         for g in 0..LINES / 4 {
             let v: [f64; 4] = core::array::from_fn(|j| db01(room.energy(4 * g + j)));
             set(TAP_ENERGY + g, pack(&v, 13));
@@ -87,8 +144,8 @@ impl Telemetry {
     /// The SPACE window's feed: the room on the map, where memory pulls
     /// it, the nearest real space, the decay; every memory's room.
     pub(super) fn publish_space(&self, bank: &Bank, live: [f32; 2], near: usize, pull_at: [f32; 2], pull: f32, t60: f32) {
-        let Some(bus) = &self.bus else { return };
-        let set = |k: usize, v: f64| self.taps[k].set(bus, v);
+        let taps = self.slots();
+        let set = |k: usize, v: f64| taps[k].set(v);
         let f = |v: f32| f64::from(v);
         set(TAP_SPACE, pack(&[f(live[0]), f(live[1]), f(pull_at[0]), f(pull_at[1])], 13));
         // T60 on a log scale, 0.1 … 30 s.
@@ -100,6 +157,25 @@ impl Telemetry {
                 if k < 2 * SLOTS { f(bank.heard_at(k / 2)[k % 2]) } else { 0.0 }
             });
             set(TAP_HEARD_AT + g, pack(&v, 8));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `slots` and `ALL` agree tap for tap (both are field order).
+    #[test]
+    fn the_slots_are_the_ids_in_order() {
+        assert_eq!(EngramTaps::ALL.len(), TAPS);
+        let telemetry = Telemetry::new();
+        let taps = EngramTaps::new(&telemetry);
+        for (k, tap) in taps.slots().iter().enumerate() {
+            tap.set(k as f64);
+        }
+        for (k, id) in EngramTaps::ALL.iter().enumerate() {
+            assert_eq!(telemetry.value(*id), Some(k as f64), "{}", id.name());
         }
     }
 }

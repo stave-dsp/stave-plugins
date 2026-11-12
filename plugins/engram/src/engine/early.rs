@@ -27,7 +27,7 @@
 //! decay began 100–150 ms late and bulged. (The lines' own diffusion
 //! makes the network dense; the reflections fill what it leaves.)
 
-use stave_dsp::{DelayLine, Svf};
+use stave::dsp::{DelayAllpass, DelayLine, Stage, Svf};
 
 use super::space::{Anatomy, ER_BANDS, ER_BINS, ER_BIN_S};
 
@@ -39,12 +39,11 @@ const DIRECT_S: f32 = 0.002;
 const MID: usize = 1;
 const CROSSOVER_HZ: (f32, f32) = (500.0, 4_000.0);
 /// Butterworth (k = √2) in the SVF's resonance terms.
-/// 4th-order Butterworth as two SVF stages (Q 0.541, 1.307 in the SVF's
-/// resonance terms, k = 1/Q = 2 − 2·res) — the SAME split the IRs were
+/// 4th-order Butterworth as two SVF stages (Q 0.541, 1.307) — the SAME split the IRs were
 /// measured with (ir_measure.py): with gentler 2nd-order slopes the low
 /// band's reflections leaked past 500 Hz and every band's early share
 /// came out wrong (low too weak, mid too strong).
-const BUTTERWORTH4: [f32; 2] = [1.0 - 0.5 / 0.541_196, 1.0 - 0.5 / 1.306_563];
+const BUTTERWORTH4: [f32; 2] = [0.541_196, 1.306_563];
 
 /// The 3-band split: low (4th-order LP), high (4th-order HP), mid = rest.
 #[derive(Clone, Copy)]
@@ -55,24 +54,24 @@ pub(super) struct Crossover {
 
 impl Crossover {
     pub(super) fn new() -> Self {
-        Self { low: [Svf::new(); 2], high: [Svf::new(); 2] }
+        Self {
+            low: BUTTERWORTH4.map(|q| Svf::new(CROSSOVER_HZ.0, q)),
+            high: BUTTERWORTH4.map(|q| Svf::new(CROSSOVER_HZ.1, q)),
+        }
     }
 
     pub(super) fn prepare(&mut self, sr: f32) {
-        for k in 0..2 {
-            self.low[k].prepare(sr);
-            self.high[k].prepare(sr);
-            self.low[k].set(CROSSOVER_HZ.0, BUTTERWORTH4[k]);
-            self.high[k].set(CROSSOVER_HZ.1, BUTTERWORTH4[k]);
+        for f in self.low.iter_mut().chain(&mut self.high) {
+            f.prepare(sr);
         }
     }
 
     #[inline]
     pub(super) fn split(&mut self, x: f32) -> [f32; 3] {
-        let l = self.low[0].process_lp(x, 0);
-        let low = self.low[1].process_lp(l, 0);
-        let h = self.high[0].process(x, 0).hp;
-        let high = self.high[1].process(h, 0).hp;
+        let l = self.low[0].tick(x);
+        let low = self.low[1].tick(l);
+        let h = self.high[0].taps(x).hp;
+        let high = self.high[1].taps(h).hp;
         [low, x - low - high, high]
     }
 }
@@ -142,33 +141,26 @@ const FEED_DIFFUSION: [[(f32, f32); 4]; 2] = [
     [(5.23, 0.7), (6.67, 0.7), (12.07, 0.62), (16.81, 0.62)],
 ];
 
+/// One side's feed diffusion: four Schroeder allpasses in series.
 pub(super) struct FeedDiffuser {
-    stages: [(DelayLine, usize, f32); 4],
+    stages: [DelayAllpass; 4],
 }
 
 impl FeedDiffuser {
-    pub(super) fn new() -> Self {
-        Self { stages: core::array::from_fn(|_| (DelayLine::new(), 1, 0.0)) }
+    /// Side `side`'s (0 left, 1 right: decorrelated).
+    pub(super) fn new(side: usize) -> Self {
+        Self { stages: FEED_DIFFUSION[side].map(|(ms, g)| DelayAllpass::new(ms, ms, g)) }
     }
 
-    pub(super) fn prepare(&mut self, sr: f32, side: usize) {
-        for (st, &(ms, g)) in self.stages.iter_mut().zip(&FEED_DIFFUSION[side]) {
-            st.1 = (ms * 0.001 * sr).round().max(1.0) as usize;
-            st.2 = g;
-            st.0.prepare(st.1 + 2);
+    pub(super) fn prepare(&mut self, sr: f32) {
+        for st in &mut self.stages {
+            st.prepare(sr);
         }
     }
 
     #[inline]
-    pub(super) fn tick(&mut self, mut x: f32) -> f32 {
-        for (line, len, g) in &mut self.stages {
-            let d = line.read_int(*len);
-            let y = -*g * x + d;
-            line.write(x + *g * y);
-            line.advance();
-            x = y;
-        }
-        x
+    pub(super) fn tick(&mut self, x: f32) -> f32 {
+        self.stages.iter_mut().fold(x, |x, st| st.tick(x))
     }
 }
 
@@ -187,7 +179,7 @@ impl Early {
             feed_gain: [1.0; ER_BANDS],
             feed_step: [0.0; ER_BANDS],
             deflate: 1.0,
-            diffuser: [FeedDiffuser::new(), FeedDiffuser::new()],
+            diffuser: [FeedDiffuser::new(0), FeedDiffuser::new(1)],
         }
     }
 
@@ -203,11 +195,12 @@ impl Early {
         }
         self.split.prepare(sr);
         self.deflate = energy.max(1.0).sqrt().recip();
-        self.diffuser[0].prepare(sr, 0);
-        self.diffuser[1].prepare(sr, 1);
+        for d in &mut self.diffuser {
+            d.prepare(sr);
+        }
         let span = (ER_BINS as f32 * ER_BIN_S * sr) as usize + 4;
         for b in &mut self.bands {
-            b.prepare(span);
+            b.allocate(span);
         }
         let bin = ER_BIN_S * sr;
         for s in 0..SETS {

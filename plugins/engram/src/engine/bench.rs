@@ -19,9 +19,6 @@
 //!   Every figure sits next to CHANCE (the share of memories that
 //!   would be right if attention were uniform).
 
-extern crate std;
-use alloc::string::{String, ToString};
-use alloc::vec::Vec;
 use std::path::PathBuf;
 use std::println;
 
@@ -49,7 +46,7 @@ fn pattern(hit: &[f32], cat: &str) -> Vec<f32> {
     let every = if cat == "hats" { 0.25 } else { 0.5 };
     let (step, total) = ((every * SR) as usize, (12.0 * SR) as usize);
     let fade = (0.005 * SR) as usize;
-    let mut out = alloc::vec![0.0f32; total];
+    let mut out = vec![0.0f32; total];
     let len = hit.len().min(step);
     for (k, at) in (0..total).step_by(step).enumerate() {
         let accent = if k % 2 == 0 { 1.0 } else { 0.75 };
@@ -81,7 +78,7 @@ pub(super) fn load() -> Option<Vec<Src>> {
             if name.starts_with("._") || !name.ends_with(".wav") {
                 continue;
             }
-            let Ok(a) = stave_measure::wav::read(&f) else { continue };
+            let Ok(a) = stave_host::wav::read(&f) else { continue };
             if a.sample_rate != SR as u32 {
                 continue;
             }
@@ -300,7 +297,7 @@ fn kin(corpus: &[Src], a: usize, b: usize) -> bool {
 /// Probe with `x` (writing off); accumulate attention mass per label.
 fn probe(rig: &mut Rig, x: &[f32], labels: &[Option<usize>], corpus: &[Src], want: usize, cat_only: bool) -> Option<(f32, f32, f32, usize, f32)> {
     let (mut m_self, mut m_cat, mut top1, mut n, mut fam1) = (0.0f32, 0.0f32, 0.0f32, 0usize, 0.0f32);
-    let mut votes = alloc::vec![0usize; corpus.len()];
+    let mut votes = vec![0usize; corpus.len()];
     for (i, &v) in x.iter().enumerate() {
         let (_, _, attended) = rig.step(v, false);
         if !attended || (i as f32) < SETTLE_S * SR || !rig.ear.present() {
@@ -341,7 +338,7 @@ fn run_sessions(corpus: &[Src], focus: f32, matching: f32, verbose: bool) -> Sco
     let mut total = Score::default();
     for group in sessions(corpus, 6) {
         let mut rig = Rig::new(focus, matching);
-        let mut labels: Vec<Option<usize>> = alloc::vec![None; SLOTS];
+        let mut labels: Vec<Option<usize>> = vec![None; SLOTS];
         for &i in &group {
             for &v in secs(&corpus[i].audio, 0.0, LEARN_S) {
                 if let (Captured::Stored { slot }, _, _) = rig.step(v, true) {
@@ -500,7 +497,7 @@ fn best_similarity_report() {
     let q = |v: &mut Vec<f32>| {
         v.sort_by(f32::total_cmp);
         let at = |p: f32| v[((v.len() - 1) as f32 * p) as usize];
-        alloc::format!("p10 {:.2} p25 {:.2} p50 {:.2} p75 {:.2} p90 {:.2} (n {})", at(0.1), at(0.25), at(0.5), at(0.75), at(0.9), v.len())
+        format!("p10 {:.2} p25 {:.2} p50 {:.2} p75 {:.2} p90 {:.2} (n {})", at(0.1), at(0.25), at(0.5), at(0.75), at(0.9), v.len())
     };
     println!("match {matching}: {}", if std::env::var_os("ENGRAM_MASS").is_some() { "attention on memories (1 − sink)" } else { "best similarity" });
     println!("  learned      {}", q(&mut own));
@@ -538,7 +535,7 @@ fn dump_training() {
                     // the machine down (2026-11-10 watchdog panic), so each
                     // view reads just its own window.
                     let path = std::path::Path::new(&path);
-                    let Ok(info) = stave_measure::wav::probe(path) else { continue };
+                    let Ok(info) = stave_host::wav::read_info(path) else { continue };
                     let n = info.frames;
                     if n < 64 {
                         continue;
@@ -559,7 +556,7 @@ fn dump_training() {
                         // in f64.
                         let span = ((8.0 * f64::from(info.sample_rate)) as usize).min(n);
                         let from = if n > span { (rnd() * (n - span) as f32) as usize } else { 0 };
-                        let Ok(a) = stave_measure::wav::read_range(path, from, span) else { continue };
+                        let Ok(a) = stave_host::wav::read_range(path, from, span) else { continue };
                         let span = a.channels[0].len();
                         if span < 64 {
                             continue;
@@ -595,7 +592,7 @@ fn dump_training() {
                         let input: Vec<f32> = if dur < 1.5 {
                             let every = ((0.25 + rnd() * 0.5) * SR) as usize;
                             let total = (4.0 * SR) as usize;
-                            let mut o = alloc::vec![0.0f32; total];
+                            let mut o = vec![0.0f32; total];
                             let hit = x.len().min(every);
                             for at in (0..total).step_by(every) {
                                 for i in 0..hit.min(total - at) {

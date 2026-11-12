@@ -31,15 +31,9 @@
 //! All buffers are allocated in `prepare`; the audio path only copies
 //! into them and reads.
 
-extern crate alloc;
-#[cfg(test)]
-extern crate std;
-use alloc::vec;
-use alloc::vec::Vec;
-
 use core::f32::consts::PI;
 
-use stave_dsp::Xorshift32;
+use stave::dsp::Xorshift32;
 
 use super::space::Latent;
 use super::space_model::LATENT;
@@ -189,6 +183,28 @@ struct Slot {
     voice: Voice,
 }
 
+impl Slot {
+    /// Slot `i`, empty, over the grain buffer `audio` (silenced).
+    fn fresh(i: u32, mut audio: Vec<f32>) -> Self {
+        audio.fill(0.0);
+        Slot {
+            audio,
+            key: Key::default(),
+            onsets: [0; MAX_ONSETS],
+            n_onsets: 0,
+            born: 0,
+            filled: false,
+            used: 0.0,
+            w: 0.0,
+            target: 0.0,
+            tc: [0.0; TIMBRE],
+            space: [0.0; LATENT],
+            at: [0.0; 2],
+            voice: Voice { heads: [Head::default(); HEADS], cursor: 0.0, next: 0.0, active: false, rng: Xorshift32::new(0x9E37_79B9 ^ i.wrapping_mul(0x85EB_CA6B)) },
+        }
+    }
+}
+
 /// What became of a grain when it ended (`capture`'s report; the
 /// engine ignores it, the corpus bench reads it).
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -284,24 +300,20 @@ impl Bank {
     pub(super) fn prepare(&mut self, sr: f32) {
         self.sr = sr;
         self.grain = ((GRAIN_S * sr) as usize).max(64);
-        self.slots = (0..SLOTS as u32)
-            .map(|i| Slot {
-                audio: vec![0.0; self.grain],
-                key: Key::default(),
-                onsets: [0; MAX_ONSETS],
-                n_onsets: 0,
-                born: 0,
-                filled: false,
-                used: 0.0,
-                w: 0.0,
-                target: 0.0,
-                tc: [0.0; TIMBRE],
-                space: [0.0; LATENT],
-                at: [0.0; 2],
-                voice: Voice { heads: [Head::default(); HEADS], cursor: 0.0, next: 0.0, active: false, rng: Xorshift32::new(0x9E37_79B9 ^ i.wrapping_mul(0x85EB_CA6B)) },
-            })
-            .collect();
+        self.slots = (0..SLOTS as u32).map(|i| Slot::fresh(i, vec![0.0; self.grain])).collect();
         self.audio = vec![0.0; self.grain];
+        self.reset();
+    }
+
+    /// Fresh, as prepared: every slot empty and silent (nothing
+    /// allocates).
+    pub(super) fn reset(&mut self) {
+        for (i, s) in (0..SLOTS as u32).zip(&mut self.slots) {
+            *s = Slot::fresh(i, core::mem::take(&mut s.audio));
+        }
+        self.audio.fill(0.0);
+        self.here = [0.0; LATENT];
+        self.here_at = [0.0; 2];
         self.forget();
     }
 
@@ -373,7 +385,7 @@ impl Bank {
         #[cfg(test)]
         if std::env::var_os("ENGRAM_TRACE").is_some() {
             let timbre_coh = dot(&a.timbre(), &b.timbre());
-            std::println!("grain: tonal {tonal:.2} hits {} crest {crest:.2} perc {percussive} harmony-coh {harmony_coh:.2} timbre-coh {timbre_coh:.2}", c.hits);
+            println!("grain: tonal {tonal:.2} hits {} crest {crest:.2} perc {percussive} harmony-coh {harmony_coh:.2} timbre-coh {timbre_coh:.2}", c.hits);
         }
         if !percussive && harmony_coh < COHERENCE_TONAL {
             return Captured::Incoherent { coherence: harmony_coh, percussive };
@@ -615,7 +627,7 @@ impl Bank {
     pub(super) fn debug_dump(&self) {
         for (i, s) in self.slots.iter().enumerate() {
             if s.filled {
-                std::println!(
+                println!(
                     "slot {i}: born {:.2}s tonal {:.2} perc {} onsets {} target {:.3} w {:.3}",
                     s.born as f32 / self.sr,
                     s.key.tonal,

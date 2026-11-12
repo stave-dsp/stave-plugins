@@ -8,12 +8,13 @@
 
 use std::sync::OnceLock;
 
-use stave_core::face::part::Bake;
-use stave_core::face::prelude::*;
-use stave_core::face::{leaf, Bind, Control, Gesture, Hit, Part};
+use stave::face::part::Bake;
+use stave::face::{leaf, Area, Gesture, Grab, Part};
+use stave::prelude::*;
 
-use super::{amber, glow, label, Feed, Pt, TextAlign, SCREEN_H, SLOTS};
+use super::{amber, glow, label, print, Anchor, Feed, SCREEN_H, SLOTS};
 use crate::engine::space_model::{FAMILIES, MAP_FAMILY, MAP_XY, NAMES, SPACES};
+use crate::EngramTaps;
 
 /// The window's screen width (its height is [`SCREEN_H`]).
 pub const W: f64 = 228.0;
@@ -43,8 +44,8 @@ pub fn area(sc: Rect) -> Rect {
 }
 
 /// A map point (x right, y up) on screen.
-pub fn at(m: Rect, (u, v): (f64, f64)) -> Pt {
-    pt(m.x + u * m.w, m.y + (1.0 - v) * m.h)
+pub fn at(m: Rect, (u, v): (f64, f64)) -> (f64, f64) {
+    (m.x + u * m.w, m.y + (1.0 - v) * m.h)
 }
 
 fn room(i: usize) -> (f64, f64) {
@@ -84,25 +85,31 @@ impl Part for SpaceMap {
         bake_window(cx, sc, RADIUS, LIP);
         let th = cx.theme;
         let m = area(sc);
+        let at = |uv| {
+            let (x, y) = at(m, uv);
+            pt(x, y)
+        };
         // A faint frame round the map, and every learned room, unlit.
         let frame = Rect { x: m.x - 4.0, y: m.y - 4.0, w: m.w + 8.0, h: m.h + 8.0 };
         cx.scene.stroke(rrect_path(frame, 3.0), Stroke::new(glow(th, 0.1), 0.7));
         let dot = glow(th, 0.16);
         for i in 0..SPACES {
-            cx.scene.solid(Path::circle(at(m, room(i)), 0.9), dot);
+            cx.scene.solid(Path::circle(at(room(i)), 0.9), dot);
         }
-        let ty = &th.type_;
         for &(x, y, name) in family_labels() {
-            cx.scene.text_in(at(m, (x, y)), name, 5.5, glow(th, 0.38), ty.caption);
+            print(th, cx.scene, self::at(m, (x, y)), name, 5.5, glow(th, 0.38), Anchor::Middle);
         }
-        let font = ty.caption.align(TextAlign::Center);
-        cx.scene.text_in(pt(sc.x + sc.w / 2.0, sc.y + 17.0), "SPACE  ·  CLICK A ROOM", 7.0, glow(th, 0.6), font);
+        print(th, cx.scene, (sc.x + sc.w / 2.0, sc.y + 17.0), "SPACE  ·  CLICK A ROOM", 7.0, glow(th, 0.6), Anchor::Middle);
     }
 
     fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {
         let th = f.theme;
         let sc = screen(r);
         let m = area(sc);
+        let at = |uv| {
+            let (x, y) = at(m, uv);
+            pt(x, y)
+        };
         let feed = Feed::read(f);
         // Memories, at the rooms they were heard in.
         for k in 0..SLOTS {
@@ -112,16 +119,16 @@ impl Part for SpaceMap {
             let u = feed.heard_at.get(2 * k).copied().unwrap_or(0.0);
             let v = feed.heard_at.get(2 * k + 1).copied().unwrap_or(0.0);
             let a = feed.attention(k);
-            let p = at(m, (u, v));
+            let p = at((u, v));
             if a > 0.05 {
                 s.solid(Path::circle(p, 3.0 + 4.0 * a), feed.ink(th, k, 0.2 * a));
             }
             s.solid(Path::rect(pt(p.x - 1.2, p.y - 1.2), 2.4, 2.4), feed.ink(th, k, 0.3 + 0.7 * a));
         }
         // The cursor (where you put it) and the live room (where it is).
-        let cur = at(m, (f.value(self.x), f.value(self.y)));
+        let cur = at((f.value(self.x), f.value(self.y)));
         let spoken = feed.live != (0.0, 0.0);
-        let live = if spoken { at(m, feed.live) } else { cur };
+        let live = if spoken { at(feed.live) } else { cur };
         if (cur.x - live.x).hypot(cur.y - live.y) > 3.0 {
             s.stroke(Path::new().move_to(cur).line_to(live), Stroke::round(glow(th, 0.25), 0.6));
         }
@@ -134,7 +141,7 @@ impl Part for SpaceMap {
             );
         }
         if feed.pull > 0.02 {
-            let to = at(m, feed.pull_at);
+            let to = at(feed.pull_at);
             s.stroke(Path::new().move_to(live).line_to(to), Stroke::round(amber(0.25 + 0.6 * feed.pull), 0.6 + 1.2 * feed.pull));
             s.stroke(Path::circle(to, 3.0 + 3.0 * feed.pull), Stroke::new(amber(0.4 + 0.6 * feed.pull), 0.9));
         }
@@ -149,17 +156,17 @@ impl Part for SpaceMap {
         } else {
             "—".into()
         };
-        label(f, s, pt(sc.x + sc.w / 2.0, m.y + m.h + 18.0), line, 0.7, TextAlign::Center);
+        label(f, s, (sc.x + sc.w / 2.0, m.y + m.h + 18.0), line, 0.7, Anchor::Middle);
         glass_over(f, s, sc, RADIUS);
     }
 
-    fn controls(&self, r: Rect) -> Vec<Control> {
+    fn grabs(&self, r: Rect, _f: &Frame<'_>, out: &mut Vec<Grab>) {
         let m = area(screen(r));
-        vec![Control { hit: Hit::Rect(m), gesture: Gesture::Pad { x: self.x, y: self.y, area: m } }]
+        out.push(Grab { area: Area::Rect(m), gesture: Gesture::Pad { x: self.x, y: self.y, area: m } });
     }
 
-    fn probes(&self) -> Vec<&'static str> {
-        crate::FACE_TAPS.to_vec()
+    fn reads(&self) -> Reads {
+        Reads::params(&[self.x, self.y]).and_taps(EngramTaps::ALL)
     }
 }
 
@@ -181,8 +188,8 @@ mod tests {
     fn every_room_lands_on_the_map() {
         let m = area(SC);
         for i in 0..SPACES {
-            let p = at(m, room(i));
-            assert!(p.x >= m.x && p.x <= m.x + m.w && p.y >= m.y && p.y <= m.y + m.h);
+            let (x, y) = at(m, room(i));
+            assert!(x >= m.x && x <= m.x + m.w && y >= m.y && y <= m.y + m.h);
         }
         assert!(!family_labels().is_empty());
     }

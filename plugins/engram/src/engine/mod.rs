@@ -12,7 +12,7 @@
 //!   `voicing.rs` (colour, width). The point comes from the MAP, is
 //!   pulled by the memory (recalled moments bring back the room they
 //!   were heard in — STEER) and wanders (DRIFT).
-//! * `telemetry.rs` — `Telemetry`: the display's feed (packed).
+//! * `telemetry.rs` — `EngramTaps`: the display's feed (packed).
 //!
 //! Signal: what you play goes into the room (an ordinary, drawable
 //! reverb). Meanwhile the ear fingerprints it, the bank remembers it,
@@ -22,11 +22,8 @@
 //! the room of. When you stop, the last query holds and recall fades
 //! at the room's T60 (HOLD keeps it, and stops new memories).
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::ContinuousControl;
-use stave_core::{DebugBus, Environment, ProcessCtx, Tail};
+use stave::dsp::{tau_coeff, Xorshift32};
+use stave::prelude::*;
 
 use crate::params::EngramParams;
 
@@ -53,7 +50,7 @@ use self::room::{Room, Shape, LINES};
 use self::early::Early;
 use self::space::{at_map, decode, to_map, Anatomy, Latent};
 use self::space_model::LATENT;
-use self::telemetry::Telemetry;
+pub use self::telemetry::EngramTaps;
 use self::voicing::Voicing;
 
 /// The ear's rate (it hears harmony, not air).
@@ -128,6 +125,9 @@ fn late_energy(t60: f32, size: f32) -> f32 {
     (at(j) * (1.0 - fs) + at(j + 1) * fs).exp()
 }
 
+/// The dream's wander starts from this seed (and again on reset).
+const DREAM_SEED: u32 = 0x5EED_1234;
+
 /// The window loudness is matched over (s).
 const LOUDNESS_S: f32 = 0.5;
 
@@ -166,39 +166,32 @@ fn late_t60(a: &Anatomy, decay_s: f32, tone: f32) -> [f32; 3] {
     [geomean(&t[0..3]), geomean(&t[2..5]), geomean(&t[5..7])]
 }
 
-#[inline]
-fn db_to_amp(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
+/// The per-frame glides of the knobs the room hears sample by sample.
+struct Smoothers {
+    size: Smoother,
+    decay: Smoother,
+    tone: Smoother,
+    recall: Smoother,
+    mix: Smoother,
+    output: Smoother,
 }
 
-struct Controls {
-    size: ContinuousControl,
-    decay: ContinuousControl,
-    tone: ContinuousControl,
-    recall: ContinuousControl,
-    mix: ContinuousControl,
-    output: ContinuousControl,
-}
-
-impl Controls {
+impl Smoothers {
     fn new(p: &EngramParams) -> Self {
         Self {
-            size: ContinuousControl::new(&p.size),
-            decay: ContinuousControl::new(&p.decay),
-            tone: ContinuousControl::new(&p.tone),
-            recall: ContinuousControl::new(&p.recall),
-            mix: ContinuousControl::new(&p.mix),
-            output: ContinuousControl::new(&p.output),
+            size: Smoother::new(&p.size),
+            decay: Smoother::new(&p.decay),
+            tone: Smoother::new(&p.tone),
+            recall: Smoother::new(&p.recall),
+            mix: Smoother::new(&p.mix),
+            output: Smoother::new(&p.output),
         }
     }
 
-    fn prepare(&mut self, sr: f64, p: &EngramParams) {
-        self.size.prepare(sr, &p.size);
-        self.decay.prepare(sr, &p.decay);
-        self.tone.prepare(sr, &p.tone);
-        self.recall.prepare(sr, &p.recall);
-        self.mix.prepare(sr, &p.mix);
-        self.output.prepare(sr, &p.output);
+    fn prepare(&mut self, env: &Environment) {
+        for s in [&mut self.size, &mut self.decay, &mut self.tone, &mut self.recall, &mut self.mix, &mut self.output] {
+            s.prepare(env);
+        }
     }
 }
 
@@ -213,10 +206,11 @@ fn drawn(p: &EngramParams) -> [[f32; 2]; LINES] {
     core::array::from_fn(|i| [xy[i].0.value(), xy[i].1.value()])
 }
 
-pub struct EngramEngine {
+/// The plugin: hear → remember → attend → recall → room → mix.
+pub struct Engram {
     params: Arc<EngramParams>,
-    controls: Controls,
-    sr: f32,
+    smoothers: Smoothers,
+    sample_rate: f32,
     room: Room,
     geometry: Geometry,
     ear: Listen,
@@ -239,7 +233,7 @@ pub struct EngramEngine {
     /// the map's point, the dream's offset, the decoded anatomy.
     early: Early,
     voicing: Voicing,
-    late_in: [stave_dsp::DelayLine; 2],
+    late_in: [DelayLine; 2],
     late_gap: f32,
     late_gap_to: f32,
     late_gap_k: f32,
@@ -247,7 +241,7 @@ pub struct EngramEngine {
     map_at: [f32; 2],
     map_z: Latent,
     dream: Latent,
-    dream_rng: stave_dsp::Xorshift32,
+    dream_rng: Xorshift32,
     anatomy: Anatomy,
     /// DECAY and TONE as the generated room hears them: glided per
     /// block (the knobs' room has its own per-frame ramps).
@@ -262,14 +256,14 @@ pub struct EngramEngine {
     t60_mid: f32,
     tail_s: f32,
     settle_space: bool,
-    telemetry: Telemetry,
+    taps: EngramTaps,
 }
 
-impl EngramEngine {
+impl Engram {
     /// Once a block: move the room through the learned space and aim the
     /// reflections, the late decay and the voicing at where it is.
     fn aim_space(&mut self, p: &EngramParams, frames: f32) {
-        let dt = frames / self.sr;
+        let dt = frames / self.sample_rate;
         let at = [p.space_x.value(), p.space_y.value()];
         if at != self.map_at {
             self.map_at = at;
@@ -331,7 +325,7 @@ impl EngramEngine {
         let share = t.map(|t60| late_early_share(size, t60));
         self.early.aim(&self.anatomy, whole, late, &share, gen, self.settle_space, frames as usize);
         self.voicing.aim(&self.anatomy, gen, self.settle_space, frames as usize);
-        self.late_gap_to = gen * LATE_GAP_S * self.sr;
+        self.late_gap_to = gen * LATE_GAP_S * self.sample_rate;
         if self.settle_space {
             self.late_gap = self.late_gap_to;
         }
@@ -342,15 +336,24 @@ impl EngramEngine {
     }
 }
 
-impl stave_core::Processor for EngramEngine {
+impl Plugin for Engram {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.engram.vst3",
+        name: "Stave Engram",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "A reverb whose room is a neural network that remembers what you played.",
+        features: &[Feature::AudioEffect, Feature::Reverb, Feature::Stereo],
+        ..Info::EFFECT
+    };
     type Params = EngramParams;
 
-    fn new(params: Arc<EngramParams>) -> Self {
+    fn new(params: &Arc<EngramParams>, telemetry: &Telemetry) -> Self {
         Self {
-            controls: Controls::new(&params),
+            smoothers: Smoothers::new(params),
             forget_was: params.forget.value(),
-            params,
-            sr: 48_000.0,
+            params: params.clone(),
+            sample_rate: 48_000.0,
             room: Room::new(),
             geometry: Geometry::new(),
             ear: Listen::new(),
@@ -365,7 +368,7 @@ impl stave_core::Processor for EngramEngine {
             pulse: 0.0,
             early: Early::new(),
             voicing: Voicing::new(),
-            late_in: core::array::from_fn(|_| stave_dsp::DelayLine::new()),
+            late_in: core::array::from_fn(|_| DelayLine::new()),
             late_gap: 0.0,
             late_gap_to: 0.0,
             late_gap_k: 0.0,
@@ -373,7 +376,7 @@ impl stave_core::Processor for EngramEngine {
             map_at: [-1.0; 2],
             map_z: [0.0; LATENT],
             dream: [0.0; LATENT],
-            dream_rng: stave_dsp::Xorshift32::new(0x5EED_1234),
+            dream_rng: Xorshift32::new(DREAM_SEED),
             anatomy: decode(&[0.0; LATENT]),
             space_decay: DECAY_REF,
             space_tone: TONE_REF,
@@ -384,44 +387,68 @@ impl stave_core::Processor for EngramEngine {
             t60_mid: DECAY_REF,
             tail_s: 3.0,
             settle_space: true,
-            telemetry: Telemetry::new(),
+            taps: EngramTaps::new(telemetry),
         }
     }
 
-    fn activate(&mut self, env: Environment) {
+    fn prepare(&mut self, env: &Environment) {
         let sr = env.sample_rate;
-        self.sr = sr;
-        self.controls.prepare(f64::from(sr), &self.params);
+        self.sample_rate = sr;
+        self.smoothers.prepare(env);
+        self.decim = ((sr / EAR_HZ).round() as usize).max(1);
+        self.bank.prepare(sr);
+        for l in &mut self.late_in {
+            l.allocate((LATE_GAP_S * sr) as usize + 8);
+        }
+        self.recall_env_k = tau_coeff(0.08, sr);
+        self.late_gap_k = tau_coeff(0.05, sr);
+        self.reset();
+    }
+
+    /// Back to as prepared: an empty memory, the drawn room, the map's
+    /// room. The parts re-derive at the rate they already hold, so their
+    /// lines are the right size and nothing allocates.
+    fn reset(&mut self) {
+        let sr = self.sample_rate;
         self.room.prepare(sr);
         self.geometry.reset();
         self.geometry.step(&drawn(&self.params), 0.0, true);
         self.room.reshape(&self.geometry.radius(), &self.geometry.distances());
         self.room.settle();
-        self.decim = ((sr / EAR_HZ).round() as usize).max(1);
         self.ear.prepare(sr, sr / self.decim as f32, GRAIN_S);
-        self.bank.prepare(sr);
+        self.hearing = Default::default();
+        self.bank.reset();
+        self.early.prepare(sr);
+        self.voicing.prepare(sr);
+        for l in &mut self.late_in {
+            l.reset();
+        }
         self.phase = 0;
         self.acc = 0.0;
         self.fade = 1.0;
         self.recall_env = 0.0;
-        self.recall_env_k = 1.0 - (-1.0 / (0.08 * sr)).exp();
+        self.pulse = 0.0;
         self.forget_was = self.params.forget.value();
-        self.early.prepare(sr);
-        self.voicing.prepare(sr);
-        for l in &mut self.late_in {
-            l.prepare((LATE_GAP_S * sr) as usize + 8);
-        }
-        self.late_gap_k = 1.0 - (-1.0 / (0.05 * sr)).exp();
+        self.late_gap = 0.0;
+        self.late_gap_to = 0.0;
+        self.z = [0.0; LATENT];
         self.map_at = [-1.0; 2];
+        self.map_z = [0.0; LATENT];
         self.dream = [0.0; LATENT];
+        self.dream_rng = Xorshift32::new(DREAM_SEED);
+        self.anatomy = decode(&self.z);
+        self.space_decay = DECAY_REF;
+        self.space_tone = TONE_REF;
+        self.map_live = [0.5; 2];
+        self.map_near = 0;
+        self.map_pull = [0.5; 2];
+        self.pull = 0.0;
+        self.t60_mid = DECAY_REF;
+        self.tail_s = 3.0;
         self.settle_space = true;
     }
 
-    fn attach_telemetry(&mut self, bus: Arc<DebugBus>) {
-        self.telemetry.attach(bus);
-    }
-
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
+    fn process(&mut self, block: &mut Block<'_>) {
         let p = self.params.clone();
         let hold = p.hold.value();
         // FORGET: any press wipes the bank.
@@ -434,22 +461,22 @@ impl stave_core::Processor for EngramEngine {
         self.geometry.step(&drawn(&p), p.plasticity.value(), hold);
         self.room.reshape(&self.geometry.radius(), &self.geometry.distances());
         // Attention, once a block: the past moments most like now.
-        let min_age = (p.deja.value() * self.sr) as u64;
+        let min_age = (p.deja.value() * self.sample_rate) as u64;
         let h = self.ear.hearing();
         let now = Key { chroma: h.chroma, timbre: h.timbre, rhythm: self.ear.rhythm(), tonal: h.tonal, percussive: false };
         self.bank.attend(now, self.ear.present(), p.focus.value(), p.matching.value(), min_age);
         let texture = p.texture.value();
-        let frames = ctx.frames as f32;
+        let frames = block.frames() as f32;
         self.aim_space(&p, frames);
 
-        let c = &mut self.controls;
-        let mut size_ramp = c.size.begin_block(ctx.params, &p.size);
-        let mut decay_ramp = c.decay.begin_block(ctx.params, &p.decay);
-        let mut tone_ramp = c.tone.begin_block(ctx.params, &p.tone);
-        let mut recall_ramp = c.recall.begin_block(ctx.params, &p.recall);
-        let mut mix_ramp = c.mix.begin_block(ctx.params, &p.mix);
-        let mut out_ramp = c.output.begin_block(ctx.params, &p.output);
-        let (decim, inv, sr) = (self.decim, 1.0 / self.decim as f32, self.sr);
+        let s = &mut self.smoothers;
+        let mut size_ramp = s.size.ramp(block, &p.size);
+        let mut decay_ramp = s.decay.ramp(block, &p.decay);
+        let mut tone_ramp = s.tone.ramp(block, &p.tone);
+        let mut recall_ramp = s.recall.ramp(block, &p.recall);
+        let mut mix_ramp = s.mix.ramp(block, &p.mix);
+        let mut out_ramp = s.output.ramp(block, &p.output);
+        let (decim, inv, sr) = (self.decim, 1.0 / self.decim as f32, self.sample_rate);
         let (room, geometry, ear, bank) = (&mut self.room, &mut self.geometry, &mut self.ear, &mut self.bank);
         let (phase, acc, fade) = (&mut self.phase, &mut self.acc, &mut self.fade);
         let (recall_env, recall_env_k) = (&mut self.recall_env, self.recall_env_k);
@@ -459,7 +486,7 @@ impl stave_core::Processor for EngramEngine {
         let gen = p.space.value();
         let fade_t60 = self.tail_s / 1.5;
 
-        let lanes = ctx.lanes::<2>();
+        let lanes = block.lanes::<2>();
         let active = lanes.active();
         lanes.run(|fr| {
             let shape = Shape { size: size_ramp.next(), decay_s: decay_ramp.next(), tone: tone_ramp.next(), hold, gen };
@@ -527,13 +554,9 @@ impl stave_core::Processor for EngramEngine {
         });
 
         let tonal = self.hearing.tonal;
-        self.telemetry.publish(&self.room, &self.geometry, &self.bank, self.recall_env, self.pulse, tonal);
-        self.telemetry.publish_space(&self.bank, self.map_live, self.map_near, self.map_pull, self.pull, self.t60_mid);
+        self.taps.publish(&self.room, &self.geometry, &self.bank, self.recall_env, self.pulse, tonal);
+        self.taps.publish_space(&self.bank, self.map_live, self.map_near, self.map_pull, self.pull, self.t60_mid);
         self.pulse *= 0.6;
-    }
-
-    fn latency_samples(&self) -> u32 {
-        0
     }
 
     fn tail(&self) -> Tail {
@@ -541,8 +564,16 @@ impl stave_core::Processor for EngramEngine {
         if p.hold.value() {
             Tail::Infinite
         } else {
-            Tail::Samples((self.tail_s * self.sr) as u32)
+            Tail::Samples((self.tail_s * self.sample_rate) as u32)
         }
+    }
+
+    fn face(params: &EngramParams) -> Option<Face> {
+        Some(crate::editor::face(params))
+    }
+
+    fn presets(params: &EngramParams) -> Vec<Preset> {
+        crate::presets::presets(params)
     }
 }
 
@@ -578,7 +609,7 @@ mod diag {
             let _ = bank.capture(x, &h, ear.present(), onset, true);
             let _ = bank.recall(onset, 0.1);
         }
-        std::println!("query tonal {:.2}", bank.query().tonal);
+        println!("query tonal {:.2}", bank.query().tonal);
         bank.debug_dump();
     }
 
@@ -626,10 +657,10 @@ mod calibration {
         room.reshape(&geometry.radius(), &geometry.distances());
         room.settle();
         let shape = Shape { size, decay_s: t, tone: TONE_REF, hold: false, gen: 1.0 };
-        let mut dl = self::super::early::FeedDiffuser::new();
-        let mut dr = self::super::early::FeedDiffuser::new();
-        dl.prepare(sr, 0);
-        dr.prepare(sr, 1);
+        let mut dl = self::super::early::FeedDiffuser::new(0);
+        let mut dr = self::super::early::FeedDiffuser::new(1);
+        dl.prepare(sr);
+        dr.prepare(sr);
         let mut e = 0.0f64;
         let n = (t * 2.0 * sr) as usize;
         for i in 0..n {
@@ -665,10 +696,10 @@ mod calibration {
             room.reshape(&geometry.radius(), &geometry.distances());
             room.settle();
             let shape = Shape { size, decay_s: 3.0, tone: TONE_REF, hold: true, gen: 1.0 };
-            let mut dl = self::super::early::FeedDiffuser::new();
-            let mut dr = self::super::early::FeedDiffuser::new();
-            dl.prepare(sr, 0);
-            dr.prepare(sr, 1);
+            let mut dl = self::super::early::FeedDiffuser::new(0);
+            let mut dr = self::super::early::FeedDiffuser::new(1);
+            dl.prepare(sr);
+            dr.prepare(sr);
             let mut e = [0.0f64; 23];
             for i in 0..23 * bin {
                 if i % 256 == 0 {
@@ -679,8 +710,8 @@ mod calibration {
                 let y = room.tick([dl.tick(d), dr.tick(d)], shape);
                 e[i / bin] += f64::from(y[0]) * f64::from(y[0]);
             }
-            let row: alloc::vec::Vec<alloc::string::String> = e.iter().map(|v| alloc::format!("{v:.5}")).collect();
-            std::println!("    [{}],", row.join(", "));
+            let row: Vec<String> = e.iter().map(|v| format!("{v:.5}")).collect();
+            println!("    [{}],", row.join(", "));
         }
     }
 
@@ -689,8 +720,8 @@ mod calibration {
     #[ignore]
     fn late_energy_table() {
         for &size in &LATE_SIZES {
-            let row: alloc::vec::Vec<alloc::string::String> = LATE_T60S.iter().map(|&t| alloc::format!("{:.5}", late_energy(t, size))).collect();
-            std::println!("    [{}],", row.join(", "));
+            let row: Vec<String> = LATE_T60S.iter().map(|&t| format!("{:.5}", late_energy(t, size))).collect();
+            println!("    [{}],", row.join(", "));
         }
     }
 
@@ -708,23 +739,20 @@ mod calibration {
 
 #[cfg(test)]
 mod loudness {
-    use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+    use stave_test::PluginHarness;
 
     /// Wet rms over 3 s of music-like noise (white through a 500 Hz
     /// one-pole: most energy low, as in a mix — what the colour's
     /// loudness-neutral weights assume).
     fn wet_rms(set: &[(&str, f64)]) -> f32 {
-        let mut plugin = crate::Engram::new();
-        plugin.debug_attach(DebugBus::new());
-        let table = plugin.param_table();
-        for (n, v) in set {
-            table.by_name(n).unwrap().set_plain(*v);
-        }
-        plugin.activate(48_000.0, 256);
+        let mut h = set
+            .iter()
+            .fold(PluginHarness::<super::Engram>::builder().sample_rate(48_000.0).block_size(256), |b, (n, v)| b.set(n, *v))
+            .build();
         let (mut s, mut lp) = (0x1234_5678u32, 0.0f32);
         let k = 1.0 - (-core::f32::consts::TAU * 500.0 / 48_000.0).exp();
         let (mut e, mut n) = (0.0f64, 0usize);
-        let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; 256], vec![0.0f32; 256], vec![0.0f32; 256], vec![0.0f32; 256]);
+        let mut il = vec![0.0f32; 256];
         for _ in 0..(3 * 48_000 / 256) {
             for v in il.iter_mut() {
                 s ^= s << 13;
@@ -733,21 +761,11 @@ mod loudness {
                 lp += ((s as f32 / u32::MAX as f32 * 2.0 - 1.0) - lp) * k;
                 *v = lp;
             }
-            ir.copy_from_slice(&il);
-            let mut ip = [core::ptr::null_mut(); 2];
-            let mut op = [core::ptr::null_mut(); 2];
-            let mut ctx = ProcessCtx {
-                sample_rate: 48_000.0,
-                frames: 256,
-                transport: None,
-                input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], 256),
-                output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], 256),
-                aux: &[],
-                params: stave_core::ParamBlock::empty(),
-                events: &[],
-            };
-            plugin.process(&mut ctx);
-            for v in &ol {
+            for ch in h.inputs_mut() {
+                ch.copy_from_slice(&il);
+            }
+            h.process(&[]);
+            for v in h.outputs()[0].iter() {
                 e += f64::from(v * v);
                 n += 1;
             }
@@ -770,7 +788,7 @@ mod loudness {
             let mut k = base.to_vec();
             k.extend([("space", 0.0), ("tone", 1.0), ("decay", f64::from(t[1]))]);
             let db = 20.0 * (wet_rms(&g) / wet_rms(&k)).log10();
-            std::println!("({x}, {y}) mid T60 {:.2} s: {db:+.1} dB", t[1]);
+            println!("({x}, {y}) mid T60 {:.2} s: {db:+.1} dB", t[1]);
             worst = worst.max(db.abs());
         }
         assert!(worst < 3.0, "a map point is {worst:.1} dB off the knobs' room");
@@ -803,15 +821,15 @@ mod band_balance {
                 room.reshape(&geometry.radius(), &geometry.distances());
                 room.settle();
                 let shape = Shape { size, decay_s: t, tone: TONE_REF, hold: false, gen: 1.0 };
-                let mut dl = self::super::early::FeedDiffuser::new();
-                let mut dr = self::super::early::FeedDiffuser::new();
-                dl.prepare(sr, 0);
-                dr.prepare(sr, 1);
+                let mut dl = self::super::early::FeedDiffuser::new(0);
+                let mut dr = self::super::early::FeedDiffuser::new(1);
+                dl.prepare(sr);
+                dr.prepare(sr);
                 let (mut xo_in, mut xo_out) = (self::super::early::Crossover::new(), self::super::early::Crossover::new());
                 xo_in.prepare(sr);
                 xo_out.prepare(sr);
                 let (mut ein, mut eout) = ([0.0f64; 3], [0.0f64; 3]);
-                let mut trace: [alloc::vec::Vec<f32>; 3] = Default::default();
+                let mut trace: [Vec<f32>; 3] = Default::default();
                 for i in 0..(t * 2.0 * sr) as usize {
                     if i % 256 == 0 {
                         room.aim_late(&[t; 7], shape);
@@ -828,20 +846,20 @@ mod band_balance {
                 }
                 let tot: f64 = eout.iter().sum();
                 let tin: f64 = ein.iter().sum();
-                let r: alloc::vec::Vec<alloc::string::String> = (0..3).map(|b| alloc::format!("{:.2}", (eout[b] / tot) / (ein[b] / tin))).collect();
+                let r: Vec<String> = (0..3).map(|b| format!("{:.2}", (eout[b] / tot) / (ein[b] / tin))).collect();
                 // Each band's T60 from its Schroeder curve (−5 … −25 dB).
-                let t60s: alloc::vec::Vec<alloc::string::String> = trace
+                let t60s: Vec<String> = trace
                     .iter()
                     .map(|e| {
-                        let mut edc: alloc::vec::Vec<f64> = e.iter().rev().scan(0.0f64, |a, v| { *a += f64::from(*v); Some(*a) }).collect();
+                        let mut edc: Vec<f64> = e.iter().rev().scan(0.0f64, |a, v| { *a += f64::from(*v); Some(*a) }).collect();
                         edc.reverse();
                         let db = |i: usize| 10.0 * (edc[i] / edc[0]).log10();
                         let i5 = (0..edc.len()).find(|&i| db(i) <= -5.0).unwrap_or(0);
                         let i25 = (0..edc.len()).find(|&i| db(i) <= -25.0).unwrap_or(edc.len() - 1);
-                        alloc::format!("{:.2}", 3.0 * (i25 - i5) as f64 / f64::from(sr))
+                        format!("{:.2}", 3.0 * (i25 - i5) as f64 / f64::from(sr))
                     })
                     .collect();
-                std::println!("size {size} T60 {t}: band share / white share = {}   band T60s {}", r.join(" "), t60s.join(" "));
+                println!("size {size} T60 {t}: band share / white share = {}   band T60s {}", r.join(" "), t60s.join(" "));
             }
         }
     }
@@ -859,7 +877,7 @@ mod clip_diag {
             let size = 0.5;
             let whole = loudness_matched(&a, late_energy(t[1], size), t[1]);
             let late: [f32; 3] = t.map(|v| late_energy(v, size));
-            let mut row = alloc::string::String::new();
+            let mut row = String::new();
             for b in 0..3 {
                 let share = late_early_share(size, t[b]);
                 let frac: f32 = a.early[b].iter().sum();
@@ -873,9 +891,9 @@ mod clip_diag {
                     clip += (l - target).max(0.0);
                     if k < 10 { tgt0 += target; lt0 += l; } else { tgt1 += target; lt1 += l; }
                 }
-                row += &alloc::format!(" | b{b} T {:.1} frac {frac:.2} late-in {inside:.2} clip {:.0}% of window; late/target 0–50ms {:.2} 50–115 {:.2}", t[b], 100.0 * clip / (tgt0 + tgt1), lt0 / tgt0.max(1e-9), lt1 / tgt1.max(1e-9));
+                row += &format!(" | b{b} T {:.1} frac {frac:.2} late-in {inside:.2} clip {:.0}% of window; late/target 0–50ms {:.2} 50–115 {:.2}", t[b], 100.0 * clip / (tgt0 + tgt1), lt0 / tgt0.max(1e-9), lt1 / tgt1.max(1e-9));
             }
-            std::println!("({x},{y}){row}");
+            println!("({x},{y}){row}");
         }
     }
 }

@@ -5,13 +5,9 @@
 //! recordings (grain level) and by recording means (leave-one-out).
 //! Run: `cargo test -p stave-engram-vst3 --release --lib features -- --ignored --nocapture`.
 
-extern crate std;
-use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
 use std::println;
 
-use stave_dsp::Svf;
+use stave::dsp::{Stage, Svf};
 
 use super::bench::{load, Rig, Src};
 
@@ -30,13 +26,11 @@ struct Bank {
 
 impl Bank {
     fn new(n: usize, lo: f32, hi: f32, q: f32) -> Self {
-        let res = 1.0 - 1.0 / (2.0 * q);
         let f = (0..n)
             .map(|i| {
                 let hz = lo * (hi / lo).powf(i as f32 / (n - 1) as f32);
-                let mut s = Svf::new();
+                let mut s = Svf::new(hz, q);
                 s.prepare(SR);
-                s.set(hz, res);
                 s
             })
             .collect();
@@ -46,7 +40,7 @@ impl Bank {
 
     fn tick(&mut self, x: f32) {
         for (f, e) in self.f.iter_mut().zip(&mut self.env) {
-            let a = (f.process(x, 0).bp / self.q).abs();
+            let a = (f.taps(x).bp / self.q).abs();
             let k = if a > *e { self.att } else { self.rel };
             *e += (a - *e) * k;
         }
@@ -193,7 +187,7 @@ fn envelope(lvl: &[f32], m16: &[f32]) -> Vec<f32> {
         }
         a / b
     };
-    let mut v = alloc::vec![(slope / 8.0).tanh(), attack.min(3.0) / 3.0, tilt * 4.0];
+    let mut v = vec![(slope / 8.0).tanh(), attack.min(3.0) / 3.0, tilt * 4.0];
     v.extend(mods.iter().map(|m| m * 3.0));
     v
 }
@@ -267,7 +261,7 @@ fn feature_study() {
         g.feats.push(l);
         g.feats.push(m);
     }
-    std::println!("corpus mean of G: {:?}", mean.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
+    println!("corpus mean of G: {:?}", mean.iter().map(|v| (v * 100.0).round() / 100.0).collect::<Vec<_>>());
     // The same recording filed twice (one loop in two categories) is not
     // "another recording".
     let same = |a: usize, b: usize| a == b || corpus[a].name == corpus[b].name;
@@ -292,7 +286,7 @@ fn feature_study() {
                 }
             }
         }
-        let cats: String = per_cat.iter().map(|(c, h, n)| alloc::format!("{}:{:.0}% ", &c[..c.len().min(6)], 100.0 * *h as f32 / *n as f32)).collect();
+        let cats: String = per_cat.iter().map(|(c, h, n)| format!("{}:{:.0}% ", &c[..c.len().min(6)], 100.0 * *h as f32 / *n as f32)).collect();
         let fam = |c: &str| matches!(c, "guitar" | "piano notes" | "synth notes" | "tonal loops" | "vocals" | "vocal phrases");
         let (ph, pn) = per_cat.iter().filter(|(c, _, _)| fam(c)).fold((0, 0), |(a, b), (_, h, n)| (a + h, b + n));
         let pitched = 100.0 * ph as f32 / pn.max(1) as f32;

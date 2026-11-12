@@ -24,7 +24,7 @@
 
 use core::f32::consts::TAU;
 
-use stave_dsp::DelayLine;
+use stave::dsp::{tau_coeff, DelayAllpass, DelayLine, Stage};
 
 use super::decay_eq::{DecayEq, Design, OCTAVES};
 
@@ -62,21 +62,23 @@ fn allpass_delay(m: f32, g: f32, w: f32) -> f32 {
     m * (1.0 - g * g) / (1.0 - 2.0 * g * (w * m).cos() + g * g)
 }
 
-/// A Schroeder allpass: y = −g·x + d, written x + g·y.
-struct Allpass {
-    line: DelayLine,
-    len: usize,
+/// Line `i`'s diffuser `j`'s length (ms): spread across `DIFF_MS[j]` by
+/// a golden-ratio walk.
+fn diffuser_ms(i: usize, j: usize) -> f32 {
+    let (lo, hi) = DIFF_MS[j];
+    let t = (i as f32 * 0.618_034 + j as f32 * 0.31).fract();
+    lo + (hi - lo) * t
 }
 
-impl Allpass {
-    #[inline]
-    fn tick(&mut self, x: f32, g: f32) -> f32 {
-        let d = self.line.read_int(self.len);
-        let y = -g * x + d;
-        self.line.write(x + g * y);
-        self.line.advance();
-        y
-    }
+/// The same in whole samples (as the allpass rounds it).
+fn diffuser_len(i: usize, j: usize, sr: f32) -> f32 {
+    (diffuser_ms(i, j) * 0.001 * sr).round().max(1.0)
+}
+
+/// Line `i`'s diffuser `j`: a Schroeder allpass of gain DIFFUSE.
+fn diffuser(i: usize, j: usize) -> DelayAllpass {
+    let ms = diffuser_ms(i, j);
+    DelayAllpass::new(ms, ms, DIFFUSE)
 }
 
 /// The knobs' damping one-pole's gain at `hz`, dB.
@@ -207,7 +209,7 @@ pub(super) struct Room {
     /// Each line's allpass-interpolator state (its last output).
     interp: [f32; LINES],
     gen_on: bool,
-    diffusers: [[Allpass; 2]; LINES],
+    diffusers: [[DelayAllpass; 2]; LINES],
 }
 
 /// Per-frame settings.
@@ -240,9 +242,9 @@ impl Room {
             interp: [0.0; LINES],
             refit: 0,
             diff_delay: [[0.0; OCTAVES]; LINES],
-            eqs: core::array::from_fn(|_| DecayEq::new()),
+            eqs: core::array::from_fn(|_| DecayEq::new(48_000.0)),
             gen_on: false,
-            diffusers: core::array::from_fn(|_| core::array::from_fn(|_| Allpass { line: DelayLine::new(), len: 1 })),
+            diffusers: core::array::from_fn(|i| core::array::from_fn(|j| diffuser(i, j))),
         }
     }
 
@@ -250,25 +252,19 @@ impl Room {
         self.sr = sr;
         let cap = ((SPAN_MS.1 * 1.08 + 2.0 * WANDER_MS) * 0.001 * sr) as usize + 8;
         for l in &mut self.lines {
-            l.prepare(cap);
+            l.allocate(cap);
         }
         self.lp = [0.0; LINES];
         self.energy = [0.0; LINES];
-        self.energy_k = 1.0 - (-1.0 / (0.08 * sr)).exp();
-        self.glide = 1.0 - (-1.0 / (0.04 * sr)).exp();
+        self.energy_k = tau_coeff(0.08, sr);
+        self.glide = tau_coeff(0.04, sr);
         self.share = self.share_to;
         self.mix = self.mix_to;
         self.design = Design::new(sr);
         self.interp = [0.0; LINES];
-        self.eqs = core::array::from_fn(|_| DecayEq::new());
-        for (i, pair) in self.diffusers.iter_mut().enumerate() {
-            for (j, ap) in pair.iter_mut().enumerate() {
-                let (lo, hi) = DIFF_MS[j];
-                // Spread across the range by a golden-ratio walk.
-                let t = (i as f32 * 0.618_034 + j as f32 * 0.31).fract();
-                ap.len = ((lo + (hi - lo) * t) * 0.001 * sr).round().max(1.0) as usize;
-                ap.line.prepare(ap.len + 2);
-            }
+        self.eqs = core::array::from_fn(|_| DecayEq::new(sr));
+        for ap in self.diffusers.iter_mut().flatten() {
+            ap.prepare(sr);
         }
         for i in 0..LINES {
             for (k, &c) in CENTRES.iter().enumerate() {
@@ -278,7 +274,7 @@ impl Room {
                     .map(|j| {
                         let hz = (c / 2f32.sqrt() * 2f32.powf(j as f32 / (n - 1) as f32)).min(0.45 * sr);
                         let w = TAU * hz / sr;
-                        self.diffusers[i].iter().map(|ap| allpass_delay(ap.len as f32, DIFFUSE, w)).sum::<f32>()
+                        (0..2).map(|j| allpass_delay(diffuser_len(i, j, sr), DIFFUSE, w)).sum::<f32>()
                     })
                     .sum::<f32>()
                     / n as f32;
@@ -383,7 +379,7 @@ impl Room {
             self.interp[i] = eta * (a - self.interp[i]) + b;
             let mut y = self.interp[i];
             for ap in &mut self.diffusers[i] {
-                y = ap.tick(y, DIFFUSE);
+                y = ap.tick(y);
             }
             if self.gen_on {
                 // (lp doubles as the lines' outputs for plasticity.)

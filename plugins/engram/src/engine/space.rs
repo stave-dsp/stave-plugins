@@ -204,7 +204,6 @@ pub(super) fn to_map(z: &Latent) -> ([f32; 2], usize) {
 
 #[cfg(test)]
 mod tests {
-    extern crate alloc;
     use super::*;
 
     /// With the memory, a real room's own latent decodes to (nearly) its
@@ -212,7 +211,7 @@ mod tests {
     /// share within 0.03.
     #[test]
     fn a_real_room_decodes_to_itself() {
-        let (mut errs, mut fracs) = (alloc::vec::Vec::new(), alloc::vec::Vec::new());
+        let (mut errs, mut fracs) = (Vec::new(), Vec::new());
         let frac = |v: f32| 1.0 / (1.0 + (-v).exp());
         for i in 0..SPACES {
             let own: Latent = core::array::from_fn(|k| MAP_LATENT[i * LATENT + k]);

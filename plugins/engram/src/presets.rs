@@ -2,11 +2,7 @@
 //! Each states the FULL face (the node drawing stays as the user left
 //! it: presets shape the memory and the room, not your wiring).
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::editor_kit::preset;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::EngramParams;
 
@@ -24,18 +20,18 @@ struct Face {
 }
 
 fn face(name: &'static str, p: &EngramParams, f: Face) -> Preset {
-    preset(
+    Preset::from_pairs(
         name,
         &[
-            (&p.size, f.size), (&p.decay, f.decay), (&p.tone, f.tone), (&p.recall, f.recall),
-            (&p.focus, f.focus), (&p.deja, f.deja), (&p.matching, f.matching), (&p.texture, f.texture),
-            (&p.plasticity, f.plasticity), (&p.mix, f.mix), (&p.hold, 0.0), (&p.output, 0.0),
+            (p.size.id(), f.size), (p.decay.id(), f.decay), (p.tone.id(), f.tone), (p.recall.id(), f.recall),
+            (p.focus.id(), f.focus), (p.deja.id(), f.deja), (p.matching.id(), f.matching), (p.texture.id(), f.texture),
+            (p.plasticity.id(), f.plasticity), (p.mix.id(), f.mix), (p.hold.id(), 0.0), (p.output.id(), 0.0),
         ],
     )
 }
 
 pub fn presets(p: &EngramParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         face("INIT", p, Face { size: 0.5, decay: 3.0, tone: 0.6, recall: 0.5, focus: 0.6, deja: 4.0, matching: 0.3, texture: 0.15, plasticity: 0.3, mix: 0.35 }),
         // — beautiful —
         // Return to a chord and the hall answers with the first time you

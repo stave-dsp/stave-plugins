@@ -10,7 +10,8 @@
 
 use std::path::{Path, PathBuf};
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_engram_vst3::Engram;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -25,7 +26,7 @@ fn find(cat: &str, name: &str) -> Option<Vec<f32>> {
     let mut files: Vec<_> = std::fs::read_dir(&dir).ok()?.flatten().map(|e| e.path()).collect();
     files.sort();
     let f = files.into_iter().find(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(name)))?;
-    let a = stave_measure::wav::read(&f).ok()?;
+    let a = stave_host::wav::read(&f).ok()?;
     let k = 1.0 / a.channels.len() as f32;
     Some((0..a.channels[0].len()).map(|i| a.channels.iter().map(|c| c[i]).sum::<f32>() * k).collect())
 }
@@ -59,33 +60,18 @@ fn silence(secs: f32) -> Vec<f32> {
 }
 
 fn render(set: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_engram_vst3::Engram::new();
-    plugin.debug_attach(DebugBus::new());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table.by_name(n).unwrap_or_else(|| panic!("param '{n}'")).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Engram>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let mut out = Vec::with_capacity(input.len());
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
     for chunk in input.chunks(BLOCK) {
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&ol[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0][..chunk.len()]);
     }
     out
 }
@@ -94,8 +80,8 @@ fn write(dir: &Path, name: &str, x: &[f32]) {
     // Normalise to −1 dBFS peak so every file is comfortable to audition.
     let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs())).max(1e-9);
     let g = 0.89 / peak;
-    let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: vec![x.iter().map(|v| v * g).collect()] };
-    stave_measure::wav::write(&dir.join(format!("{name}.wav")), &audio).expect("write");
+    let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: vec![x.iter().map(|v| v * g).collect()] };
+    stave_host::wav::write(&dir.join(format!("{name}.wav")), &audio).expect("write");
 }
 
 struct Scene {

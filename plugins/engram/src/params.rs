@@ -7,10 +7,7 @@
 //!   (bypass)        engram          (hold)
 //! ```
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::{BoolParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit};
+use stave::prelude::*;
 
 #[derive(Params)]
 pub struct EngramParams {
@@ -107,78 +104,76 @@ pub struct EngramParams {
     pub node_15_y: FloatParam,
 }
 
-impl EngramParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            size: FloatParam::new(3, "size", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Room")
-                .with_smooth(Smooth::Exp { ms: 300.0 }),
-            decay: FloatParam::new(4, "decay", 3.0, Range::new(0.3, 30.0, Taper::Log))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Room")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            tone: FloatParam::new(5, "tone", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Room")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            recall: FloatParam::new(7, "recall", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Memory")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            mix: FloatParam::new(8, "mix", 0.35, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            hold: BoolParam::new(9, "hold", false)
-                .with_group("Room")
-                .with_names("FREE", "HELD"),
-            plasticity: FloatParam::new(10, "plasticity", 0.3, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Memory")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            space: FloatParam::new(17, "space", 1.0, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Space")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            space_x: FloatParam::new(18, "space x", 0.5, unit())
-                .with_group("Space"),
-            space_y: FloatParam::new(19, "space y", 0.5, unit())
-                .with_group("Space"),
-            steer: FloatParam::new(52, "steer", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Space"),
-            drift: FloatParam::new(53, "drift", 0.15, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Space"),
+impl Default for EngramParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0)).default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            size: FloatParam::new(ParamId(3), "size", unit()).default(0.5)
+                .unit(Unit::Percent)
+                .group("Room")
+                .smooth(Smooth::ms(300.0)),
+            decay: FloatParam::new(ParamId(4), "decay", Range::log(0.3, 30.0)).default(3.0)
+                .unit(Unit::Plain { decimals: 1 })
+                .group("Room")
+                .smooth(Smooth::ms(80.0)),
+            tone: FloatParam::new(ParamId(5), "tone", unit()).default(0.6)
+                .unit(Unit::Percent)
+                .group("Room")
+                .smooth(Smooth::ms(40.0)),
+            recall: FloatParam::new(ParamId(7), "recall", unit()).default(0.5)
+                .unit(Unit::Percent)
+                .group("Memory")
+                .smooth(Smooth::ms(50.0)),
+            mix: FloatParam::new(ParamId(8), "mix", unit()).default(0.35)
+                .unit(Unit::Percent)
+                .group("Output")
+                .smooth(Smooth::ms(10.0)),
+            hold: BoolParam::new(ParamId(9), "hold", false)
+                .group("Room")
+                .names("FREE", "HELD"),
+            plasticity: FloatParam::new(ParamId(10), "plasticity", unit()).default(0.3)
+                .unit(Unit::Percent)
+                .group("Memory")
+                .smooth(Smooth::ms(50.0)),
+            space: FloatParam::new(ParamId(17), "space", unit()).default(1.0)
+                .unit(Unit::Percent)
+                .group("Space")
+                .smooth(Smooth::ms(80.0)),
+            space_x: FloatParam::new(ParamId(18), "space x", unit()).default(0.5)
+                .group("Space"),
+            space_y: FloatParam::new(ParamId(19), "space y", unit()).default(0.5)
+                .group("Space"),
+            steer: FloatParam::new(ParamId(52), "steer", unit()).default(0.5)
+                .unit(Unit::Percent)
+                .group("Space"),
+            drift: FloatParam::new(ParamId(53), "drift", unit()).default(0.15)
+                .unit(Unit::Percent)
+                .group("Space"),
             // Ids 6 (learn) and 11 (feed) belonged to the retired RLS
             // memory: never reused.
-            focus: FloatParam::new(12, "focus", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Memory")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            deja: FloatParam::new(13, "deja", 4.0, Range::new(0.0, 60.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Memory"),
-            forget: BoolParam::new(14, "forget", false)
-                .with_group("Memory")
-                .with_names("·", "FORGET"),
-            matching: FloatParam::new(15, "match", 0.3, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Memory")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            texture: FloatParam::new(16, "texture", 0.15, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Memory")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
+            focus: FloatParam::new(ParamId(12), "focus", unit()).default(0.6)
+                .unit(Unit::Percent)
+                .group("Memory")
+                .smooth(Smooth::ms(80.0)),
+            deja: FloatParam::new(ParamId(13), "deja", Range::linear(0.0, 60.0)).default(4.0)
+                .unit(Unit::Plain { decimals: 1 })
+                .group("Memory"),
+            forget: BoolParam::new(ParamId(14), "forget", false)
+                .group("Memory")
+                .names("·", "FORGET"),
+            matching: FloatParam::new(ParamId(15), "match", unit()).default(0.3)
+                .unit(Unit::Percent)
+                .group("Memory")
+                .smooth(Smooth::ms(80.0)),
+            texture: FloatParam::new(ParamId(16), "texture", unit()).default(0.15)
+                .unit(Unit::Percent)
+                .group("Memory")
+                .smooth(Smooth::ms(80.0)),
             node_0_x: node(20, "node 1 x", default_node(0).0),
             node_0_y: node(21, "node 1 y", default_node(0).1),
             node_1_x: node(22, "node 2 x", default_node(1).0),
@@ -211,17 +206,18 @@ impl EngramParams {
             node_14_y: node(49, "node 15 y", default_node(14).1),
             node_15_x: node(50, "node 16 x", default_node(15).0),
             node_15_y: node(51, "node 16 y", default_node(15).1),
-        })
+        }
     }
 }
 
 /// A node's drawn coordinate: a plain 0..1 param, gliding slowly (a
 /// dragged node bends the room smoothly, not in a step).
 fn node(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(0.0, 1.0, Taper::Linear))
-        .with_unit(Unit::Plain { decimals: 3 })
-        .with_group("Shape")
-        .with_smooth(Smooth::Exp { ms: 120.0 })
+    FloatParam::new(ParamId(id), name, Range::linear(0.0, 1.0))
+        .default(default)
+        .unit(Unit::Plain { decimals: 3 })
+        .group("Shape")
+        .smooth(Smooth::ms(120.0))
 }
 
 /// The factory drawing: the sixteen nodes round an ellipse, at radii

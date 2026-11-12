@@ -12,7 +12,7 @@
 //!   click to put the cursor; the live room glides after it, pulled
 //!   (amber) toward where the recalled memories were heard.
 //!
-//! All three read the packed display taps (`crate::FACE_TAPS`) through
+//! All three read the packed display taps ([`EngramTaps`]) through
 //! [`Feed`]. The SPACE map draws y-up (a face pad's convention); the
 //! NEURONS field draws y-down, as the pedal face did (its pad area is
 //! flipped to match). Within a window every coordinate maps the same
@@ -22,10 +22,10 @@ pub mod memory;
 pub mod neurons;
 pub mod space;
 
-use stave_core::face::prelude::*;
+use stave::prelude::*;
 
 use crate::{
-    unpack, FACE_TAPS, TAP_ATTN, TAP_ENERGY, TAP_FILLED, TAP_HEARD_AT, TAP_HEARING, TAP_NOVELTY, TAP_PERC, TAP_POS,
+    unpack, EngramTaps, TAP_ATTN, TAP_ENERGY, TAP_FILLED, TAP_HEARD_AT, TAP_HEARING, TAP_NOVELTY, TAP_PERC, TAP_POS,
     TAP_PULSE, TAP_RECALLING, TAP_SPACE, TAP_SPACE_INFO, TAP_TONAL,
 };
 
@@ -40,7 +40,7 @@ const AMBER: Color = Color::rgba(1.0, 0.72, 0.3, 1.0);
 
 /// The theme's phosphor at alpha `a`.
 pub fn glow(th: &Theme, a: f64) -> Color {
-    let p = th.phosphor;
+    let p = th.palette.phosphor;
     Color::rgba(p.r, p.g, p.b, a.clamp(0.0, 1.0))
 }
 
@@ -53,13 +53,41 @@ pub fn unlit(th: &Theme) -> Color {
     glow(th, 0.055)
 }
 
-/// A label printed in the glass (small tracked caps, in phosphor).
-pub fn label(f: &Frame<'_>, s: &mut Scene, at: Pt, text: impl Into<String>, a: f64, align: TextAlign) {
-    let ty = &f.theme.type_;
-    s.text_in(at, text, 7.0, glow(f.theme, a), ty.caption.align(align));
+/// Where a line of text sits on its anchor point.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    /// The line starts at the anchor.
+    Start,
+    Middle,
+    /// The line ends at the anchor.
+    End,
 }
 
-pub use stave_core::ui::scene::{Pt, TextAlign};
+/// Print `text` in the theme's caption face, `size` pt, anchored at
+/// `(x, y)`. The author API sets text centred on its anchor (`TextAlign`
+/// is stave-ui's, not reachable from `stave`), so a start- or
+/// end-anchored line is centred half an estimated width away.
+pub fn print(th: &Theme, s: &mut Scene, (x, y): (f64, f64), text: impl Into<String>, size: f64, color: Color, anchor: Anchor) {
+    let text = text.into();
+    let half = 0.5 * text_width(&text, size);
+    let x = match anchor {
+        Anchor::Start => x + half,
+        Anchor::Middle => x,
+        Anchor::End => x - half,
+    };
+    s.text_in(pt(x, y), text, size, color, th.typography.caption);
+}
+
+/// A line's estimated width: the caption face's tracked caps run about
+/// 0.68 em a glyph.
+fn text_width(text: &str, size: f64) -> f64 {
+    text.chars().count() as f64 * size * 0.68
+}
+
+/// A label printed in the glass (small tracked caps, in phosphor).
+pub fn label(f: &Frame<'_>, s: &mut Scene, at: (f64, f64), text: impl Into<String>, a: f64, anchor: Anchor) {
+    print(f.theme, s, at, text, 7.0, glow(f.theme, a), anchor);
+}
 
 /// The display's decoded feed.
 pub struct Feed {
@@ -85,31 +113,32 @@ pub struct Feed {
 
 impl Feed {
     pub fn read(f: &Frame<'_>) -> Self {
-        Self::from_probes(|k| f.probe(FACE_TAPS[k]))
+        Self::from_taps(|k| f.tap(EngramTaps::ALL[k]))
     }
 
-    pub fn from_probes(probe: impl Fn(usize) -> f64) -> Self {
+    /// Decode the feed from tap `k`'s value (`k` indexes [`EngramTaps::ALL`]).
+    pub fn from_taps(value: impl Fn(usize) -> f64) -> Self {
         let gather = |from: usize, taps: usize, per: usize, bits: u32| -> Vec<f64> {
-            (0..taps).flat_map(|t| unpack(probe(from + t), per, bits)).collect()
+            (0..taps).flat_map(|t| unpack(value(from + t), per, bits)).collect()
         };
         let bits = |v: f64| if v.is_finite() && v >= 0.0 { v as u64 & 0xFFFF_FFFF } else { 0 };
         let unit = |k: usize| {
-            let v = probe(k);
+            let v = value(k);
             if v.is_finite() {
                 v.clamp(0.0, 1.0)
             } else {
                 0.0
             }
         };
-        let space = unpack(probe(TAP_SPACE), 4, 13);
-        let info = unpack(probe(TAP_SPACE_INFO), 3, 13);
+        let space = unpack(value(TAP_SPACE), 4, 13);
+        let info = unpack(value(TAP_SPACE_INFO), 3, 13);
         Feed {
             energy: gather(TAP_ENERGY, 4, 4, 13),
             pos: gather(TAP_POS, 8, 4, 13),
             hearing: gather(TAP_HEARING, 3, 4, 13),
             attn: gather(TAP_ATTN, 11, 6, 8),
-            filled: bits(probe(TAP_FILLED)) | (bits(probe(TAP_FILLED + 1)) << 32),
-            percussive: bits(probe(TAP_PERC)) | (bits(probe(TAP_PERC + 1)) << 32),
+            filled: bits(value(TAP_FILLED)) | (bits(value(TAP_FILLED + 1)) << 32),
+            percussive: bits(value(TAP_PERC)) | (bits(value(TAP_PERC + 1)) << 32),
             pulse: unit(TAP_PULSE),
             tonal: unit(TAP_TONAL),
             recalling: unit(TAP_RECALLING),
@@ -151,12 +180,12 @@ mod tests {
 
     #[test]
     fn the_packed_feed_decodes() {
-        let mut probes = vec![0.0; FACE_TAPS.len()];
-        probes[TAP_FILLED] = 0b101 as f64;
-        probes[TAP_PERC + 1] = 1.0;
-        probes[TAP_ATTN] = crate::pack(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 8);
-        probes[TAP_SPACE] = crate::pack(&[0.25, 0.5, 0.75, 1.0], 13);
-        let f = Feed::from_probes(|k| probes[k]);
+        let mut values = vec![0.0; EngramTaps::ALL.len()];
+        values[TAP_FILLED] = 0b101 as f64;
+        values[TAP_PERC + 1] = 1.0;
+        values[TAP_ATTN] = crate::pack(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 8);
+        values[TAP_SPACE] = crate::pack(&[0.25, 0.5, 0.75, 1.0], 13);
+        let f = Feed::from_taps(|k| values[k]);
         assert!(f.held(0) && !f.held(1) && f.held(2));
         assert!(f.percussive(32) && !f.percussive(0));
         assert!((f.attention(2) - 1.0).abs() < 1e-9);

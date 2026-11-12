@@ -15,12 +15,12 @@
 //!
 //! Both scale with `gen` (0 = untouched).
 
-use stave_dsp::Svf;
+use stave::dsp::{Stage, Svf};
 
 use super::space::{Anatomy, OCTAVES};
 
 const CROSSOVER_HZ: (f32, f32) = (350.0, 3_000.0);
-const BUTTERWORTH: f32 = 1.0 - core::f32::consts::FRAC_1_SQRT_2;
+const BUTTERWORTH: f32 = core::f32::consts::FRAC_1_SQRT_2;
 const MAX_DB: f32 = 9.0;
 /// The IR measurement's band widths, Hz (octaves round 125 Hz … 8 kHz;
 /// the outer two run to 20 Hz and 20 kHz).
@@ -31,8 +31,9 @@ const WEIGHT: [f32; 3] = [0.45, 0.42, 0.13];
 const GLIDE: f32 = 0.3;
 
 pub(super) struct Voicing {
-    low: Svf,
-    high: Svf,
+    /// Per channel.
+    low: [Svf; 2],
+    high: [Svf; 2],
     /// Linear gains (low, high) and the side's width; glided per block.
     gain: [f32; 2],
     /// The mid's gain (the loudness-neutral normalisation).
@@ -60,14 +61,13 @@ pub(super) fn colour(a: &Anatomy) -> (f32, f32) {
 
 impl Voicing {
     pub(super) fn new() -> Self {
-        Self { low: Svf::new(), high: Svf::new(), gain: [1.0; 2], mid: 1.0, width: 1.0, gain_step: [0.0; 2], mid_step: 0.0, width_step: 0.0 }
+        Self { low: [Svf::new(CROSSOVER_HZ.0, BUTTERWORTH); 2], high: [Svf::new(CROSSOVER_HZ.1, BUTTERWORTH); 2], gain: [1.0; 2], mid: 1.0, width: 1.0, gain_step: [0.0; 2], mid_step: 0.0, width_step: 0.0 }
     }
 
     pub(super) fn prepare(&mut self, sr: f32) {
-        self.low.prepare(sr);
-        self.high.prepare(sr);
-        self.low.set(CROSSOVER_HZ.0, BUTTERWORTH);
-        self.high.set(CROSSOVER_HZ.1, BUTTERWORTH);
+        for f in self.low.iter_mut().chain(&mut self.high) {
+            f.prepare(sr);
+        }
         self.gain_step = [0.0; 2];
         self.mid_step = 0.0;
         self.width_step = 0.0;
@@ -115,8 +115,8 @@ impl Voicing {
         self.mid += self.mid_step;
         let mut y = [0.0f32; 2];
         for (c, (yc, xc)) in y.iter_mut().zip(x).enumerate() {
-            let low = self.low.process_lp(xc, c);
-            let high = self.high.process(xc, c).hp;
+            let low = self.low[c].tick(xc);
+            let high = self.high[c].taps(xc).hp;
             *yc = low * self.gain[0] + (xc - low - high) * self.mid + high * self.gain[1];
         }
         y
@@ -157,7 +157,7 @@ mod tests {
         let mut v = Voicing::new();
         v.prepare(48_000.0);
         v.aim(&a, 1.0, true, 256);
-        let mut rng = stave_dsp::Xorshift32::new(7);
+        let mut rng = stave::dsp::Xorshift32::new(7);
         let (mut ll, mut rr, mut lr) = (0.0f64, 0.0f64, 0.0f64);
         for _ in 0..96_000 {
             let y = v.tick([rng.next_bipolar(), rng.next_bipolar()]);
