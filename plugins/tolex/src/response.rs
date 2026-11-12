@@ -91,9 +91,8 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // Grid: dB rules every 12, decade frequency rules with labels.
     let grid = Stroke::new(alpha(pal.phosphor, 0.09), 1.0);
     let label = alpha(pal.phosphor, 0.45);
-    // Left-set labels. `TextAlign` has no path under `stave` (API
-    // friction, reported): a `Title`'s default alignment is Left.
-    let left = ty.value.align(Title::new("").align);
+    // Left-set labels.
+    let left = ty.value.align(TextAlign::Left);
     for db in [-24.0, -12.0, 0.0] {
         s.stroke(
             Path::new()

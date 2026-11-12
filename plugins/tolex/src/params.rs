@@ -114,7 +114,7 @@ impl Default for TolexParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             size: EnumParam::new(ParamId(3), "size", SpeakerSize(2)).group("Speaker"),
             resonance: FloatParam::new(ParamId(4), "resonance", Range::log(55.0, 120.0))
                 .default(92.0)

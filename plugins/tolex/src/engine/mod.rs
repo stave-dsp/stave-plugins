@@ -18,7 +18,6 @@
 //! program swings the mesh at `drive` volts, the motor answers with
 //! far-field pressure, the back door combs it, the voice rolls it.
 
-use stave::params::Watch;
 use stave::prelude::*;
 
 pub(crate) mod cabinet;

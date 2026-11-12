@@ -5,7 +5,6 @@
 //! the living leg taught — a cab that cannot exist, behaving like
 //! the best of the ones that do.
 
-use stave::params::AnyParam;
 use stave::prelude::*;
 
 use crate::params::TolexParams;
