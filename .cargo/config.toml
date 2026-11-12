@@ -17,3 +17,14 @@ STAVE_LOG_DIR = { value = "target/logs", relative = true }
 # (gh, keychain, CI's deploy key) work the way plain `git` does.
 [net]
 git-fetch-with-cli = true
+
+# Tests that link several plugins (conformance, anvil→tolex) carry every
+# plugin's `stave::export!` entry points (`clap_entry`,
+# `GetPluginFactory`, …). Only a plugin's own cdylib calls them, so the
+# linker keeps the first definition. macOS's linker never pulls the
+# duplicates in.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE"]
