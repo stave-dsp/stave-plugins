@@ -37,6 +37,7 @@ impl HaloToneStackDesign {
     }
 }
 
+#[derive(Clone)]
 pub struct ToneSection {
     tone_stack: PassiveToneStack,
     level_compensation_gain: f32,

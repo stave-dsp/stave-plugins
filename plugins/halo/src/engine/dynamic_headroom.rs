@@ -17,6 +17,7 @@ use crate::controls::DynamicSettings;
 /// reservoir demand instead of inheriting a high-gain topology's draw scale.
 const FULL_RESERVOIR_DRAW_EXCURSION_ABOVE_IDLE: f32 = 0.000_25;
 
+#[derive(Clone)]
 pub struct FrequencySelectivePowerSupply {
     low_frequency_detector: Biquad,
     high_frequency_detector: Biquad,
@@ -168,6 +169,7 @@ impl FrequencySelectivePowerSupply {
     }
 }
 
+#[derive(Clone)]
 pub struct TransientHeadroomController {
     fast_envelope: EnvelopeFollower,
     body_envelope: EnvelopeFollower,
@@ -209,6 +211,7 @@ impl TransientHeadroomController {
     }
 }
 
+#[derive(Clone)]
 pub struct AdaptiveHarmonicController {
     even_harmonic_direct_current_blocker: Biquad,
     bloom_amount: f32,

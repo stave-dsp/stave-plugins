@@ -15,6 +15,7 @@ const FIRST_STAGE_OUTPUT_TRIM_DB: f32 = -5.0;
 const RECOVERY_STAGE_OUTPUT_TRIM_DB: f32 = -7.0;
 const MAXIMUM_BRIGHT_CAPACITOR_FEED_FORWARD: f32 = 0.75;
 
+#[derive(Clone)]
 pub struct CleanPreamp {
     bright_capacitor_highpass: Biquad,
     input_stage: Triode,

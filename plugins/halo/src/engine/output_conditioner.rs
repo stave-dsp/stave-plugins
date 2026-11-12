@@ -1,6 +1,7 @@
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Stage};
 
+#[derive(Clone)]
 pub struct OutputConditioner {
     direct_current_highpass: Biquad,
     ultrasonic_lowpass: Biquad,

@@ -36,7 +36,7 @@ impl Default for HaloParameters {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             preamp_gain: FloatParam::new(ParamId(3), "gain", Range::linear(0.0, 18.0))
                 .default(DEFAULT_PREAMP_GAIN_DECIBELS)
                 .unit(Unit::Db)

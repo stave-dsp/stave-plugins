@@ -1,6 +1,5 @@
 //! The explicit boundary between Halo's panel and its engine.
 
-use stave::params::Ramp;
 use stave::prelude::*;
 
 use crate::params::HaloParameters;
@@ -18,6 +17,8 @@ pub struct PanelControlValues {
 
 /// The panel as the processor renders it: each knob glides as its
 /// param declares, one [`Smoother`] per knob.
+#[derive(Smoothers)]
+#[smoothers(params = HaloParameters)]
 pub struct Panel {
     bass_tone: Smoother,
     midrange_tone: Smoother,
@@ -26,57 +27,6 @@ pub struct Panel {
     bloom: Smoother,
     reserve: Smoother,
     response: Smoother,
-}
-
-/// One block of the panel's glides.
-pub struct PanelRamps<'s> {
-    bass_tone: Ramp<'s>,
-    midrange_tone: Ramp<'s>,
-    treble_tone: Ramp<'s>,
-    headroom: Ramp<'s>,
-    bloom: Ramp<'s>,
-    reserve: Ramp<'s>,
-    response: Ramp<'s>,
-}
-
-impl Panel {
-    pub fn new(p: &HaloParameters) -> Self {
-        Self {
-            bass_tone: Smoother::new(&p.bass_tone),
-            midrange_tone: Smoother::new(&p.midrange_tone),
-            treble_tone: Smoother::new(&p.treble_tone),
-            headroom: Smoother::new(&p.headroom),
-            bloom: Smoother::new(&p.bloom),
-            reserve: Smoother::new(&p.reserve),
-            response: Smoother::new(&p.response),
-        }
-    }
-
-    pub fn prepare(&mut self, env: &Environment) {
-        for s in [
-            &mut self.bass_tone,
-            &mut self.midrange_tone,
-            &mut self.treble_tone,
-            &mut self.headroom,
-            &mut self.bloom,
-            &mut self.reserve,
-            &mut self.response,
-        ] {
-            s.prepare(env);
-        }
-    }
-
-    pub fn ramp<'s>(&'s mut self, block: &Block<'s>, p: &HaloParameters) -> PanelRamps<'s> {
-        PanelRamps {
-            bass_tone: self.bass_tone.ramp(block, &p.bass_tone),
-            midrange_tone: self.midrange_tone.ramp(block, &p.midrange_tone),
-            treble_tone: self.treble_tone.ramp(block, &p.treble_tone),
-            headroom: self.headroom.ramp(block, &p.headroom),
-            bloom: self.bloom.ramp(block, &p.bloom),
-            reserve: self.reserve.ramp(block, &p.reserve),
-            response: self.response.ramp(block, &p.response),
-        }
-    }
 }
 
 impl PanelRamps<'_> {

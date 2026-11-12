@@ -3,6 +3,7 @@
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Hysteresis, Stage};
 
+#[derive(Clone)]
 pub struct OutputTransformer {
     low_frequency_bandwidth: Biquad,
     magnetization: Hysteresis,

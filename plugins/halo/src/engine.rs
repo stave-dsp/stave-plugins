@@ -25,6 +25,7 @@ use crate::controls::{
 use crate::params::{HaloParameters, DEFAULT_PREAMP_GAIN_DECIBELS};
 use crate::{editor, presets};
 
+#[derive(Clone)]
 struct ProcessingLane {
     input_conditioner: InputConditioner,
     clean_preamp: CleanPreamp,
@@ -97,6 +98,9 @@ pub struct Halo {
     parameters: Arc<HaloParameters>,
     taps: HaloTaps,
     amplifier: Amplifier,
+    /// The amplifier as `prepare` settled it: `reset` copies it back
+    /// rather than re-settling on the audio thread.
+    settled: Amplifier,
     panel: Panel,
     preamp_gain: Smoother,
     output_level: Smoother,
@@ -107,6 +111,7 @@ pub struct Halo {
 const CONTROL_INTERVAL: usize = 16;
 
 /// The lanes and the settings last applied to them.
+#[derive(Clone)]
 struct Amplifier {
     sample_rate: f32,
     lanes: PerChannel<ProcessingLane, 2>,
@@ -134,12 +139,12 @@ impl Amplifier {
         self.last_tone_settings.reset();
         self.last_dynamic_settings.reset();
         self.apply(panel);
-        self.reset();
+        self.settle();
     }
 
     /// Clear every lane and settle it at its operating point: run until
     /// the output stays under 1e-6 for 256 samples, at most one second.
-    fn reset(&mut self) {
+    fn settle(&mut self) {
         for lane in self.lanes.iter_mut() {
             lane.reset();
             let mut quiet = 0u32;
@@ -224,6 +229,7 @@ impl Plugin for Halo {
             makeup_gain: 1.0,
         };
         Self {
+            settled: amplifier.clone(),
             amplifier,
             panel: Panel::new(parameters),
             preamp_gain: Smoother::new(&parameters.preamp_gain),
@@ -239,12 +245,14 @@ impl Plugin for Halo {
         self.panel.prepare(env);
         self.amplifier
             .prepare(env.sample_rate, PanelControlValues::read(&self.parameters));
+        self.settled.clone_from(&self.amplifier);
     }
 
-    /// Back to the settled operating point `prepare` reaches: every
-    /// stage cleared and re-settled (at most a second of silence per lane).
+    /// Back to the settled operating point `prepare` reached, copied
+    /// (no allocation, no simulation); the next block re-applies the
+    /// panel as it is now.
     fn reset(&mut self) {
-        self.amplifier.reset();
+        self.amplifier.clone_from(&self.settled);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {

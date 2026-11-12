@@ -22,6 +22,7 @@ pub struct PowerAmplifierMeasurements {
 /// `volts` (all of it at `full_at_draw` × idle) on an RC — a declared
 /// effect of the voicing, applied as a bias offset on the pair's
 /// physical bias.
+#[derive(Clone)]
 struct BiasWalk {
     volts: f64,
     full_at_draw: f64,
@@ -60,6 +61,7 @@ impl BiasWalk {
     }
 }
 
+#[derive(Clone)]
 pub struct CleanPowerAmplifier {
     power_pair: PushPull,
     bias_walk: BiasWalk,

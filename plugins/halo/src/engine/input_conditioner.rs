@@ -3,6 +3,7 @@ use stave::dsp::{Biquad, Stage};
 
 use crate::controls::InputSettings;
 
+#[derive(Clone)]
 pub struct InputConditioner {
     subsonic_highpass: Biquad,
     radio_frequency_lowpass: Biquad,

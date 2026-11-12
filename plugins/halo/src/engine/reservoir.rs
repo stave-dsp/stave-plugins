@@ -5,6 +5,7 @@
 
 use stave::dsp::tau_coeff;
 
+#[derive(Clone)]
 pub(super) struct Reservoir {
     voltage: f32,
     droop: f32,
