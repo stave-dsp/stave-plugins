@@ -1,7 +1,7 @@
 //! The gain computer: reduction in dB for an envelope, with a
 //! smoothstep soft knee.
 
-use stave_dsp::amp_to_db;
+use stave::dsp::amp_to_db;
 
 /// How many dB the gain computer pulls for envelope `env` (linear).
 #[inline]

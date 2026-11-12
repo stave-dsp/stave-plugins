@@ -2,10 +2,7 @@
 //! envelope follower retimed per sample by the style's program
 //! dependence.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, FilterSpec};
+use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, FilterSpec, Source, Stage};
 
 use crate::style::{attack_shrink, Character, FASTEST_ATTACK_MS};
 
@@ -45,7 +42,7 @@ impl RmsWindow {
 
     fn prepare(&mut self, sample_rate: f32) {
         let len = (RMS_WINDOW_S * sample_rate).round().max(1.0) as usize;
-        self.squares = alloc::vec![0.0; len];
+        self.squares = vec![0.0; len];
         self.sum = 0.0;
         self.next = 0;
     }
@@ -66,7 +63,6 @@ pub struct Detector {
     hpf_hz: f32,
     rms: RmsWindow,
     follower: EnvelopeFollower,
-    sample_rate: f32,
 }
 
 impl Detector {
@@ -80,12 +76,11 @@ impl Detector {
                 release_ms: 100.0,
                 slow_release_ms: None,
             }),
-            sample_rate: 48_000.0,
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32) {
-        self.sample_rate = sample_rate;
+        self.hpf.prepare(sample_rate);
         self.hpf.reset();
         self.hpf_hz = 0.0;
         self.rms.prepare(sample_rate);
@@ -101,11 +96,11 @@ impl Detector {
                     hz: self.hpf_hz,
                     q: core::f32::consts::FRAC_1_SQRT_2,
                 };
-                self.hpf.set(hpf, self.sample_rate);
+                self.hpf.set(hpf);
             }
         }
         let x = if self.hpf_hz >= HPF_MIN_HZ {
-            self.hpf.process(mono)
+            self.hpf.tick(mono)
         } else {
             mono
         };

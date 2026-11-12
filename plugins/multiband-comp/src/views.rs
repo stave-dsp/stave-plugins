@@ -8,20 +8,13 @@
 //!   computer, with the style's knee when the knob is at zero) and the
 //!   live reduction as a dot riding it.
 
-extern crate alloc;
-use alloc::format;
-use std::sync::LazyLock;
-
-use stave_core::face::prelude::*;
-use stave_core::face::step_of;
-use stave_core::params::{BindParam, ParamEnum};
-use stave_ui::scene::TextAlign;
+use stave::face::step_of;
+use stave::prelude::*;
 
 use crate::engine::dynamics::band_reduction_db;
-use crate::params::{MbParams, BANDS, GR_PROBES};
+use crate::params::BANDS;
 use crate::style::Style;
-
-static P: LazyLock<alloc::sync::Arc<MbParams>> = LazyLock::new(MbParams::new);
+use crate::MultibandTaps;
 
 /// Each band's tint on the glass: amber, phosphor green, ice.
 const TINTS: [Color; BANDS] = [
@@ -42,18 +35,24 @@ fn x_of(r: Rect, hz: f64) -> f64 {
     r.x + r.w * ((hz / F_LO).ln() / (F_HI / F_LO).ln()).clamp(0.0, 1.0)
 }
 
-fn plain(f: &Frame<'_>, b: Bind, range: stave_core::params::Range) -> f64 {
-    range.denormalize(f.value(b))
+/// The `i`th declared read, in its param's units.
+fn plain(f: &Frame<'_>, i: usize) -> f64 {
+    f.param(i).map_or(0.0, |p| p.denormalize(f.bound(i)))
 }
 
+/// Where to centre a line of `text` at `size` that should START at `x`.
+/// The face's fonts centre on their anchor and the author API has no
+/// way to left-align them (`TextAlign` is stave-ui's), so the anchor
+/// sits half an estimated width to the right.
+fn starting_at(x: f64, text: &str, size: f64) -> f64 {
+    x + text.chars().count() as f64 * size * 0.3
+}
+
+/// Reads the crossovers, then each band's threshold.
 pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let p = &**P;
-    let sr = f.probe("sample_rate");
-    let sr = if sr > 1000.0 { sr } else { 48_000.0 };
-    let splits = [
-        plain(f, p.xover_low.bind(), p.xover_low.range()),
-        plain(f, p.xover_high.bind(), p.xover_high.range()),
-    ];
+    let sample_rate = f.tap(MultibandTaps::SAMPLE_RATE);
+    let sample_rate = if sample_rate > 1000.0 { sample_rate } else { 48_000.0 };
+    let splits = [plain(f, 0), plain(f, 1)];
     let edges = [r.x, x_of(r, splits[0]), x_of(r, splits[1]), r.x + r.w];
     // Band washes under everything.
     for (i, tint) in TINTS.iter().enumerate() {
@@ -62,12 +61,12 @@ pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             alpha(*tint, 0.05),
         );
     }
-    screens::spectrum(f, r, s, 1, sr);
-    let ty = &f.theme.type_;
+    screens::spectrum(f, r, s, 1, sample_rate);
+    let ty = &f.theme.typography;
     for (i, tint) in TINTS.iter().enumerate() {
         let (x0, x1) = (edges[i], edges[i + 1]);
         // Threshold: −60…0 dB on the spectrum's −90…0 scale.
-        let th = plain(f, p.bands[i].threshold.bind(), p.bands[i].threshold.range());
+        let th = plain(f, 2 + i);
         let y = r.y + r.h - 3.0 - ((th + 90.0) / 90.0).clamp(0.0, 1.0) * (r.h - 8.0);
         s.stroke(
             Path::new()
@@ -76,7 +75,7 @@ pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             Stroke::new(alpha(*tint, 0.7), 1.0),
         );
         // Gain reduction hangs from the top (24 dB = full height/2).
-        let gr = (-f.probe(GR_PROBES[i])).clamp(0.0, 24.0);
+        let gr = (-f.tap(MultibandTaps::GR[i])).clamp(0.0, 24.0);
         let h = gr / 24.0 * r.h * 0.5;
         if h > 0.5 {
             s.solid(
@@ -101,7 +100,7 @@ pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             Path::new()
                 .move_to(pt(*x, r.y + 2.0))
                 .line_to(pt(*x, r.y + r.h - 2.0)),
-            Stroke::new(alpha(f.theme.ink, 0.5), 1.0),
+            Stroke::new(alpha(f.theme.palette.ink, 0.5), 1.0),
         );
     }
     for (x, hz) in edges[1..3].iter().zip(splits) {
@@ -111,17 +110,17 @@ pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             format!("{hz:.0}")
         };
         s.text_in(
-            pt(*x + 4.0, r.y + 12.0),
+            pt(starting_at(*x + 4.0, &label, ty.caption_size), r.y + 12.0),
             label,
             ty.caption_size,
-            alpha(f.theme.ink, 0.7),
-            ty.value.align(TextAlign::Left),
+            alpha(f.theme.palette.ink, 0.7),
+            ty.value,
         );
     }
 }
 
 pub fn reduction(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let ty = &f.theme.type_;
+    let ty = &f.theme.typography;
     let slot = r.w / BANDS as f64;
     let (top, bottom) = (r.y + 8.0, r.y + r.h - 28.0);
     for db in [6.0, 12.0, 18.0] {
@@ -130,11 +129,11 @@ pub fn reduction(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             Path::new()
                 .move_to(pt(r.x + 4.0, y))
                 .line_to(pt(r.x + r.w - 4.0, y)),
-            Stroke::new(alpha(f.theme.phosphor, 0.08), 1.0),
+            Stroke::new(alpha(f.theme.palette.phosphor, 0.08), 1.0),
         );
     }
     for (i, tint) in TINTS.iter().enumerate() {
-        let gr = (-f.probe(GR_PROBES[i])).clamp(0.0, 24.0);
+        let gr = (-f.tap(MultibandTaps::GR[i])).clamp(0.0, 24.0);
         let cx = r.x + slot * (i as f64 + 0.5);
         let bw = slot * 0.42;
         s.solid(
@@ -160,7 +159,7 @@ pub fn reduction(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             pt(cx, r.y + r.h - 5.0),
             NAMES[i],
             ty.caption_size,
-            alpha(f.theme.ink, 0.5),
+            alpha(f.theme.palette.ink, 0.5),
             ty.caption,
         );
     }
@@ -176,16 +175,16 @@ pub fn transfer_hi(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     transfer(f, r, s, 2);
 }
 
-/// Input −60…0 dB across, output −60…+12 dB up.
+/// Input −60…0 dB across, output −60…+12 dB up. Reads the band's
+/// threshold, ratio, knee, makeup and style.
 fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene, band: usize) {
-    let b = &P.bands[band];
     let tint = TINTS[band];
     screens::grid(f, r, s, 6, 4);
-    let threshold = plain(f, b.threshold.bind(), b.threshold.range()) as f32;
-    let ratio = plain(f, b.ratio.bind(), b.ratio.range()) as f32;
-    let knee_knob = plain(f, b.knee.bind(), b.knee.range()) as f32;
-    let makeup = plain(f, b.makeup.bind(), b.makeup.range());
-    let style = Style::from_index(step_of(f.value(b.style.bind()), Style::COUNT));
+    let threshold = plain(f, 0) as f32;
+    let ratio = plain(f, 1) as f32;
+    let knee_knob = plain(f, 2) as f32;
+    let makeup = plain(f, 3);
+    let style = Style::from_index(step_of(f.bound(4), Style::COUNT));
     let knee = if knee_knob > 0.0 {
         knee_knob
     } else {
@@ -200,17 +199,17 @@ fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene, band: usize) {
     };
     s.stroke(
         Path::new().move_to(map(lo, lo)).line_to(map(0.0, 0.0)),
-        Stroke::new(alpha(f.theme.phosphor, 0.18), 1.0),
+        Stroke::new(alpha(f.theme.palette.phosphor, 0.18), 1.0),
     );
     let out = |i: f64| {
         i - f64::from(band_reduction_db(
-            stave_dsp::db_to_amp(i as f32),
+            db_to_amp(i as f32),
             threshold,
             ratio,
             knee,
         )) + makeup
     };
-    let pts: alloc::vec::Vec<_> = (0..=60)
+    let pts: Vec<_> = (0..=60)
         .map(|k| {
             let i = lo + (0.0 - lo) * f64::from(k) / 60.0;
             map(i, out(i))
@@ -219,18 +218,19 @@ fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene, band: usize) {
     s.stroke(Path::polyline(&pts), Stroke::round(alpha(tint, 0.18), 5.0));
     s.stroke(Path::polyline(&pts), Stroke::round(tint, 1.5));
     // The live operating point: the input level that pulls this much.
-    let gr = -f.probe(GR_PROBES[band]);
+    let gr = -f.tap(MultibandTaps::GR[band]);
     if gr > 0.05 {
         let slope = 1.0 - 1.0 / f64::from(ratio);
         let i = (f64::from(threshold) + gr / slope.max(1e-3)).min(0.0);
-        s.solid(Path::circle(map(i, out(i)), 3.0), f.theme.ink);
+        s.solid(Path::circle(map(i, out(i)), 3.0), f.theme.palette.ink);
     }
-    let ty = &f.theme.type_;
+    let ty = &f.theme.typography;
+    let legend = format!("{} · {:.1}:1", NAMES[band], ratio);
     s.text_in(
-        pt(r.x + 6.0, r.y + 12.0),
-        format!("{} · {:.1}:1", NAMES[band], ratio),
+        pt(starting_at(r.x + 6.0, &legend, ty.caption_size), r.y + 12.0),
+        legend,
         ty.caption_size,
         alpha(tint, 0.8),
-        ty.caption.align(TextAlign::Left),
+        ty.caption,
     );
 }

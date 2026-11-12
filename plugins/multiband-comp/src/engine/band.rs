@@ -1,11 +1,8 @@
 //! One band: its controls, its detector, its gain computer and
 //! saturation, and the parallel blend against the dry band.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::{DebugBus, Tap};
-use stave_dsp::db_to_amp;
+use stave::params::Ramp;
+use stave::prelude::*;
 
 use super::dynamics::band_reduction_db;
 use crate::detector::{Detector, DetectorSettings};
@@ -13,22 +10,50 @@ use crate::params::BandParams;
 use crate::saturation::{BandSaturator, SaturationCharacter, StereoMakeupLink};
 use crate::style::Style;
 
-stave_core::continuous_controls! {
-    pub(super) struct BandControls<BandParams> => BandRamps, BandSettings {
-        threshold,
-        ratio,
-        knee,
-        makeup,
-        attack,
-        release,
-        transient,
-        rms,
-        sidechain_hpf,
-        drive,
-        saturation_mix,
-        mix,
-    }
+/// Declares a band's smoothed knobs once: the [`Smoother`]s, their
+/// per-block [`Ramp`]s and the per-frame values, field for field.
+macro_rules! band_controls {
+    ($($field:ident),+ $(,)?) => {
+        /// One [`Smoother`] per smoothed knob of a band.
+        pub(super) struct BandControls {
+            $($field: Smoother,)+
+        }
+
+        /// This block's ramps of a band's knobs.
+        pub(super) struct BandRamps<'s> {
+            $($field: Ramp<'s>,)+
+        }
+
+        /// One frame's values of a band's knobs, in the params' units.
+        pub(super) struct BandSettings {
+            $(pub $field: f32,)+
+        }
+
+        impl BandControls {
+            pub fn new(p: &BandParams) -> Self {
+                Self { $($field: Smoother::new(&p.$field),)+ }
+            }
+
+            pub fn prepare(&mut self, env: &Environment) {
+                $(self.$field.prepare(env);)+
+            }
+
+            pub fn ramp<'s>(&'s mut self, block: &Block<'s>, p: &BandParams) -> BandRamps<'s> {
+                BandRamps { $($field: self.$field.ramp(block, &p.$field),)+ }
+            }
+        }
+
+        impl BandRamps<'_> {
+            /// The next frame's values.
+            #[inline]
+            pub fn next(&mut self) -> BandSettings {
+                BandSettings { $($field: self.$field.next(),)+ }
+            }
+        }
+    };
 }
+
+band_controls!(threshold, ratio, knee, makeup, attack, release, transient, rms, sidechain_hpf, drive, saturation_mix, mix);
 
 pub(super) struct Band {
     style: Style,
@@ -37,11 +62,10 @@ pub(super) struct Band {
     saturators: [BandSaturator; 2],
     drive_db: f32,
     reduction_db: f32,
-    reduction_tap: Tap,
 }
 
 impl Band {
-    pub fn new(reduction_tap: &'static str) -> Self {
+    pub fn new() -> Self {
         let link = Arc::new(StereoMakeupLink::default());
         let mut saturators = [BandSaturator::new(), BandSaturator::new()];
         for (lane, saturator) in saturators.iter_mut().enumerate() {
@@ -53,25 +77,24 @@ impl Band {
             saturators,
             drive_db: 0.0,
             reduction_db: 0.0,
-            reduction_tap: Tap::new(reduction_tap),
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32, p: &BandParams) {
-        self.style = p.style.get();
+        self.style = p.style.value();
         self.detector.prepare(sample_rate);
         self.drive_db = p.drive.value();
         for saturator in &mut self.saturators {
             saturator.set_drive_db(self.drive_db);
             saturator.set_mix(p.saturation_mix.value());
-            saturator.set_type(p.saturation.get());
+            saturator.set_type(p.saturation.value());
             saturator.prepare(sample_rate);
         }
         self.reduction_db = 0.0;
     }
 
-    pub fn latency_samples(&self) -> u32 {
-        self.saturators[0].latency_samples()
+    pub fn latency(&self) -> u32 {
+        self.saturators[0].latency()
     }
 
     pub fn configure(&mut self, style: Style, saturation: SaturationCharacter) {
@@ -127,7 +150,8 @@ impl Band {
         (out[0], if stereo { out[1] } else { out[0] })
     }
 
-    pub fn publish(&self, bus: &DebugBus) {
-        self.reduction_tap.set(bus, -f64::from(self.reduction_db));
+    /// The gain reduction this frame, in dB (≤ 0), for the face.
+    pub fn reduction_db(&self) -> f64 {
+        -f64::from(self.reduction_db)
     }
 }

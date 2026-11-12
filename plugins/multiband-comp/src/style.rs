@@ -1,8 +1,8 @@
 //! Compressor styles: each names a classic gain-reduction element and
 //! how it shapes the detector and the gain computer.
 
-use stave_core::params::ParamEnum;
-use stave_dsp::amp_to_db;
+use stave::dsp::amp_to_db;
+use stave::params::ParamEnum;
 
 pub const STYLES: &[&str] = &["VCA", "FET", "OPTO", "VMU"];
 
@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn opto_stretches_release_and_vca_does_not() {
-        let hot = stave_dsp::db_to_amp(0.0);
+        let hot = stave::dsp::db_to_amp(0.0);
         assert!(Style::Opto.character().release_stretch(hot, -12.0) > 2.0);
         assert_eq!(Style::Vca.character().release_stretch(hot, -12.0), 1.0);
     }

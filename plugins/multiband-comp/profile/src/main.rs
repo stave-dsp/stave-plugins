@@ -9,7 +9,7 @@ use std::time::Instant;
 use stave_measure::level::{db, dc, peak, rms};
 use stave_measure::signal::{db_to_amp, Noise, Signal, Sine};
 use stave_measure::tone::{analyze, ToneAnalysis, ToneReport};
-use stave_measure::tone_test::{ToneTest, TwoToneTest};
+use stave_measure::tone_window::{ToneWindow, TwoToneWindow};
 use stave_multiband_comp_vst3::detector::{Detector, DetectorSettings};
 use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter, SATURATIONS};
 use stave_multiband_comp_vst3::style::{Style, STYLES};
@@ -156,7 +156,7 @@ fn respond(ty: SaturationCharacter, drive_db: f64, hz: f64, level_db: f64) -> (S
     .bin_snapped(WINDOW);
     let mut s = saturator(ty, drive_db);
     let out: Vec<f32> = sine
-        .render(0, 2 * WINDOW)
+        .samples(0, 2 * WINDOW)
         .into_iter()
         .map(|x| s.process(x))
         .collect();
@@ -196,7 +196,7 @@ fn ns_per_sample(ty: SaturationCharacter, oversample: bool) -> f64 {
         amplitude: db_to_amp(LEVEL_DB),
         sample_rate: SR,
     }
-    .render(0, N);
+    .samples(0, N);
     let start = Instant::now();
     let sum: f32 = input.iter().map(|&x| s.process(x)).sum();
     std::hint::black_box(sum);
@@ -314,7 +314,7 @@ fn tables() -> Vec<Table> {
                     .iter()
                     .map(|&d| {
                         let mut s = saturator(ty, d);
-                        ToneTest {
+                        ToneWindow {
                             bin: bin(18_000.0),
                             window: WINDOW,
                             sample_rate: SR,
@@ -334,7 +334,7 @@ fn tables() -> Vec<Table> {
             1,
             |ty| {
                 let mut s = saturator(ty, 10.0);
-                vec![TwoToneTest {
+                vec![TwoToneWindow {
                     low_bin: bin(1_000.0),
                     high_bin: bin(1_100.0),
                     window: WINDOW,
@@ -354,7 +354,7 @@ fn tables() -> Vec<Table> {
                     seed: 7,
                     amplitude: 0.5,
                 }
-                .render(0, SR as usize);
+                .samples(0, SR as usize);
                 let mut s = saturator(ty, 10.0);
                 let out: Vec<f32> = noise.iter().map(|&x| s.process(x)).collect();
                 let mut s = saturator(ty, 10.0);

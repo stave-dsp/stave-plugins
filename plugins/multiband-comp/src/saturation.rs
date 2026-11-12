@@ -8,23 +8,20 @@
 //!
 //! **Latency:** with oversampling on (the default), every type runs
 //! inside a nested 4× linear-phase FIR half-band stack, which delays the
-//! wet path by a fixed [`BandSaturator::latency_samples`] samples. The dry
+//! wet path by a fixed [`BandSaturator::latency`] samples. The dry
 //! reference is routed through a matching compensation delay — including
 //! on the bypass / zero-drive early-out — so the latency is CONSTANT
 //! regardless of settings (a multiband host can enable saturation on one
 //! band without shifting it against the others), and the wet/dry `mix`
 //! is phase-coherent at all frequencies. Report the latency to the host.
 
-use stave_dsp::db_to_amp;
-use stave_dsp::{
-    Biquad, Compensator, EnvelopeFollower, EnvelopeTimes, Oversampler2xFir, Oversampler2xFirInner,
-    SmoothedParam, Triode,
-};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
-extern crate alloc;
-use alloc::sync::Arc;
-use core::sync::atomic::{AtomicU32, Ordering};
-use stave_dsp::FilterSpec;
+use stave::dsp::{
+    db_to_amp, Biquad, Compensator, EnvelopeFollower, EnvelopeTimes, FilterSpec, Oversampled2x,
+    SmoothedParam, Stage, Triode,
+};
 
 /// Cross-channel link for the tube makeup AGC: both
 /// channels key their makeup from the MAX of the two channels' input
@@ -67,9 +64,39 @@ impl StereoMakeupLink {
 
 /// Round-trip group delay of the nested 4× stack at the base rate:
 /// 66 (outer, 133-tap) + 18 (relaxed 73-tap inner) — both exactly
-/// integer by the half-band designs.
-const OS4X_LATENCY: usize =
-    Oversampler2xFir::latency_samples() + Oversampler2xFirInner::latency_samples_base();
+/// integer by the half-band designs (`Oversampled2x`'s own latency
+/// reports the same figure; pinned in the tests).
+const OS4X_LATENCY: usize = 84;
+
+/// The nonlinearity at the oversampled rate: the physical triode for
+/// TUBE, a memoryless curve for the others.
+struct Shaper {
+    ty: SaturationCharacter,
+    /// The linear pre-gain the curves key their knee on.
+    drive_gain: f32,
+    triode: Triode,
+}
+
+impl Stage for Shaper {
+    fn prepare(&mut self, sample_rate: f32) {
+        self.triode.prepare(sample_rate);
+    }
+    fn reset(&mut self) {
+        self.triode.reset();
+    }
+    #[inline]
+    fn tick(&mut self, x: f32) -> f32 {
+        match self.ty {
+            SaturationCharacter::Tube => self.triode.tick(x),
+            SaturationCharacter::Tape => tape(x),
+            SaturationCharacter::Transistor => transistor(x, self.drive_gain),
+            SaturationCharacter::Clipper => clipper(x, self.drive_gain),
+        }
+    }
+}
+
+/// The nested 4× region around the [`Shaper`].
+type Os4x = Oversampled2x<Oversampled2x<Shaper>>;
 
 /// Re-engage fade length (~5 ms at 48 k) — see `BandSaturator::front`.
 const PRIME_FADE: u16 = 240;
@@ -84,7 +111,7 @@ pub enum SaturationCharacter {
 
 pub const SATURATIONS: &[&str] = &["TUBE", "TAPE", "XSTR", "CLIP"];
 
-impl stave_core::params::ParamEnum for SaturationCharacter {
+impl stave::params::ParamEnum for SaturationCharacter {
     const COUNT: u32 = 4;
     fn from_index(i: u32) -> Self {
         match i {
@@ -109,16 +136,15 @@ pub struct BandSaturator {
     drive_db: f32,
     drive_gain: f32,
     mix: f32, // 0..1
-    ty: SaturationCharacter,
     bypass: bool,
     dc_blocker: Biquad,
     /// Nested 4× linear-phase FIR half-band stack around the nonlinear
     /// shape: harmonics that would fold back as aliasing are rejected by
     /// ~96 dB before decimation. Uniform 4× for every type keeps the
     /// latency constant across type switches. Disable for cheap mode
-    /// (zero latency, aliased).
-    oversampler: Oversampler2xFir,
-    oversampler_inner: Oversampler2xFirInner,
+    /// (zero latency, aliased). Owns the [`Shaper`] (type, curve gain
+    /// and the TUBE triode).
+    os: Os4x,
     oversample: bool,
     /// Dry-path compensation for the FIR group delay (see module docs).
     dry_comp: Compensator,
@@ -138,7 +164,7 @@ pub struct BandSaturator {
     /// gain; hard clipping loses level, and that loss is level-dependent
     /// so it must be restored by tracking the actual envelopes). This is
     /// what makes "drive" read as audible grit rather than a volume drop.
-    triode: Triode,
+    /// The triode itself lives in the [`Shaper`].
     tube_in_env: EnvelopeFollower,
     tube_out_env: EnvelopeFollower,
     tube_makeup: f32,
@@ -173,11 +199,13 @@ impl BandSaturator {
             drive_db: 0.0,
             drive_gain: 1.0,
             mix: 0.5,
-            ty: SaturationCharacter::Tube,
             bypass: false,
             dc_blocker: Biquad::default(),
-            oversampler: Oversampler2xFir::new(),
-            oversampler_inner: Oversampler2xFirInner::new(),
+            os: Oversampled2x::front(Oversampled2x::nested(Shaper {
+                ty: SaturationCharacter::Tube,
+                drive_gain: 1.0,
+                triode: Triode::new(),
+            })),
             oversample: true,
             dry_comp: Compensator::new(),
             sample_rate: 48_000.0,
@@ -185,7 +213,6 @@ impl BandSaturator {
             use_pre_shape: false,
             post_shape: Biquad::default(),
             use_post_shape: false,
-            triode: Triode::new(),
             tube_in_env: EnvelopeFollower::new(EnvelopeTimes {
                 attack_ms: 15.0,
                 release_ms: 80.0,
@@ -217,13 +244,16 @@ impl BandSaturator {
 
     pub fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
+        self.dc_blocker.prepare(sample_rate);
+        self.pre_shape.prepare(sample_rate);
+        self.post_shape.prepare(sample_rate);
         self.dc_blocker
-            .set(FilterSpec::Highpass { hz: 5.0, q: 0.707 }, sample_rate);
+            .set(FilterSpec::Highpass { hz: 5.0, q: 0.707 });
         self.dc_blocker.reset();
         // The triode runs INSIDE the 4× stack, so its stateful cathode
-        // dynamics must be prepared at the rate it actually ticks.
-        self.triode.prepare(self.nonlinear_rate());
-        self.triode.set_grid_drive(drive_volts(self.drive_db));
+        // dynamics must be prepared at the rate it actually ticks (the
+        // region prepares its interior at its own rate).
+        self.prepare_shaper();
         // Slow envelopes (~15 ms attack / 80 ms release) so the makeup is
         // a smooth gain that restores saturation loss without pumping.
         // These run at BASE rate (outside the oversampler).
@@ -234,36 +264,43 @@ impl BandSaturator {
         self.tube_makeup = 1.0;
         // τ = 8.5 ms, rate-derived: 1 − e^(−1/(τ·fs)).
         self.makeup_coeff = 1.0 - (-1.0f32 / (0.0085 * sample_rate)).exp();
-        self.s_drive_db.prepare(sample_rate, 0.005);
+        // 5 ms glides (the smoother's default time constant).
+        self.s_drive_db.prepare(sample_rate);
         self.s_drive_db.snap_to(self.drive_db);
-        self.s_mix.prepare(sample_rate, 0.005);
+        self.s_mix.prepare(sample_rate);
         self.s_mix.snap_to(self.mix);
         self.drive_now_cache = self.drive_db;
         self.shaper_drive_db = self.drive_db;
-        self.oversampler.prepare(sample_rate);
-        // Inner oversampler sees the outer's already-2× rate as its
-        // outer rate, giving 4× combined.
-        self.oversampler_inner.prepare(sample_rate * 2.0);
-        self.dry_comp.prepare(OS4X_LATENCY as u32);
+        self.dry_comp.allocate(OS4X_LATENCY as u32);
+        self.dry_comp.reset();
         self.configure_shapers();
     }
 
-    /// The rate the nonlinearity itself ticks at: the nested rate
-    /// region's typed factors, never a loose literal.
-    const OS_FACTOR: usize = Oversampler2xFir::FACTOR * Oversampler2xFirInner::FACTOR;
+    fn ty(&self) -> SaturationCharacter {
+        self.os.inner.inner.ty
+    }
 
-    fn nonlinear_rate(&self) -> f32 {
+    fn triode(&mut self) -> &mut Triode {
+        &mut self.os.inner.inner.triode
+    }
+
+    /// Prepare the nonlinearity at the rate it ticks: inside the 4×
+    /// region (which prepares its interior at 4×), or at the base rate
+    /// with oversampling off. Then re-apply the grid drive.
+    fn prepare_shaper(&mut self) {
         if self.oversample {
-            self.sample_rate * Self::OS_FACTOR as f32
+            self.os.prepare(self.sample_rate);
         } else {
-            self.sample_rate
+            self.os.inner.inner.prepare(self.sample_rate);
         }
+        let volts = drive_volts(self.drive_db);
+        self.triode().set_grid_drive(volts);
     }
 
     /// Wet-path group delay in samples at the base rate (0 with
     /// oversampling disabled). Constant across type/drive/mix/bypass —
     /// hosts should report this once.
-    pub fn latency_samples(&self) -> u32 {
+    pub fn latency(&self) -> u32 {
         if self.oversample {
             OS4X_LATENCY as u32
         } else {
@@ -274,7 +311,7 @@ impl BandSaturator {
     /// Configure the optional pre/post shapers based on the current
     /// type + drive. Called from set_type, set_drive_db, and prepare.
     fn configure_shapers(&mut self) {
-        match self.ty {
+        match self.ty() {
             SaturationCharacter::Tape => {
                 // Head bump: low-shelf +3 dB at 80 Hz. Drive-modulated
                 // — pushes harder when the user dials in more drive.
@@ -284,7 +321,6 @@ impl BandSaturator {
                         hz: 80.0,
                         db: bump_db,
                     },
-                    self.sample_rate,
                 );
                 self.pre_shape.reset();
                 self.use_pre_shape = true;
@@ -298,7 +334,6 @@ impl BandSaturator {
                         hz: 7_500.0,
                         db: rolloff_db,
                     },
-                    self.sample_rate,
                 );
                 self.post_shape.reset();
                 self.use_post_shape = true;
@@ -318,14 +353,13 @@ impl BandSaturator {
     /// tried, identical spray, so 0.25 stays).
     fn follow_shapers(&mut self, drive_db: f32) {
         self.shaper_drive_db = drive_db;
-        if self.ty == SaturationCharacter::Tape {
+        if self.ty() == SaturationCharacter::Tape {
             let bump_db = 2.5 + 0.15 * drive_db;
             self.pre_shape.set(
                 FilterSpec::LowShelf {
                     hz: 80.0,
                     db: bump_db,
                 },
-                self.sample_rate,
             );
             let rolloff_db = -0.5 - 0.25 * drive_db;
             self.post_shape.set(
@@ -333,7 +367,6 @@ impl BandSaturator {
                     hz: 7_500.0,
                     db: rolloff_db,
                 },
-                self.sample_rate,
             );
         }
     }
@@ -344,8 +377,7 @@ impl BandSaturator {
     pub fn set_oversample(&mut self, enabled: bool) {
         if enabled != self.oversample {
             self.oversample = enabled;
-            self.triode.prepare(self.nonlinear_rate());
-            self.triode.set_grid_drive(drive_volts(self.drive_db));
+            self.prepare_shaper();
         }
     }
 
@@ -357,7 +389,8 @@ impl BandSaturator {
         // The triode maps drive to grid swing internally (it must NOT
         // also see the linear pre-gain), so feed it the dB directly —
         // its own cathode physics smooth the transition.
-        self.triode.set_grid_drive(drive_volts(self.drive_db));
+        let volts = drive_volts(self.drive_db);
+        self.triode().set_grid_drive(volts);
     }
 
     pub fn set_mix(&mut self, mix: f32) {
@@ -368,10 +401,10 @@ impl BandSaturator {
     pub fn set_type(&mut self, ty: SaturationCharacter) {
         // Settle the triode's operating point when it becomes active so
         // the first samples aren't a DC-tracker transient.
-        if ty == SaturationCharacter::Tube && self.ty != SaturationCharacter::Tube {
-            self.triode.reset();
+        if ty == SaturationCharacter::Tube && self.ty() != SaturationCharacter::Tube {
+            self.triode().reset();
         }
-        self.ty = ty;
+        self.os.inner.inner.ty = ty;
         self.shaper_drive_db = self.drive_db;
         self.configure_shapers();
     }
@@ -398,12 +431,13 @@ impl BandSaturator {
             input
         };
         // Smoothed control values — the audible path never steps.
-        let drive_now = self.s_drive_db.tick();
-        let mix_now = self.s_mix.tick();
+        let drive_now = self.s_drive_db.tick(0.0);
+        let mix_now = self.s_mix.tick(0.0);
         if (drive_now - self.drive_now_cache).abs() > 1e-3 {
             self.drive_now_cache = drive_now;
             self.drive_gain = db_to_amp(drive_now);
-            if self.ty == SaturationCharacter::Tape
+            self.os.inner.inner.drive_gain = self.drive_gain;
+            if self.ty() == SaturationCharacter::Tape
                 && (drive_now - self.shaper_drive_db).abs() > 0.25
             {
                 self.follow_shapers(drive_now);
@@ -435,7 +469,7 @@ impl BandSaturator {
     }
 
     /// Process one sample. Returns the wet+dry mix, delayed by
-    /// [`BandSaturator::latency_samples`] regardless of settings.
+    /// [`BandSaturator::latency`] regardless of settings.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
         let (dry, gate) = self.front(input);
@@ -447,71 +481,44 @@ impl BandSaturator {
         // pre/post shapers. It is a memoryless steady-state solve, so it
         // DOES need the external oversampler for anti-aliasing of the
         // cutoff/conduction harmonics — run it inside it.
-        if self.ty == SaturationCharacter::Tube {
-            let nonlinear = if self.oversample {
-                let Self {
-                    oversampler,
-                    oversampler_inner,
-                    triode,
-                    ..
-                } = self;
-                oversampler.process_one(input, |a| {
-                    oversampler_inner.process_one(a, |b| triode.process_sample(b))
-                })
-            } else {
-                self.triode.process_sample(input)
-            };
+        if self.ty() == SaturationCharacter::Tube {
+            let nonlinear = self.shape(input);
             return self.tube_post(dry, nonlinear, wet_amt, priming);
         }
         let driven = input * self.drive_gain;
         // Optional pre-shape (TAPE head bump runs here so the LF
         // resonance hits the nonlinearity, not just the dry signal).
         let pre_shaped = if self.use_pre_shape {
-            self.pre_shape.process(driven)
+            self.pre_shape.tick(driven)
         } else {
             driven
         };
-        let ty = self.ty;
-        let drive_gain = self.drive_gain;
-        // shape applied at the oversampled rate
-        let shape = move |x: f32| -> f32 {
-            match ty {
-                // Tube exits via the physical-triode path above; this
-                // arm is structurally unreachable (F-list dead code) —
-                // loud in debug if a refactor ever un-deads it.
-                SaturationCharacter::Tube => {
-                    debug_assert!(false, "Tube is handled by the triode path");
-                    tube(x)
-                }
-                SaturationCharacter::Tape => tape(x),
-                SaturationCharacter::Transistor => transistor(x, drive_gain),
-                SaturationCharacter::Clipper => clipper(x, drive_gain),
-            }
-        };
-        let nonlinear = if self.oversample {
-            // Uniform nested 4×: constant latency across type switches,
-            // and enough rejection even for CLIP's hard discontinuity.
-            let Self {
-                oversampler,
-                oversampler_inner,
-                ..
-            } = self;
-            oversampler.process_one(pre_shaped, |x2| oversampler_inner.process_one(x2, &shape))
-        } else {
-            shape(pre_shaped)
-        };
+        // Uniform nested 4×: constant latency across type switches,
+        // and enough rejection even for CLIP's hard discontinuity.
+        let nonlinear = self.shape(pre_shaped);
         // Optional post-shape (TAPE HF rolloff under drive).
         let shaped = if self.use_post_shape {
-            self.post_shape.process(nonlinear)
+            self.post_shape.tick(nonlinear)
         } else {
             nonlinear
         };
         // DC-block the wet leg only.
-        let wet = self.dc_blocker.process(shaped);
+        let wet = self.dc_blocker.tick(shaped);
         if priming {
             return dry;
         }
         dry * (1.0 - wet_amt) + wet * wet_amt
+    }
+
+    /// The nonlinearity, inside the 4× region or (oversampling off) at
+    /// the base rate.
+    #[inline]
+    fn shape(&mut self, x: f32) -> f32 {
+        if self.oversample {
+            self.os.tick(x)
+        } else {
+            self.os.inner.inner.tick(x)
+        }
     }
 
     /// The per-sample tube TAIL, shared verbatim by `process` and
@@ -537,7 +544,7 @@ impl BandSaturator {
         };
         let target = (ie / oe.max(1e-5)).clamp(0.25, 4.0);
         self.tube_makeup += self.makeup_coeff * (target - self.tube_makeup);
-        let wet = self.dc_blocker.process(nonlinear * self.tube_makeup);
+        let wet = self.dc_blocker.tick(nonlinear * self.tube_makeup);
         if priming {
             return dry;
         }
@@ -551,8 +558,6 @@ impl BandSaturator {
         self.blk.dry.resize(max_block, 0.0);
         self.blk.wet.resize(max_block, 0.0);
         self.blk.flags.resize(max_block, 0);
-        self.blk.up2.resize(2 * max_block, 0.0);
-        self.blk.up4.resize(4 * max_block, 0.0);
     }
 
     /// Block form of [`process`](Self::process) — BIT-identical to the
@@ -569,7 +574,7 @@ impl BandSaturator {
         // Stereo-linked pairs stay per-sample: StereoMakeupLink's symmetric n−1
         // staleness contract assumes L/R interleave; channel-sequential
         // blocks would skew it (fresh one way, block-stale the other).
-        if self.ty != SaturationCharacter::Tube
+        if self.ty() != SaturationCharacter::Tube
             || !self.oversample
             || self.link.is_some()
             || self.blk.dry.len() < n
@@ -601,23 +606,9 @@ impl BandSaturator {
             while i < n && self.blk.flags[i] != 0 {
                 i += 1;
             }
-            // Active run: nested 4× block, triode ticked over the 4× slice.
-            {
-                let Self {
-                    oversampler,
-                    oversampler_inner,
-                    triode,
-                    blk,
-                    ..
-                } = self;
-                oversampler.process_block(&mut io[start..i], &mut blk.up2, |b2| {
-                    oversampler_inner.process_block(b2, &mut blk.up4, |b4| {
-                        for s in b4.iter_mut() {
-                            *s = triode.process_sample(*s);
-                        }
-                    });
-                });
-            }
+            // Active run: the nested 4× region's block form, the triode
+            // ticked over the 4× slice.
+            self.os.process(&mut io[start..i]);
             for (k, s) in io[start..i].iter_mut().enumerate() {
                 let (d, w, p) = (
                     self.blk.dry[start + k],
@@ -637,33 +628,6 @@ struct BlkScratch {
     dry: Vec<f32>,
     wet: Vec<f32>,
     flags: Vec<u8>,
-    up2: Vec<f32>,
-    up4: Vec<f32>,
-}
-
-/// Biased-tanh tube model. A real single-tube preamp stage operates
-/// at a bias point that sits on the curved part of the plate-current
-/// transfer function, so positive and negative excursions ride
-/// different slopes — this is the physical source of strong 2nd-
-/// harmonic content.
-///
-/// We model that directly: shift the input by `BIAS`, run through
-/// tanh, then subtract `tanh(BIAS)` so the rest position is centred
-/// (the upstream DC blocker mops up what's left). BIAS = 0.3 was
-/// tuned by the profiler — it lifts h2 from -55 dB → -25 dB at
-/// 10 dB drive (matching a real 12AX7 preamp stage's measured
-/// harmonic content), while keeping the overall character musical
-/// rather than woofy.
-#[inline]
-fn tube(x: f32) -> f32 {
-    // Larger bias + softer pre-shape so the asymmetric bias dominates
-    // over symmetric clipping at typical input levels. Tuned by the
-    // profiler: BIAS = 0.45 gives h2 > h3 (tube-correct ordering) at
-    // 10 dB drive while keeping output gain ≈ unity.
-    const BIAS: f32 = 0.45;
-    const BIAS_TANH: f32 = 0.421_899_02; // tanh(0.45)
-    let driven = x + BIAS;
-    (driven.tanh() - BIAS_TANH) * 1.18
 }
 
 /// Soft-knee compression-style nonlinearity above a 0.7 threshold.
@@ -838,6 +802,12 @@ mod tests {
     }
 
     #[test]
+    fn the_declared_latency_is_the_regions() {
+        let sat = BandSaturator::new();
+        assert_eq!(sat.os.latency(), OS4X_LATENCY as u32);
+    }
+
+    #[test]
     fn tube_path_is_bounded_dc_free_and_colours_with_drive() {
         let fs = 48_000.0;
         let mut sat = BandSaturator::new();
@@ -936,7 +906,7 @@ fn clipper(x: f32, drive: f32) -> f32 {
 mod makeup_and_gate {
     use super::*;
 
-    fn noise(n: usize, mut st: u32) -> alloc::vec::Vec<f32> {
+    fn noise(n: usize, mut st: u32) -> Vec<f32> {
         (0..n)
             .map(|_| {
                 st = st.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -1008,7 +978,7 @@ mod makeup_and_gate {
         s.set_drive_db(6.0);
         // steady tone, settle
         let tone = |i: usize| (core::f32::consts::TAU * 997.0 * i as f32 / 48_000.0).sin() * 0.5;
-        let mut out = alloc::vec::Vec::new();
+        let mut out = Vec::new();
         for i in 0..4_800 {
             out.push(s.process(tone(i)));
         }
@@ -1037,8 +1007,8 @@ mod makeup_and_gate {
 
     #[test]
     fn block_processing_is_bit_identical_across_gates() {
-        fn ragged_blocks(total: usize, mut state: u32) -> alloc::vec::Vec<usize> {
-            let mut blocks = alloc::vec::Vec::new();
+        fn ragged_blocks(total: usize, mut state: u32) -> Vec<usize> {
+            let mut blocks = Vec::new();
             let mut remaining = total;
             while remaining > 0 {
                 state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);

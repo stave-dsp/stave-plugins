@@ -5,17 +5,12 @@
 //! time (LOW / MID / HIGH pages): its compressor, its transfer curve
 //! with solo and mute, its envelope and its colour.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
-
-use stave_core::face::prelude::*;
-use stave_core::face::{CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_ui::photo::hex;
+use stave::face::photo::hex;
+use stave::face::{CapStyle, Coat, Finish, Hardware, Palette};
+use stave::prelude::*;
 
 use crate::params::{BandParams, MbParams};
-use crate::views;
+use crate::{views, MultibandTaps};
 
 /// Space between a band page's plates.
 const PLATE_GAP: f64 = 8.0;
@@ -29,17 +24,25 @@ pub fn theme() -> Theme {
     let base = Theme::graphite();
     Theme {
         name: "multiband",
-        surface: hex(0x33383B),
-        finish: Finish::Anodized,
-        plate: hex(0x272B2E),
-        desk: hex(0x1B1D1E),
-        ink: Color::rgba(0.92, 0.93, 0.90, 1.0),
-        ink_soft: Color::rgba(0.92, 0.93, 0.90, 0.55),
-        accent: Color::rgba(0.62, 0.90, 0.48, 1.0),
-        lamp: [0.55, 1.5, 0.35],
-        caps: CapStyle::Aluminium,
-        phosphor: Color::rgba(0.66, 0.92, 0.52, 1.0),
-        screen: Color::rgba(0.03, 0.05, 0.04, 1.0),
+        finish: Finish {
+            coat: Coat::Anodized,
+            surface: hex(0x33383B),
+            plate: hex(0x272B2E),
+            desk: hex(0x1B1D1E),
+            ..base.finish
+        },
+        palette: Palette {
+            ink: Color::rgba(0.92, 0.93, 0.90, 1.0),
+            ink_soft: Color::rgba(0.92, 0.93, 0.90, 0.55),
+            accent: Color::rgba(0.62, 0.90, 0.48, 1.0),
+            phosphor: Color::rgba(0.66, 0.92, 0.52, 1.0),
+            screen: Color::rgba(0.03, 0.05, 0.04, 1.0),
+        },
+        hardware: Hardware {
+            lamp: [0.55, 1.5, 0.35],
+            caps: CapStyle::Aluminium,
+            ..base.hardware
+        },
         ..base
     }
 }
@@ -49,7 +52,7 @@ fn knobs(ks: Vec<FaceNode>, gap: f64) -> FaceNode {
 }
 
 /// One band's page.
-fn band_page(b: &BandParams, transfer: Draw, gr: &'static [&'static str], gap: f64) -> FaceNode {
+fn band_page(b: &BandParams, transfer: Draw, gr: TapId, gap: f64) -> FaceNode {
     let dynamics = Plate::titled("COMPRESSOR").around(knobs(
         vec![
             Selector::new(b.style.bind()).label("STYLE").node(),
@@ -63,7 +66,7 @@ fn band_page(b: &BandParams, transfer: Draw, gr: &'static [&'static str], gap: f
     let curve = Plate::titled("TRANSFER · SOLO · MUTE").around(knobs(
         vec![
             Display::new(150.0, 98.0, transfer)
-                .probes(gr)
+                .taps(&[gr])
                 .reads(&[
                     b.threshold.bind(),
                     b.ratio.bind(),
@@ -143,12 +146,17 @@ pub fn face(p: &MbParams) -> Face {
         reads.push(b.threshold.bind());
     }
     let spectrum = Display::new(450.0, 118.0, views::spectrum)
-        .probes(&["sample_rate", "gr_lo", "gr_mid", "gr_hi"])
+        .taps(&[
+            MultibandTaps::SAMPLE_RATE,
+            MultibandTaps::GR_LO,
+            MultibandTaps::GR_MID,
+            MultibandTaps::GR_HI,
+        ])
         .reads(&reads)
         .animated()
         .node();
     let gr = Display::new(112.0, 118.0, views::reduction)
-        .probes(&["gr_lo", "gr_mid", "gr_hi"])
+        .taps(&MultibandTaps::GR)
         .node();
     let crossover = Plate::titled("CROSSOVER").around(
         row(vec![
@@ -164,17 +172,17 @@ pub fn face(p: &MbParams) -> Face {
 
     let pages = stack(vec![
         on_page(
-            band_page(low, views::transfer_lo, &["gr_lo"], theme.space(0)),
+            band_page(low, views::transfer_lo, MultibandTaps::GR_LO, theme.space(0)),
             BANDS_KEY,
             0,
         ),
         on_page(
-            band_page(mid, views::transfer_mid, &["gr_mid"], theme.space(0)),
+            band_page(mid, views::transfer_mid, MultibandTaps::GR_MID, theme.space(0)),
             BANDS_KEY,
             1,
         ),
         on_page(
-            band_page(high, views::transfer_hi, &["gr_hi"], theme.space(0)),
+            band_page(high, views::transfer_hi, MultibandTaps::GR_HI, theme.space(0)),
             BANDS_KEY,
             2,
         ),
