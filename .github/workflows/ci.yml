@@ -36,7 +36,7 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
       - name: Framework is pinned, not linked
@@ -59,8 +59,7 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - uses: dtolnay/rust-toolchain@stable
-        with: { components: clippy }
+      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --workspace --all-targets --locked
         env:
@@ -79,10 +78,10 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - name: Install clap-validator
-        run: cargo install --locked --git https://github.com/free-audio/clap-validator.git clap-validator
+        run: cargo install --locked --git https://github.com/free-audio/clap-validator.git --tag 0.4.1 clap-validator
       - run: scripts/validate-formats.sh clap
 
   vst3-validator:
@@ -98,18 +97,18 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - name: Cache VST3 SDK build
         id: sdk-cache
         uses: actions/cache@v4
         with:
           path: vst3sdk
-          key: vst3sdk-validator-${{ runner.os }}-v1
+          key: vst3sdk-validator-${{ runner.os }}-v3.8.1_build_84
       - name: Build Steinberg validator
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --recurse-submodules --shallow-submodules \
+          git clone --depth 1 --branch v3.8.1_build_84 --recurse-submodules --shallow-submodules \
             https://github.com/steinbergmedia/vst3sdk.git vst3sdk
           cmake -S vst3sdk -B vst3sdk/build -DCMAKE_BUILD_TYPE=Release \
             -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF \
