@@ -18,53 +18,31 @@
 //! comb 0.23, EDC 1.07 dB; MESH NED 0.45 / 0.39 (four strands — a
 //! sparser space by design), comb 0.23, EDC 0.76 dB.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_eddy_vst3::Eddy;
+use stave_test::PluginHarness;
 use stave_measure::tail::{autocorr_peak, edc_ripple_db, ned};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
+/// A harness at FS/BLOCK with `set` applied (plain values, by name).
+fn harness(set: &[(&str, f64)]) -> PluginHarness<Eddy> {
+    set.iter()
+        .fold(PluginHarness::<Eddy>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build()
+}
+
 fn render(set: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = harness(set);
     let mut out = Vec::with_capacity(input.len());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for chunk in input.chunks(BLOCK) {
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 

@@ -39,8 +39,8 @@
 //! DIFFUSE = 0 with BLEED = 0 bypasses the stage, which keeps every
 //! algorithm's law bit-identical (a law test).
 
-use stave_dsp::Xorshift32;
-use stave_dsp::{Allpass1, DelayLine, PerChannel};
+use stave::dsp::Xorshift32;
+use stave::dsp::{Allpass1, DelayLine, OnePole, PerChannel, Stage};
 
 use crate::params::EddyParams;
 
@@ -111,7 +111,7 @@ impl Ap {
         self.len = len;
         self.drift = 0.0;
         self.target = 0.0;
-        self.line.prepare((len + margin + 8.0) as usize);
+        self.line.allocate((len + margin + 8.0) as usize);
         self.line.reset();
     }
 
@@ -137,7 +137,8 @@ struct Branch {
     mod_ap: Ap,
     d1: DelayLine,
     d1_len: f32,
-    damp: f32,
+    /// In-tank damping: the half-lap's air.
+    damp: OnePole,
     ap2: Ap,
     d2: DelayLine,
     d2_len: f32,
@@ -149,7 +150,7 @@ impl Branch {
             mod_ap: Ap::new(),
             d1: DelayLine::new(),
             d1_len: 0.0,
-            damp: 0.0,
+            damp: OnePole::lowpass(TANK_DAMP_HZ),
             ap2: Ap::new(),
             d2: DelayLine::new(),
             d2_len: 0.0,
@@ -159,7 +160,7 @@ impl Branch {
     fn reset(&mut self) {
         self.mod_ap.reset();
         self.d1.reset();
-        self.damp = 0.0;
+        self.damp.reset();
         self.ap2.reset();
         self.d2.reset();
     }
@@ -184,7 +185,6 @@ pub(super) struct Diffusion {
     tank: [Branch; 2],
     plate_g: f32,
     plate_mod: f32,
-    tank_damp_k: f32,
     // PRISM
     prism: PerChannel<[Allpass1; PRISM_STAGES], 2>,
     prism_depth: f32,
@@ -197,8 +197,8 @@ pub(super) struct Diffusion {
     mesh_len: [f32; 4],
     mesh_drift: [f32; 4],
     mesh_target: [f32; 4],
-    mesh_damp: [f32; 4],
-    mesh_damp_k: f32,
+    /// Per-line damping: the late field darkens instead of ringing.
+    mesh_damp: [OnePole; 4],
     mesh_cos: f32,
     mesh_sin: f32,
     mesh_cos2: f32,
@@ -220,8 +220,7 @@ impl Diffusion {
             tank: [Branch::new(), Branch::new()],
             plate_g: 0.55,
             plate_mod: 0.5,
-            tank_damp_k: 0.5,
-            prism: PerChannel::new(|_| [Allpass1::new(); PRISM_STAGES]),
+            prism: PerChannel::new(|_| [Allpass1::new(1_000.0); PRISM_STAGES]),
             prism_depth: 0.0,
             dust_lines: PerChannel::new(|_| DelayLine::new()),
             dust_taps: core::array::from_fn(|_| DustTap {
@@ -234,8 +233,7 @@ impl Diffusion {
             mesh_len: [0.0; 4],
             mesh_drift: [0.0; 4],
             mesh_target: [0.0; 4],
-            mesh_damp: [0.0; 4],
-            mesh_damp_k: 0.5,
+            mesh_damp: [OnePole::lowpass(MESH_DAMP_HZ); 4],
             mesh_cos: 1.0,
             mesh_sin: 0.0,
             mesh_cos2: 1.0,
@@ -263,22 +261,21 @@ impl Diffusion {
             br.mod_ap
                 .prepare(TANK_MOD_AP[i] * rescale, TANK_MOD_DEPTH + 4.0);
             br.d1_len = TANK_D1[i] * rescale;
-            br.d1.prepare(br.d1_len as usize + 8);
+            br.d1.allocate(br.d1_len as usize + 8);
             br.d1.reset();
-            br.damp = 0.0;
+            br.damp.prepare(sr);
             br.ap2.prepare(TANK_AP2[i] * rescale, 0.0);
             br.d2_len = TANK_D2[i] * rescale;
-            br.d2.prepare(br.d2_len as usize + 8);
+            br.d2.allocate(br.d2_len as usize + 8);
             br.d2.reset();
         }
-        self.tank_damp_k = 1.0 - (-2.0 * core::f32::consts::PI * TANK_DAMP_HZ / sr).exp();
         for lane in self.prism.iter_mut() {
             for ap in lane.iter_mut() {
                 ap.prepare(sr);
             }
         }
         for line in self.dust_lines.iter_mut() {
-            line.prepare((SPRAY_MAX_MS * 0.001 * sr) as usize + 8);
+            line.allocate((SPRAY_MAX_MS * 0.001 * sr) as usize + 8);
             line.reset();
         }
         // The cloud is BORN OPEN: walks seeded scattered, or the
@@ -290,11 +287,12 @@ impl Diffusion {
             self.dust_taps[i].target = w;
         }
         for (i, line) in self.mesh.iter_mut().enumerate() {
-            line.prepare((MESH_MS[i] * 1.6 * 0.001 * sr + MESH_MOD_DEPTH + 8.0) as usize);
+            line.allocate((MESH_MS[i] * 1.6 * 0.001 * sr + MESH_MOD_DEPTH + 8.0) as usize);
             line.reset();
         }
-        self.mesh_damp = [0.0; 4];
-        self.mesh_damp_k = 1.0 - (-2.0 * core::f32::consts::PI * MESH_DAMP_HZ / sr).exp();
+        for damp in &mut self.mesh_damp {
+            damp.prepare(sr);
+        }
         self.field_prev = [0.0; 2];
     }
 
@@ -302,7 +300,7 @@ impl Diffusion {
     /// resets ALL field state (stale clouds must not thump in); the
     /// active voice's texture constants settle.
     pub(super) fn apply_changes(&mut self, p: &EddyParams) {
-        let kind = p.diffusion.index();
+        let kind = p.diffusion.value().0 as usize;
         if kind != self.kind {
             self.kind = kind;
             for lane in self.plate_in.iter_mut() {
@@ -324,7 +322,9 @@ impl Diffusion {
             for line in self.mesh.iter_mut() {
                 line.reset();
             }
-            self.mesh_damp = [0.0; 4];
+            for damp in &mut self.mesh_damp {
+                damp.reset();
+            }
             self.field_prev = [0.0; 2];
         }
         // HOLD → the voice's recirculation gain. Ceilings differ by
@@ -357,7 +357,7 @@ impl Diffusion {
                 let hz = 90.0 * 20f32.powf(p.bend.value());
                 for lane in self.prism.iter_mut() {
                     for ap in lane.iter_mut() {
-                        ap.set_frequency(hz);
+                        ap.set_hz(hz);
                     }
                 }
                 // Squared taper: resolution where the smear is subtle.
@@ -536,16 +536,13 @@ impl Diffusion {
             (dm - ds) * core::f32::consts::FRAC_1_SQRT_2,
         ];
         let depth = TANK_MOD_DEPTH * self.plate_mod;
-        let kd = self.tank_damp_k;
         let mut sum = [0.0f32; 2];
         for (i, br) in self.tank.iter_mut().enumerate() {
             let x = br.mod_ap.tick(inj[i] + hg * cross[i], g, depth, ease);
             br.d1.write(x);
             br.d1.advance();
             let v1 = br.d1.read_cubic(br.d1_len);
-            // In-tank damping: the half-lap's air.
-            br.damp += (v1 - br.damp) * kd;
-            let v2 = br.ap2.tick(br.damp, g, 0.0, ease);
+            let v2 = br.ap2.tick(br.damp.tick(v1), g, 0.0, ease);
             br.d2.write(v2);
             br.d2.advance();
             // The branch's voice is a SPREAD of taps, so one pass
@@ -588,8 +585,8 @@ impl Diffusion {
             if i == k0 {
                 before = (xm, xs);
             }
-            xm = mid_lane[i].process(xm);
-            xs = side_lane[i].process(xs);
+            xm = mid_lane[i].tick(xm);
+            xs = side_lane[i].tick(xs);
             if i == k0 {
                 after = (xm, xs);
             }
@@ -627,7 +624,7 @@ impl Diffusion {
     #[inline]
     fn mesh_pair(&mut self, m: f32, s: f32) -> (f32, f32) {
         let ease = 1.0 - (-2.0 * core::f32::consts::PI * 0.8 / self.sr).exp();
-        let kd = self.mesh_damp_k;
+        let mut v = [0.0f32; 4];
         for i in 0..4 {
             // A few samples of slow line motion + per-line damping:
             // the late field breathes and darkens instead of ringing
@@ -635,9 +632,8 @@ impl Diffusion {
             self.mesh_drift[i] += (self.mesh_target[i] - self.mesh_drift[i]) * ease;
             let read =
                 self.mesh[i].read_cubic(self.mesh_len[i] + MESH_MOD_DEPTH * self.mesh_drift[i]);
-            self.mesh_damp[i] += (read - self.mesh_damp[i]) * kd;
+            v[i] = self.mesh_damp[i].tick(read);
         }
-        let v = self.mesh_damp;
         // The weave: image-space rotations across the line pairs —
         // orthogonal, so the mesh conserves what it circulates.
         let (c, sn) = (self.mesh_cos, self.mesh_sin);

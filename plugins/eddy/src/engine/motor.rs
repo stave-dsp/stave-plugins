@@ -11,8 +11,8 @@
 //! (the knobs steer the motor, not the tape). Small-signal unity and
 //! cut-only, so the loop stays caged at the dialed feedback.
 
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, Lag, Slew, Stage};
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, Lag, Slew, Stage};
 
 use super::diffusion::Diffusion;
 use super::echo::Echo;
@@ -24,7 +24,7 @@ pub(super) const SAG_MAX: f32 = 0.25;
 /// One lane of the machine's tape path (see the header): moderate
 /// fixed drive — texture, not distortion.
 struct LaneTape {
-    mag: stave_dsp::Hysteresis,
+    mag: stave::dsp::Hysteresis,
     slew: Slew,
     loss: Biquad,
 }
@@ -35,7 +35,7 @@ pub(super) struct Motor {
     /// The platter's mass: load reaches the speed through this.
     inertia: Lag,
     /// The fixed tape path, per lane.
-    tape: stave_dsp::PerChannel<LaneTape, 2>,
+    tape: stave::dsp::PerChannel<LaneTape, 2>,
     /// Last frame's peak INTO the head (program + fed-back tail —
     /// the flux the machine is asked to record; the tape's own
     /// ceiling must not hide load from the motor). One frame late —
@@ -53,10 +53,10 @@ impl Motor {
                 slow_release_ms: None,
             }),
             inertia: Lag::new(300.0, 300.0),
-            tape: stave_dsp::PerChannel::new(|_| LaneTape {
-                mag: stave_dsp::Hysteresis::new(2.2, 0.5),
+            tape: stave::dsp::PerChannel::new(|_| LaneTape {
+                mag: stave::dsp::Hysteresis::new(2.2, 0.5),
                 slew: Slew::new(120.0, 120.0),
-                loss: Biquad::new(),
+                loss: Biquad::passthrough(),
             }),
             last_head: 0.0,
             sr: 48_000.0,
@@ -72,14 +72,13 @@ impl Motor {
         for lane in self.tape.iter_mut() {
             lane.mag.prepare(sr);
             lane.slew.prepare(sr);
-            lane.slew.set_rates(120.0, 120.0, sr);
+            lane.slew.set_rates(120.0, 120.0);
+            lane.loss.prepare(sr);
             lane.loss.set(
                 FilterSpec::Lowpass {
                     hz: 6_500.0,
                     q: 0.707,
-                },
-                sr,
-            );
+                });
         }
         self.last_head = 0.0;
     }
@@ -87,7 +86,7 @@ impl Motor {
     /// Block-rate: INERTIA maps to the platter time constant.
     pub(super) fn begin_block(&mut self, inertia: f32) {
         let ms = 60.0 + 1_500.0 * inertia.clamp(0.0, 1.0);
-        self.inertia.set_times(ms, ms, self.sr);
+        self.inertia.set_times(ms, ms);
     }
 
     /// One stereo frame: the sagged time through the classic law.
@@ -114,7 +113,7 @@ impl Motor {
             |lane, x| {
                 head_peak = head_peak.max(x.abs());
                 let t = &mut tape[lane];
-                t.loss.process(t.slew.tick(t.mag.tick(x)))
+                t.loss.tick(t.slew.tick(t.mag.tick(x)))
             },
             |m, s| diffusion.couple(m, s, cx.diffuse, cx.bleed),
         );

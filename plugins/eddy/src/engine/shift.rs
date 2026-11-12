@@ -30,7 +30,7 @@
 //! bit-identical (a law test). (This slot replaced TRACK, an octave
 //! divider that couldn't track real program — see git history.)
 
-use stave_dsp::{ms_decode, ms_encode, DelayLine, PerChannel};
+use stave::dsp::{ms_decode, ms_encode, DelayLine, PerChannel};
 
 use super::diffusion::Diffusion;
 use super::echo::{Echo, MID, SIDE};
@@ -80,7 +80,7 @@ impl Shift {
         self.sr = sr;
         let cap = ((MAX_GRAIN_MS + 2.0 * REACH_MS) * 0.001 * sr) as usize + 8;
         for tap in self.taps.iter_mut() {
-            tap.line.prepare(cap);
+            tap.line.allocate(cap);
             tap.line.reset();
         }
         self.phase = 0.0;

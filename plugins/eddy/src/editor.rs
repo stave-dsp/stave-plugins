@@ -4,39 +4,47 @@
 //! three deeper sections — MOTION (the global wobble), ALGORITHM (the
 //! feedback law and every law's own knobs) and DIFFUSION (the field's
 //! voice, its own knobs, and the couplings) — sit behind a pager.
-//! The ALGO and VOICE selectors pick what runs; each law's and each
-//! voice's knobs keep their own small plate so nothing is hidden by
-//! switching.
+//! On the ALGO and FIELD pages a row of tabs picks what runs (the
+//! `algo` and `diffusion` params, so a tab automates and saves like a
+//! knob), and the plate under it follows the tab: only the running
+//! law's, and the running voice's, own knobs are on the face.
 
-use stave_core::face::prelude::*;
-use stave_core::face::{CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_core::ui::photo::hex;
+use stave::face::material;
+use stave::face::photo::hex;
+use stave::face::part::Bake;
+use stave::face::{leaf, step_of, Area, CapStyle, Coat, Finish, Gesture, Grab, Hardware, Palette, Part};
+use stave::prelude::*;
 
-use crate::params::EddyParams;
+use crate::engine::EddyTaps;
+use crate::params::{EddyParams, ALGOS, DIFFUSIONS};
 
 /// The editor-local page set behind the pager.
 const PAGES: u32 = 1;
 
 /// Mustard powder coat, black print, black dome knobs, red light.
 fn theme() -> Theme {
-    let ink = Color::rgba(0.11, 0.09, 0.07, 1.0);
     Theme {
         name: "eddy",
-        surface: hex(0xB9862A),
-        finish: Finish::Powder,
-        plate: hex(0xA67624),
-        desk: hex(0x1F1D1B),
-        ink,
-        ink_soft: Color::rgba(0.11, 0.09, 0.07, 0.62),
-        accent: Color::rgba(0.62, 0.12, 0.08, 1.0),
-        lamp: [1.9, 0.3, 0.1],
-        caps: CapStyle::Dome,
-        cap: hex(0x0F0E0D),
-        pointer: Color::rgba(0.96, 0.94, 0.9, 1.0),
-        screen: Color::rgba(0.05, 0.04, 0.03, 1.0),
-        phosphor: Color::rgba(1.0, 0.78, 0.38, 1.0),
-        radius: 14.0,
+        finish: Finish {
+            coat: Coat::Powder,
+            surface: hex(0xB9862A),
+            plate: hex(0xA67624),
+            desk: hex(0x1F1D1B),
+            radius: 14.0,
+        },
+        palette: Palette {
+            ink: Color::rgba(0.11, 0.09, 0.07, 1.0),
+            ink_soft: Color::rgba(0.11, 0.09, 0.07, 0.62),
+            accent: Color::rgba(0.62, 0.12, 0.08, 1.0),
+            screen: Color::rgba(0.05, 0.04, 0.03, 1.0),
+            phosphor: Color::rgba(1.0, 0.78, 0.38, 1.0),
+        },
+        hardware: Hardware {
+            caps: CapStyle::Dome,
+            cap: hex(0x0F0E0D),
+            pointer: Color::rgba(0.96, 0.94, 0.9, 1.0),
+            lamp: [1.9, 0.3, 0.1],
+        },
         ..Theme::graphite()
     }
 }
@@ -45,7 +53,7 @@ fn theme() -> Theme {
 /// lit cursor where the read head is now.
 fn wave(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     screens::grid(f, r, s, 8, 4);
-    let ys = f.host.curve();
+    let ys = f.controller.curve();
     if ys.len() < 2 {
         return;
     }
@@ -57,9 +65,9 @@ fn wave(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     };
     let pts: Vec<_> = (0..ys.len()).map(at).collect();
     screens::glow_line(f, s, &pts);
-    let phase = f.probe("lfo_phase").clamp(0.0, 1.0);
+    let phase = f.tap(EddyTaps::LFO_PHASE).clamp(0.0, 1.0);
     let c = at(((ys.len() - 1) as f64 * phase).round() as usize);
-    let ph = f.theme.phosphor;
+    let ph = f.theme.palette.phosphor;
     s.solid(Path::circle(c, 7.0), Color::rgba(ph.r, ph.g, ph.b, 0.22));
     s.solid(Path::circle(c, 3.2), ph);
 }
@@ -92,11 +100,11 @@ pub fn face(p: &EddyParams) -> Face {
         ])
         .gap(gap),
     );
-    let tail = Plate::titled("TAIL").around(Trace::new("tail", 236.0, 92.0, (0.0, 1.0)).node());
+    let tail = Plate::titled("TAIL").around(Trace::new(EddyTaps::TAIL, 236.0, 92.0, (0.0, 1.0)).node());
     let top = row(vec![delay, levels, tail]).gap(gap).align(Align::Stretch);
 
     // MOTION: the wobble's picture, its character and its knobs.
-    let cycle = Plate::titled("CYCLE").around(Display::new(300.0, 214.0, wave).probes(&["lfo_phase"]).node());
+    let cycle = Plate::titled("CYCLE").around(Display::new(300.0, 214.0, wave).taps(&[EddyTaps::LFO_PHASE]).node());
     let motion = Plate::titled("MOTION").around(
         column(vec![
             Selector::new(p.motion.bind()).label("SHAPE").node(),
@@ -113,8 +121,8 @@ pub fn face(p: &EddyParams) -> Face {
     );
     let motion_page = row(vec![cycle, motion]).gap(gap).align(Align::Stretch);
 
-    // ALGORITHM: which feedback law runs, and each law's own knobs.
-    let algo = Plate::titled("LAW").around(Selector::new(p.algo.bind()).label("ALGO").node());
+    // ALGORITHM: the tabs pick the feedback law; the plate under them
+    // is that law's own knobs.
     let circuit = Plate::titled("CIRCUIT").around(
         row(vec![Toggle::new(p.circuit.bind()).label("CELL").node(), Knob::new(p.heat.bind()).node()])
             .gap(gap)
@@ -132,14 +140,14 @@ pub fn face(p: &EddyParams) -> Face {
     );
     let orbit = Plate::titled("ORBIT").around(Knob::new(p.orbit.bind()).centered().node());
     let algo_page = column(vec![
-        row(vec![algo, circuit, motor]).gap(gap).align(Align::Stretch),
-        row(vec![shift, orbit]).gap(gap).align(Align::Stretch),
+        Tabs::new(p.algo.bind(), ALGOS).node(),
+        follow(p.algo.bind(), vec![circuit, motor, shift, orbit]),
     ])
     .gap(gap)
     .align(Align::Stretch);
 
-    // DIFFUSION: the field's voice, each voice's knobs, the couplings.
-    let voice = Plate::titled("FIELD").around(Selector::new(p.diffusion.bind()).label("VOICE").node());
+    // DIFFUSION: the tabs pick the field's voice; beside its knobs,
+    // the couplings every voice shares.
     let couple = Plate::titled("COUPLING").around(
         row(vec![
             Knob::new(p.diffuse.bind()).node(),
@@ -151,17 +159,21 @@ pub fn face(p: &EddyParams) -> Face {
     let pair = |title: &'static str, a: Bind, b: Bind| {
         Plate::titled(title).around(row(vec![Knob::new(a).node(), Knob::new(b).node()]).gap(gap))
     };
-    let voices = row(vec![
-        pair("PLATE", p.density.bind(), p.wander.bind()),
-        pair("PRISM", p.bend.bind(), p.smear.bind()),
-        pair("DUST", p.spray.bind(), p.motes.bind()),
-        pair("MESH", p.size.bind(), p.weave.bind()),
+    let voices = follow(
+        p.diffusion.bind(),
+        vec![
+            pair("PLATE", p.density.bind(), p.wander.bind()),
+            pair("PRISM", p.bend.bind(), p.smear.bind()),
+            pair("DUST", p.spray.bind(), p.motes.bind()),
+            pair("MESH", p.size.bind(), p.weave.bind()),
+        ],
+    );
+    let field_page = column(vec![
+        Tabs::new(p.diffusion.bind(), DIFFUSIONS).node(),
+        row(vec![voices, couple]).gap(gap).align(Align::Stretch),
     ])
     .gap(gap)
     .align(Align::Stretch);
-    let field_page = column(vec![row(vec![voice, couple]).gap(gap).align(Align::Stretch), voices])
-        .gap(gap)
-        .align(Align::Stretch);
 
     let pages = stack(vec![
         on_page(motion_page.width(Dim::Fill(1.0)), PAGES, 0),
@@ -172,10 +184,83 @@ pub fn face(p: &EddyParams) -> Face {
     let body = column(vec![
         header,
         top,
-        row(vec![Pager::new(PAGES, &["MOTION", "ALGO", "FIELD"]).node(), spacer()]),
+        row(vec![Pager::new(PAGES, &["MOTION", "ALGO", "FIELD"]).node().id("pages"), spacer()]),
         pages,
     ])
     .gap(theme.space(3))
     .align(Align::Stretch);
     Face::new(theme, Panel { margin: 18.0, pad: 24.0, ..Panel::default() }.around(body))
+}
+
+/// `plates[i]` while `bind` is on step `i`, overlaid and each stretched
+/// to the largest, so switching never moves the rest of the face.
+fn follow(bind: Bind, plates: Vec<FaceNode>) -> FaceNode {
+    let steps = plates
+        .into_iter()
+        .zip(0..)
+        .map(|(n, i)| on_step(n.width(Dim::Fill(1.0)).height(Dim::Fill(1.0)), bind, i))
+        .collect();
+    stack(steps)
+}
+
+/// A row of lit tabs choosing a stepped parameter's option (the
+/// `Pager`'s look, but the choice is the plugin's, not the face's).
+#[derive(Clone, Debug)]
+struct Tabs {
+    bind: Bind,
+    labels: &'static [&'static str],
+}
+
+const TAB_W: f64 = 88.0;
+const TAB_H: f64 = 40.0;
+
+impl Tabs {
+    fn new(bind: Bind, labels: &'static [&'static str]) -> Self {
+        Tabs { bind, labels }
+    }
+    fn node(self) -> FaceNode {
+        let w = TAB_W * self.labels.len() as f64;
+        leaf(self, w, TAB_H).width(Dim::Px(w))
+    }
+    fn cell(r: Rect, i: usize) -> Rect {
+        Rect { x: r.x + TAB_W * i as f64, y: r.y, w: TAB_W, h: TAB_H }
+    }
+}
+
+impl Part for Tabs {
+    fn bake(&self, r: Rect, cx: &mut Bake<'_>) {
+        let th = cx.theme;
+        let ty = &th.typography;
+        let scale = cx.scale;
+        let seat = material::sprite(14.0, scale, |dx, dy| material::lamp_seat(dx, dy, 6.0, scale));
+        for (i, l) in self.labels.iter().enumerate() {
+            let c = Self::cell(r, i);
+            cx.image(c.x + c.w / 2.0 - 7.0, c.y + 3.0, 14.0, 14.0, seat.clone());
+            cx.scene.text_in(pt(c.x + c.w / 2.0, c.y + 33.0), *l, ty.caption_size, th.palette.ink_soft, ty.caption);
+        }
+    }
+
+    fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {
+        let th = f.theme;
+        let ty = &th.typography;
+        let at = step_of(f.value(self.bind), self.labels.len() as u32) as usize;
+        if let Some(l) = self.labels.get(at) {
+            let c = Self::cell(r, at);
+            lamp(f, s, pt(c.x + c.w / 2.0, c.y + 10.0));
+            let mut font = ty.caption;
+            font.weight = 750;
+            s.text_in(pt(c.x + c.w / 2.0, c.y + 33.0), *l, ty.caption_size, th.palette.accent, font);
+        }
+    }
+
+    fn grabs(&self, r: Rect, _f: &Frame<'_>, out: &mut Vec<Grab>) {
+        out.extend((0..self.labels.len()).map(|i| Grab {
+            area: Area::Rect(Self::cell(r, i)),
+            gesture: Gesture::Choose { bind: self.bind, step: i as u32 },
+        }));
+    }
+
+    fn reads(&self) -> Reads {
+        Reads::params(&[self.bind])
+    }
 }

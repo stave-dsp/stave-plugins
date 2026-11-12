@@ -13,63 +13,40 @@
 //!  ORBIT:   the image rotates by the dialed angle per repeat and
 //!           returns in 360/θ repeats; rotation adds no energy.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_eddy_vst3::Eddy;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
-/// Render stereo; `input` feeds the left lane, `right` (or a copy of
+/// A harness at FS/BLOCK with `set` applied (plain values, by name).
+fn harness(set: &[(&str, f64)]) -> PluginHarness<Eddy> {
+    set.iter()
+        .fold(PluginHarness::<Eddy>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build()
+}
+
+/// Render stereo; `left` feeds the left lane, `right` (or a copy of
 /// left) the right. Returns both output channels.
 fn render_lr(set: &[(&str, f64)], left: &[f32], right: Option<&[f32]>) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = harness(set);
     let (mut outs_l, mut outs_r) = (Vec::new(), Vec::new());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for (ci, chunk) in left.chunks(BLOCK).enumerate() {
+        let in_l = h.input_mut(0);
         in_l[..chunk.len()].copy_from_slice(chunk);
         in_l[chunk.len()..].fill(0.0);
-        match right {
-            Some(r) => {
-                let start = ci * BLOCK;
-                for (j, slot) in in_r.iter_mut().enumerate() {
-                    *slot = r.get(start + j).copied().unwrap_or(0.0);
-                }
-            }
-            None => in_r.copy_from_slice(&in_l),
+        let start = ci * BLOCK;
+        let in_r = h.input_mut(1);
+        for (j, slot) in in_r.iter_mut().enumerate() {
+            *slot = match right {
+                Some(r) => r.get(start + j).copied().unwrap_or(0.0),
+                None => chunk.get(j).copied().unwrap_or(0.0),
+            };
         }
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        outs_l.extend_from_slice(&out_l);
-        outs_r.extend_from_slice(&out_r);
+        h.process(&[]);
+        outs_l.extend_from_slice(&h.outputs()[0]);
+        outs_r.extend_from_slice(&h.outputs()[1]);
     }
-    let _ = Arc::strong_count(&bus);
     (outs_l, outs_r)
 }
 

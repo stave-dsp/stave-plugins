@@ -12,17 +12,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-stave-core.workspace = true
-stave-ui.workspace = true
-stave-vst3.workspace = true
-stave-clap.workspace = true
-stave-dsp.workspace = true
+stave.workspace = true
 
 [dev-dependencies]
 stave-measure.workspace = true
-assert_no_alloc = "1"
 stave-test.workspace = true
-stave-host.workspace = true
 
 [lints]
 workspace = true

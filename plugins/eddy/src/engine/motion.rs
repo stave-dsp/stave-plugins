@@ -6,7 +6,8 @@
 //! constants are CONTROL-rate: sized against ~1 s cycles, not audio
 //! samples (the visibility law keeps them honest).
 
-use stave_dsp::{Lag, Lfo, LfoShape};
+use stave::dsp::{Lag, Lfo, Waveform};
+use stave::prelude::Stage;
 
 use crate::params::EddyParams;
 
@@ -15,7 +16,7 @@ use crate::params::EddyParams;
 pub(super) const DEPTH_MS: f32 = 18.0;
 
 struct Recipe {
-    shape: LfoShape,
+    shape: Waveform,
     lag: Option<(f32, f32)>, // (rise_ms, fall_ms)
     drift: f32,
 }
@@ -37,14 +38,14 @@ fn recipe(motion: usize, flavor: f32, cycle_ms: f32) -> Recipe {
     let frac = |x: f32| x * cycle_ms;
     match motion {
         1 => Recipe {
-            shape: LfoShape::Triangle,
+            shape: Waveform::Triangle,
             lag: None,
             drift: 0.0,
         },
         // JUNO: symmetric RC rounding up to τ = 12% of the cycle —
         // heavily rounded corners, never a collapsed sine.
         2 => Recipe {
-            shape: LfoShape::Triangle,
+            shape: Waveform::Triangle,
             lag: if f <= 0.001 {
                 None
             } else {
@@ -55,7 +56,7 @@ fn recipe(motion: usize, flavor: f32, cycle_ms: f32) -> Recipe {
         // VIBE: the lamp — brightens in ~2% of the cycle always;
         // dims over up to 40% of it. The skew IS the knob.
         3 => Recipe {
-            shape: LfoShape::Sine,
+            shape: Waveform::Sine,
             lag: if f <= 0.001 {
                 None
             } else {
@@ -64,7 +65,7 @@ fn recipe(motion: usize, flavor: f32, cycle_ms: f32) -> Recipe {
             drift: 0.8 * f,
         },
         _ => Recipe {
-            shape: LfoShape::Sine,
+            shape: Waveform::Sine,
             lag: None,
             drift: 0.0,
         },
@@ -74,18 +75,18 @@ fn recipe(motion: usize, flavor: f32, cycle_ms: f32) -> Recipe {
 /// Settle-and-capture one shaped cycle (shared by the display and
 /// the makeup computation): the lag runs over the cycle for several
 /// passes so slow lamps at fast rates capture their honest shape.
-fn simulate_cycle(r_shape: LfoShape, r_lag: Option<(f32, f32)>, cycle_ms: f32, ys: &mut [f32]) {
+fn simulate_cycle(r_shape: Waveform, r_lag: Option<(f32, f32)>, cycle_ms: f32, ys: &mut [f32]) {
     let n = ys.len();
     let step_ms = cycle_ms / n as f32;
     let mut sim = Lag::new(0.0, 0.0);
+    sim.prepare(1000.0 / step_ms);
     if let Some((rise, fall)) = r_lag {
-        sim.set_times(rise, fall, 1000.0 / step_ms);
+        sim.set_times(rise, fall);
     }
     const PASSES: usize = 4;
     for pass in 0..PASSES {
         for (i, slot) in ys.iter_mut().enumerate() {
-            let phase = core::f32::consts::TAU * i as f32 / (n - 1) as f32;
-            let raw = Lfo::eval(r_shape, phase);
+            let raw = r_shape.eval(i as f32 / (n - 1) as f32);
             let shaped = if r_lag.is_some() { sim.tick(raw) } else { raw };
             if pass == PASSES - 1 {
                 *slot = shaped;
@@ -109,7 +110,7 @@ pub(super) struct Motion {
 impl Motion {
     pub(super) fn new() -> Self {
         Self {
-            lfo: Lfo::new(),
+            lfo: Lfo::new(1.0),
             lag: Lag::new(0.0, 0.0),
             lag_on: false,
             makeup: 1.0,
@@ -120,7 +121,8 @@ impl Motion {
     }
 
     pub(super) fn prepare(&mut self, sr: f32, rate_hz: f32) {
-        self.lfo.prepare(sr, rate_hz, 0.0);
+        self.lfo.set_hz(rate_hz);
+        self.lfo.prepare(sr);
         self.lag.prepare(sr);
         self.last_motion = usize::MAX; // force recipe re-apply
         self.last_rate = -1.0;
@@ -130,8 +132,8 @@ impl Motion {
     /// Block-rate pass: re-resolve the recipe only when the selector
     /// or rate moved. Returns true when the picture needs
     /// republishing (the caller owns telemetry).
-    pub(super) fn apply_changes(&mut self, p: &EddyParams, sr: f32) -> bool {
-        let motion = p.motion.index();
+    pub(super) fn apply_changes(&mut self, p: &EddyParams) -> bool {
+        let motion = p.motion.value().0 as usize;
         let rate = p.rate.value();
         let flavor = p.flavor.value();
         if motion == self.last_motion
@@ -149,11 +151,11 @@ impl Motion {
         self.last_flavor = flavor;
         let cycle_ms = 1000.0 / rate.max(0.05);
         let r = recipe(motion, flavor, cycle_ms);
-        self.lfo.set_shape(r.shape);
+        self.lfo.set_waveform(r.shape);
         self.lfo.set_drift(r.drift);
         self.lag_on = r.lag.is_some();
         if let Some((rise, fall)) = r.lag {
-            self.lag.set_times(rise, fall, sr);
+            self.lag.set_times(rise, fall);
         }
         if motion_changed {
             self.lag.reset();
@@ -170,8 +172,8 @@ impl Motion {
     /// (± depth·DEPTH_MS worth of read-head travel).
     #[inline]
     pub(super) fn tick(&mut self, rate_hz: f32, depth: f32, sr: f32) -> f32 {
-        self.lfo.set_rate(rate_hz);
-        let raw = self.lfo.tick();
+        self.lfo.set_hz(rate_hz);
+        let raw = self.lfo.tick(0.0);
         let shaped = if self.lag_on {
             self.lag.tick(raw) * self.makeup
         } else {
@@ -182,7 +184,7 @@ impl Motion {
 
     /// Current phase, 0..1 through the cycle (the display cursor).
     pub(super) fn phase01(&self) -> f32 {
-        (self.lfo.phase() / core::f32::consts::TAU).rem_euclid(1.0)
+        self.lfo.phase()
     }
 
     /// Draw one SHAPED cycle at the current recipe and rate — what

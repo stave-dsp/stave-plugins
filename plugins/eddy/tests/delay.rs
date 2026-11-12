@@ -6,53 +6,21 @@
 //!  3. wet = 0 (dry = 1) is BIT-identical dry — the wet path can
 //!     never contaminate a parallel chain the user set to dry.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_eddy_vst3::Eddy;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
+/// A harness at FS/BLOCK with `set` applied (plain values, by name).
+fn harness(set: &[(&str, f64)]) -> PluginHarness<Eddy> {
+    set.iter()
+        .fold(PluginHarness::<Eddy>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build()
+}
+
 fn render(set: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let mut out = Vec::with_capacity(input.len());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for chunk in input.chunks(BLOCK) {
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
+    render_lr(set, input).0
 }
 
 /// Peak position in a window (start, len).
@@ -205,40 +173,11 @@ fn depth_wobbles_the_pitch_as_dialed() {
 /// intuition round nothing and draw nothing).
 #[test]
 fn recipes_are_visibly_shaped() {
-    use core::sync::atomic::Ordering;
     let read_curve = |motion: f64| -> Vec<f32> {
-        let mut plugin = stave_eddy_vst3::Eddy::new();
-        let bus = DebugBus::new();
-        plugin.debug_attach(bus.clone());
-        let table = plugin.param_table();
-        for (n, v) in [("motion", motion), ("rate", 0.8), ("flavor", 0.5)] {
-            table.by_name(n).unwrap().set_plain(v);
-        }
-        plugin.activate(FS, BLOCK);
         // One block resolves the recipe and publishes the cycle.
-        let mut in_l = vec![0.0f32; BLOCK];
-        let mut in_r = vec![0.0f32; BLOCK];
-        let mut out_l = vec![0.0f32; BLOCK];
-        let mut out_r = vec![0.0f32; BLOCK];
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let input = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let output = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input,
-            output,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        let n = bus.curve_used.load(Ordering::Acquire) as usize;
-        (0..n)
-            .map(|i| f32::from_bits(bus.curve[i].load(Ordering::Relaxed)))
-            .collect()
+        let mut h = harness(&[("motion", motion), ("rate", 0.8), ("flavor", 0.5)]);
+        h.process(&[]);
+        h.telemetry().curve()
     };
 
     let sine = read_curve(0.0);
@@ -276,46 +215,24 @@ fn recipes_are_visibly_shaped() {
 
 /// Render stereo (correlated input) and return both channels.
 fn render_stereo(set: &[(&str, f64)], input: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let (mut outs_l, mut outs_r) = (Vec::new(), Vec::new());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
+    render_lr(set, input)
+}
+
+/// Render stereo (the same input on both lanes); both output channels,
+/// a whole block per chunk.
+fn render_lr(set: &[(&str, f64)], input: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let mut h = harness(set);
+    let (mut ol, mut or) = (Vec::new(), Vec::new());
     for chunk in input.chunks(BLOCK) {
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        outs_l.extend_from_slice(&out_l);
-        outs_r.extend_from_slice(&out_r);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        ol.extend_from_slice(&h.outputs()[0]);
+        or.extend_from_slice(&h.outputs()[1]);
     }
-    let _ = Arc::strong_count(&bus);
-    (outs_l, outs_r)
+    (ol, or)
 }
 
 /// SPREAD = 0: for a centered input, the two ears are the SAME ear —
@@ -400,39 +317,11 @@ fn center_survives_full_depth_at_full_spread() {
 /// GROWS monotonically with the knob.
 #[test]
 fn flavor_scales_the_character_from_pristine() {
-    use core::sync::atomic::Ordering;
     let curve = |motion: f64, flavor: f64| -> Vec<f32> {
-        let mut plugin = stave_eddy_vst3::Eddy::new();
-        let bus = DebugBus::new();
-        plugin.debug_attach(bus.clone());
-        let table = plugin.param_table();
-        for (n, v) in [("motion", motion), ("rate", 0.8), ("flavor", flavor)] {
-            table.by_name(n).unwrap().set_plain(v);
-        }
-        plugin.activate(FS, BLOCK);
-        let mut in_l = vec![0.0f32; BLOCK];
-        let mut in_r = vec![0.0f32; BLOCK];
-        let mut out_l = vec![0.0f32; BLOCK];
-        let mut out_r = vec![0.0f32; BLOCK];
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let input = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let output = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input,
-            output,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        let n = bus.curve_used.load(Ordering::Acquire) as usize;
-        (0..n)
-            .map(|i| f32::from_bits(bus.curve[i].load(Ordering::Relaxed)))
-            .collect()
+        // One block resolves the recipe and publishes the cycle.
+        let mut h = harness(&[("motion", motion), ("rate", 0.8), ("flavor", flavor)]);
+        h.process(&[]);
+        h.telemetry().curve()
     };
     let rms_diff = |a: &[f32], b: &[f32]| -> f32 {
         let n = a.len().min(b.len()).max(1);

@@ -30,10 +30,10 @@
 //! HEAT = 0 bypasses everything, which keeps the classic law
 //! bit-identical (a law test).
 
-use stave_dsp::FilterSpec;
-use stave_dsp::RcClipperConfig;
-use stave_dsp::Xorshift32;
-use stave_dsp::{shapes, Biquad, NonlinearRc, PerChannel, Slew, Stage};
+use stave::dsp::FilterSpec;
+use stave::dsp::RcClipperConfig;
+use stave::dsp::Xorshift32;
+use stave::dsp::{shapes, Biquad, NonlinearRc, OnePole, PerChannel, Slew, Stage};
 
 use crate::params::EddyParams;
 
@@ -63,7 +63,7 @@ struct LaneStages {
     /// clip.
     screamer: NonlinearRc,
     /// TAPE: path-dependent magnetization…
-    tape_mag: stave_dsp::Hysteresis,
+    tape_mag: stave::dsp::Hysteresis,
     /// …into a slew limit (the head can only move so fast), which is
     /// what dulls and squashes each generation like a real dub loop.
     tape_slew: Slew,
@@ -81,10 +81,10 @@ impl LaneStages {
                 threshold: 0.5,
                 hardness: 6.0,
             }),
-            tape_mag: stave_dsp::Hysteresis::new(2.5, 0.6),
+            tape_mag: stave::dsp::Hysteresis::new(2.5, 0.6),
             tape_slew: Slew::new(400.0, 400.0),
-            lo_cut: Biquad::new(),
-            hi_cut: Biquad::new(),
+            lo_cut: Biquad::passthrough(),
+            hi_cut: Biquad::passthrough(),
         }
     }
 }
@@ -96,7 +96,7 @@ pub(super) struct Circuit {
     kind: usize,
     /// TAPE flutter: one capstan, one wander — a smoothed random
     /// walk shared by both lanes (the machine has one motor).
-    flutter: f32,
+    flutter: OnePole,
     flutter_rng: Xorshift32,
     sr: f32,
 }
@@ -106,7 +106,7 @@ impl Circuit {
         Self {
             stages: PerChannel::new(|_| LaneStages::new()),
             kind: 0,
-            flutter: 0.0,
+            flutter: OnePole::lowpass(6.0),
             flutter_rng: Xorshift32::new(0x2F6E_2B1D),
             sr: 48_000.0,
         }
@@ -114,13 +114,13 @@ impl Circuit {
 
     pub(super) fn prepare(&mut self, sr: f32) {
         self.sr = sr;
-        self.flutter = 0.0;
+        self.flutter.prepare(sr);
         for lane in self.stages.iter_mut() {
             lane.screamer.prepare(sr);
             lane.tape_mag.prepare(sr);
             lane.tape_slew.prepare(sr);
-            lane.lo_cut.reset();
-            lane.hi_cut.reset();
+            lane.lo_cut.prepare(sr);
+            lane.hi_cut.prepare(sr);
         }
     }
 
@@ -129,7 +129,7 @@ impl Circuit {
     /// voice's loop filters from open (heat → 0) toward the machine
     /// at its darkest.
     pub(super) fn apply_changes(&mut self, p: &EddyParams) {
-        let kind = p.circuit.index();
+        let kind = p.circuit.value().0 as usize;
         if kind != self.kind {
             self.kind = kind;
             for lane in self.stages.iter_mut() {
@@ -143,7 +143,7 @@ impl Circuit {
         let heat = p.heat.value();
         let slew_rate = 400.0 - 360.0 * heat;
         for lane in self.stages.iter_mut() {
-            lane.tape_slew.set_rates(slew_rate, slew_rate, self.sr);
+            lane.tape_slew.set_rates(slew_rate, slew_rate);
             match kind {
                 // TUBE: warm rounding — the top folds away as the
                 // stage runs hotter.
@@ -151,9 +151,7 @@ impl Circuit {
                     FilterSpec::HighShelf {
                         hz: 2_800.0,
                         db: -8.0 * heat,
-                    },
-                    self.sr,
-                ),
+                    }),
                 // SCREAMER: the honk — cuts close in from BOTH sides
                 // with heat until only the mids fight through.
                 1 => {
@@ -161,29 +159,23 @@ impl Circuit {
                         FilterSpec::Highpass {
                             hz: 120.0 + 400.0 * heat,
                             q: 0.707,
-                        },
-                        self.sr,
-                    );
+                        });
                     lane.hi_cut.set(
                         FilterSpec::Lowpass {
                             hz: 7_000.0 - 4_200.0 * heat,
                             q: 0.707,
-                        },
-                        self.sr,
-                    );
+                        });
                 }
                 // TAPE: generation loss proper — each lap loses top
                 // end and the deep rumble the transport can't hold.
                 _ => {
                     lane.lo_cut
-                        .set(FilterSpec::Highpass { hz: 55.0, q: 0.707 }, self.sr);
+                        .set(FilterSpec::Highpass { hz: 55.0, q: 0.707 });
                     lane.hi_cut.set(
                         FilterSpec::Lowpass {
                             hz: 8_500.0 - 5_500.0 * heat,
                             q: 0.707,
-                        },
-                        self.sr,
-                    );
+                        });
                 }
             }
         }
@@ -214,8 +206,8 @@ impl Circuit {
             _ => stages.tape_slew.tick(stages.tape_mag.tick(u)),
         };
         match self.kind {
-            0 => stages.hi_cut.process(shaped),
-            _ => stages.hi_cut.process(stages.lo_cut.process(shaped)),
+            0 => stages.hi_cut.tick(shaped),
+            _ => stages.hi_cut.tick(stages.lo_cut.tick(shaped)),
         }
     }
 
@@ -241,8 +233,6 @@ impl Circuit {
         }
         // xorshift white noise → one-pole at ~6 Hz = the wander.
         let white = self.flutter_rng.next_bipolar();
-        let k = 1.0 - (-2.0 * core::f32::consts::PI * 6.0 / self.sr).exp();
-        self.flutter += (white - self.flutter) * k;
-        self.flutter * heat * FLUTTER_MS * 0.001 * self.sr
+        self.flutter.tick(white) * heat * FLUTTER_MS * 0.001 * self.sr
     }
 }

@@ -10,7 +10,7 @@
 //! through the same law (`stereo_frame_shaped`); ORBIT composes its
 //! own law from the lane ports (`read`/`commit`).
 
-use stave_dsp::{ms_decode, ms_encode, DelayLine, PerChannel};
+use stave::dsp::{ms_decode, ms_encode, DelayLine, PerChannel};
 
 /// One lane's state: its delay line.
 struct Lane {
@@ -34,7 +34,7 @@ impl Echo {
 
     pub(super) fn prepare(&mut self, capacity: usize) {
         for lane in self.lanes.iter_mut() {
-            lane.line.prepare(capacity);
+            lane.line.allocate(capacity);
             lane.line.reset();
         }
     }

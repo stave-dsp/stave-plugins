@@ -19,98 +19,38 @@
 //!    unnormalized bleed product at 1e24 and the plate wander
 //!    pumping the hold loop at 1.16× — both measured, both fixed).
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
-use stave_test::{assert_no_pump, resonant_tone, StabilityPolicy};
+use stave_eddy_vst3::Eddy;
+use stave_test::PluginHarness;
+use stave_test::{assert_no_pump, resonant_tone, StabilityConfig};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
+/// A harness at FS/BLOCK with `set` applied (plain values, by name).
+fn harness(set: &[(&str, f64)]) -> PluginHarness<Eddy> {
+    set.iter()
+        .fold(PluginHarness::<Eddy>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build()
+}
+
 fn render(set: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let mut out = Vec::with_capacity(input.len());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for chunk in input.chunks(BLOCK) {
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
+    render_lr(set, input).0
 }
 
 /// Stereo render with correlated (centered) input — for the image
 /// laws.
 fn render_lr(set: &[(&str, f64)], input: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_eddy_vst3::Eddy::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = harness(set);
     let (mut ol, mut or) = (Vec::new(), Vec::new());
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for chunk in input.chunks(BLOCK) {
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        ol.extend_from_slice(&out_l);
-        or.extend_from_slice(&out_r);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        ol.extend_from_slice(&h.outputs()[0]);
+        or.extend_from_slice(&h.outputs()[1]);
     }
-    let _ = Arc::strong_count(&bus);
     (ol, or)
 }
 
@@ -290,6 +230,7 @@ fn ghost_mode_keeps_first_arrivals_sharp() {
 ///   now), and the plate wander pumped the hold loop 1.16× (wander
 ///   shrinks with hold).
 #[test]
+#[cfg_attr(miri, ignore)]
 fn diffusion_redistributes_never_adds() {
     let n = (0.150 * FS) as usize;
     let mut imp = vec![0.0f32; 12 * n];
@@ -308,7 +249,7 @@ fn diffusion_redistributes_never_adds() {
     // incident history (the 1e24 bleed product, the 115× mesh
     // eigenvalue, the plate wander pump, DUST's "1.4×" that was
     // response wander, not growth).
-    let policy = StabilityPolicy::default();
+    let policy = StabilityConfig::default();
     let tone = resonant_tone(FS, &policy);
     for kind in 0..4 {
         let mut set = diagonal_settings(kind);
@@ -796,8 +737,9 @@ fn every_algorithm_hears_the_field() {
 /// shimmer (+12) and the downward spiral (−12) — the two ends move
 /// energy through the spectrum in opposite directions.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn shift_shimmer_field_never_pumps() {
-    let policy = StabilityPolicy::default();
+    let policy = StabilityConfig::default();
     let tone = resonant_tone(FS, &policy);
     for (semis, kind) in [(12.0, 0), (-12.0, 2)] {
         let set = vec![

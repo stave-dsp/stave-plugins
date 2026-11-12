@@ -2,13 +2,7 @@
 //! reuse or renumber. Groups: Delay (the line), Motion (the chorus),
 //! Algorithm (the tabbed feedback laws + their per-tab knobs).
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// The LFO character menu. Selector label truth — the editor pills
@@ -146,103 +140,125 @@ pub struct EddyParams {
     pub bleed: FloatParam,
 }
 
-impl EddyParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-            time: FloatParam::new(3, "time", 350.0, Range::new(1.0, 2000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Delay")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            feedback: FloatParam::new(4, "feedback", 0.35, Range::new(0.0, 0.95, Taper::Linear))
-                .with_group("Delay")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            dry: FloatParam::new(18, "dry", 1.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Delay")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            wet: FloatParam::new(19, "wet", 0.35, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Delay")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            rate: FloatParam::new(6, "rate", 0.8, Range::new(0.05, 10.0, Taper::Log))
-                .with_group("Motion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            depth: FloatParam::new(7, "depth", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Motion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            motion: EnumParam::new(8, "motion", Motion(0)).with_group("Motion"),
-            spread: FloatParam::new(9, "spread", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Motion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            flavor: FloatParam::new(10, "flavor", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Motion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            algo: EnumParam::new(11, "algo", Algo(0)).with_group("Algorithm"),
-            circuit: EnumParam::new(12, "circuit", CircuitKind(0)).with_group("Algorithm"),
-            heat: FloatParam::new(13, "heat", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            sag: FloatParam::new(14, "sag", 0.4, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            inertia: FloatParam::new(15, "inertia", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            shift: FloatParam::new(20, "shift", 12.0, Range::new(-12.0, 12.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            grain: FloatParam::new(21, "grain", 64.0, Range::new(16.0, 160.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            splice: FloatParam::new(22, "splice", 1.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            orbit: FloatParam::new(17, "orbit", 60.0, Range::new(-180.0, 180.0, Taper::Linear))
-                .with_group("Algorithm")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            diffusion: EnumParam::new(23, "diffusion", DiffusionKind(0)).with_group("Diffusion"),
-            diffuse: FloatParam::new(24, "diffuse", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            density: FloatParam::new(25, "density", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            wander: FloatParam::new(26, "wander", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            bend: FloatParam::new(27, "bend", 0.35, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            smear: FloatParam::new(28, "smear", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            spray: FloatParam::new(29, "spray", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            motes: FloatParam::new(30, "motes", 0.6, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            size: FloatParam::new(31, "size", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            weave: FloatParam::new(32, "weave", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            hold: FloatParam::new(33, "hold", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            bleed: FloatParam::new(34, "bleed", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Diffusion")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-        })
+impl Default for EddyParams {
+    fn default() -> Self {
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            time: FloatParam::new(ParamId(3), "time", Range::log(1.0, 2000.0))
+                .default(350.0)
+                .unit(Unit::Ms)
+                .group("Delay")
+                .smooth(Smooth::ms(80.0)),
+            feedback: FloatParam::new(ParamId(4), "feedback", Range::linear(0.0, 0.95))
+                .default(0.35)
+                .group("Delay")
+                .smooth(Smooth::ms(20.0)),
+            dry: FloatParam::new(ParamId(18), "dry", Range::linear(0.0, 1.0))
+                .default(1.0)
+                .group("Delay")
+                .smooth(Smooth::ms(5.0)),
+            wet: FloatParam::new(ParamId(19), "wet", Range::linear(0.0, 1.0))
+                .default(0.35)
+                .group("Delay")
+                .smooth(Smooth::ms(5.0)),
+            rate: FloatParam::new(ParamId(6), "rate", Range::log(0.05, 10.0))
+                .default(0.8)
+                .group("Motion")
+                .smooth(Smooth::ms(50.0)),
+            depth: FloatParam::new(ParamId(7), "depth", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Motion")
+                .smooth(Smooth::ms(50.0)),
+            motion: EnumParam::new(ParamId(8), "motion", Motion(0)).group("Motion"),
+            spread: FloatParam::new(ParamId(9), "spread", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Motion")
+                .smooth(Smooth::ms(50.0)),
+            flavor: FloatParam::new(ParamId(10), "flavor", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Motion")
+                .smooth(Smooth::ms(50.0)),
+            algo: EnumParam::new(ParamId(11), "algo", Algo(0)).group("Algorithm"),
+            circuit: EnumParam::new(ParamId(12), "circuit", CircuitKind(0)).group("Algorithm"),
+            heat: FloatParam::new(ParamId(13), "heat", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            sag: FloatParam::new(ParamId(14), "sag", Range::linear(0.0, 1.0))
+                .default(0.4)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            inertia: FloatParam::new(ParamId(15), "inertia", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            shift: FloatParam::new(ParamId(20), "shift", Range::linear(-12.0, 12.0))
+                .default(12.0)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            grain: FloatParam::new(ParamId(21), "grain", Range::log(16.0, 160.0))
+                .default(64.0)
+                .unit(Unit::Ms)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            splice: FloatParam::new(ParamId(22), "splice", Range::linear(0.0, 1.0))
+                .default(1.0)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            orbit: FloatParam::new(ParamId(17), "orbit", Range::linear(-180.0, 180.0))
+                .default(60.0)
+                .group("Algorithm")
+                .smooth(Smooth::ms(50.0)),
+            diffusion: EnumParam::new(ParamId(23), "diffusion", DiffusionKind(0)).group("Diffusion"),
+            diffuse: FloatParam::new(ParamId(24), "diffuse", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            density: FloatParam::new(ParamId(25), "density", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            wander: FloatParam::new(ParamId(26), "wander", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            bend: FloatParam::new(ParamId(27), "bend", Range::linear(0.0, 1.0))
+                .default(0.35)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            smear: FloatParam::new(ParamId(28), "smear", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            spray: FloatParam::new(ParamId(29), "spray", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            motes: FloatParam::new(ParamId(30), "motes", Range::linear(0.0, 1.0))
+                .default(0.6)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            size: FloatParam::new(ParamId(31), "size", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            weave: FloatParam::new(ParamId(32), "weave", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            hold: FloatParam::new(ParamId(33), "hold", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+            bleed: FloatParam::new(ParamId(34), "bleed", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Diffusion")
+                .smooth(Smooth::ms(50.0)),
+        }
     }
 }

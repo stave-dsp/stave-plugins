@@ -9,7 +9,7 @@
 //! ports (it must read BOTH lanes before either writes back, which
 //! the shared frame functions can't express).
 
-use stave_dsp::{ms_decode, ms_encode};
+use stave::dsp::{ms_decode, ms_encode};
 
 use super::diffusion::Diffusion;
 use super::echo::{Echo, MID, SIDE};
