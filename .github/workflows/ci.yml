@@ -33,7 +33,7 @@ defaults:
 jobs:
   test:
     name: build + test
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with: { path: stave-plugins }
@@ -51,7 +51,7 @@ jobs:
 
   lint:
     name: zero warnings (rustc + clippy)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with: { path: stave-plugins }
@@ -68,7 +68,7 @@ jobs:
 
   clap-validator:
     name: clap-validator (every plugin)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with: { path: stave-plugins }
@@ -84,7 +84,7 @@ jobs:
   vst3-validator:
     # Steinberg's own validator (the SDK is MIT) against every plugin.
     name: Steinberg VST3 validator (every plugin)
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with: { path: stave-plugins }
