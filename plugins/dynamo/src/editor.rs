@@ -14,7 +14,6 @@
 
 use stave::face::photo::hex;
 use stave::face::{Finish, Hardware, Palette};
-use stave::params::AnyParam;
 use stave::prelude::*;
 use stave::route::RouteParams;
 

@@ -268,7 +268,7 @@ impl Default for DynamoParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(7)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(7), "bypass").group("Output"),
         }
     }
 }

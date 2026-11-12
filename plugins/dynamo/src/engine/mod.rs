@@ -32,7 +32,6 @@ use stave::dsp::{
     hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack, Xorshift32,
 };
-use stave::params::Watch;
 use stave::prelude::*;
 
 mod rotor;
@@ -478,7 +477,7 @@ impl Voice for DynamoVoice {
         // rings on after the note ends. HOW the exciter touches the
         // wire is the contact mode — a machine that never lets go
         // is a supersaw; one that strikes and listens is not.
-        let env = self.env.tick(0.0);
+        let env = self.env.next();
         let gate = match self.contact {
             1 => {
                 // STRIKE: ~20 ms of contact, then the body sings.
