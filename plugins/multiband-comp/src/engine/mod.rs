@@ -117,7 +117,7 @@ impl Plugin for MultibandComp {
     }
 
     fn prepare(&mut self, env: &Environment) {
-        let p = self.params.clone();
+        let p = &*self.params;
         self.sample_rate = env.sample_rate;
         self.scope.prepare(env.max_block);
         for lane in &mut self.sidechain {
@@ -148,7 +148,7 @@ impl Plugin for MultibandComp {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         for (band, bp) in self.bands.iter_mut().zip(&p.bands) {
             band.configure(bp.style.value(), bp.saturation.value());
         }

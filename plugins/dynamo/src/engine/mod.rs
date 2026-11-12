@@ -787,7 +787,7 @@ impl Plugin for Dynamo {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         // 1. Param changes become structure.
         if self
             .voicing

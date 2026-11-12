@@ -199,17 +199,17 @@ impl Plugin for Eddy {
 
     /// The per-block orchestration — three named phases:
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         // 1. Param changes become structure: the motion recipe
         //    re-resolves only when its knobs moved (republishing the
         //    wave view's picture), circuit voices reset on switch,
         //    and the block-rate machine constants settle.
-        if self.motion.apply_changes(&p) {
+        if self.motion.apply_changes(p) {
             let (motion, sample_rate) = (&self.motion, self.sample_rate);
             telemetry::publish_cycle(&self.telemetry, |ys| motion.render_cycle(ys, sample_rate));
         }
-        self.circuit.apply_changes(&p);
-        self.diffusion.apply_changes(&p);
+        self.circuit.apply_changes(p);
+        self.diffusion.apply_changes(p);
         self.motor.begin_block(p.inertia.value());
         let algo = p.algo.value().0;
 

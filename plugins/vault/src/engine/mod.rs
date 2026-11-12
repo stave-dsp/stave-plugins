@@ -332,7 +332,7 @@ impl Plugin for Vault {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         let frames = block.frames();
         let sr = self.sr;
 

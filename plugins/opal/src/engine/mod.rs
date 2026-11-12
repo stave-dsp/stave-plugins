@@ -307,7 +307,7 @@ impl Plugin for Opal {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         // 1. Param changes become structure.
         #[rustfmt::skip]
         let moved = self.voicing.changed([

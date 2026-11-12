@@ -145,7 +145,7 @@ impl Plugin for Saga {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let p = self.params.clone();
+        let p = &*self.params;
         // 1. Bind: the program, its voicing, the converter filters at
         //    the clock the last block ended on, and where TIME comes
         //    from (the knob, or the host tempo).
