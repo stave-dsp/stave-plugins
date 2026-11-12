@@ -7,7 +7,7 @@
 use stave::dsp::LinkwitzRiley4;
 use stave::prelude::*;
 
-use super::branch::{AmplifierBranch, BranchDesign};
+use super::branch::{AmplifierBranch, BranchDesign, SettledSupply};
 use crate::controls::{AmplifierSettings, InputSettings};
 
 const LOW_CROSSOVER_HZ: f32 = 250.0;
@@ -173,30 +173,37 @@ pub(super) struct SplitBandAmplifier {
 }
 
 impl SplitBandAmplifier {
-    pub(super) fn new() -> Self {
+    /// The bands' branches are copies of `branch` (unprepared),
+    /// redesigned for their band.
+    pub(super) fn new(branch: &AmplifierBranch) -> Self {
         Self {
             crossover: ThreeWayCrossover::new(),
             low_band_isolation_filter: DeepBranchIsolationFilter::new(),
             low_mid_band_isolation_filter: DeepBranchIsolationFilter::new(),
-            low_band_branch: AmplifierBranch::new(BranchDesign::low_band()),
-            low_mid_band_branch: AmplifierBranch::new(BranchDesign::low_mid_band()),
-            high_band_branch: AmplifierBranch::new(BranchDesign::high_band()),
+            low_band_branch: branch.redesigned(BranchDesign::low_band()),
+            low_mid_band_branch: branch.redesigned(BranchDesign::low_mid_band()),
+            high_band_branch: branch.redesigned(BranchDesign::high_band()),
             isolation_amount: 0.0,
             low_band_output_gain: 1.0,
             measurements: SplitBandMeasurements::default(),
         }
     }
 
-    pub(super) fn prepare(&mut self, sample_rate: f32, power_pair_cold_bias_volts: f64) {
+    pub(super) fn prepare(
+        &mut self,
+        sample_rate: f32,
+        power_pair_cold_bias_volts: f64,
+        settled: &SettledSupply,
+    ) {
         self.crossover.prepare(sample_rate);
         self.low_band_isolation_filter.prepare(sample_rate);
         self.low_mid_band_isolation_filter.prepare(sample_rate);
         self.low_band_branch
-            .prepare(sample_rate, power_pair_cold_bias_volts);
+            .prepare(sample_rate, power_pair_cold_bias_volts, settled);
         self.low_mid_band_branch
-            .prepare(sample_rate, power_pair_cold_bias_volts);
+            .prepare(sample_rate, power_pair_cold_bias_volts, settled);
         self.high_band_branch
-            .prepare(sample_rate, power_pair_cold_bias_volts);
+            .prepare(sample_rate, power_pair_cold_bias_volts, settled);
         self.measurements = SplitBandMeasurements::default();
     }
 

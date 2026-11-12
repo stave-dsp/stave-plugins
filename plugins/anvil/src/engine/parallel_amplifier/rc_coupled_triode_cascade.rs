@@ -44,6 +44,12 @@ pub struct RcCoupledTriodeCascade {
     /// product model is direct.
     couplers: [Coupler; MAXIMUM_STAGE_COUNT],
     curves: [CurveStage; MAXIMUM_STAGE_COUNT],
+    /// The tube's table as `to_curve_stage` last built it (never
+    /// processed), and the tube it is for: the table depends on the
+    /// tube alone, so a rebuild for any other reason (rate, stage
+    /// count, couplers) copies it instead of re-tabulating.
+    curve_table: CurveStage,
+    curve_table_tube: Koren,
     /// Per-stage outputs from the last tick (the old chain senses).
     stage_outputs: [f32; MAXIMUM_STAGE_COUNT],
     /// Blocking cells: fast charge from grid conduction, release = the
@@ -108,12 +114,16 @@ impl RcCoupledTriodeCascade {
     pub fn new() -> Self {
         let triode_prototype = Triode::new();
         let couplers = core::array::from_fn(|_| Coupler::new(8.0));
-        let curves = core::array::from_fn(|_| triode_prototype.to_curve_stage());
+        let curve_table = triode_prototype.to_curve_stage();
+        let curve_table_tube = triode_prototype.tube();
+        let curves = core::array::from_fn(|_| curve_table.clone());
         let cathode_constants = triode_prototype.cathode_constants();
         let mut cascade = Self {
             triode_prototype,
             couplers,
             curves,
+            curve_table,
+            curve_table_tube,
             stage_outputs: [0.0; MAXIMUM_STAGE_COUNT],
             blocking_envelopes: core::array::from_fn(|_| {
                 EnvelopeFollower::new(EnvelopeTimes {
@@ -169,7 +179,20 @@ impl RcCoupledTriodeCascade {
         // same tube; frames differ per stage, tables never do.
         // Clone = Arc bump — four stages read the same memory (the
         // deep-dive's cache finding).
-        let curve_stage_prototype = self.triode_prototype.to_curve_stage();
+        let tube = self.triode_prototype.tube();
+        if tube != self.curve_table_tube {
+            self.curve_table = self.triode_prototype.to_curve_stage();
+            self.curve_table_tube = tube;
+        }
+        // What `to_curve_stage` returns: the table, framed for the
+        // triode's current drive and calibration.
+        let mut curve_stage_prototype = self.curve_table.clone();
+        let (bias, drive, gain) = self.triode_prototype.frame_params();
+        curve_stage_prototype.set_pending(Frame {
+            bias: bias as f32,
+            drive: drive as f32,
+            gain: gain as f32,
+        });
         for stage_index in 0..MAXIMUM_STAGE_COUNT {
             self.curves[stage_index] = curve_stage_prototype.clone();
             Stage::prepare(&mut self.curves[stage_index], self.sample_rate);

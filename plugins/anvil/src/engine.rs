@@ -23,7 +23,7 @@ mod tone_section;
 use difference_tone::DifferenceToneGenerator;
 use high_band_limiter::HighBandLimiter;
 use output_conditioner::OutputConditioner;
-use parallel_amplifier::ParallelAmplifier;
+use parallel_amplifier::{ParallelAmplifier, SettledSupply};
 pub use parallel_amplifier::RcCoupledTriodeCascade;
 use tone_section::ToneSection;
 
@@ -112,36 +112,43 @@ struct Amplifier {
 
 impl Amplifier {
     /// Prepare every lane at `sample_rate`, then [`settle`](Self::settle)
-    /// it for `panel`.
+    /// it for `panel`. The lanes are built alike and settle on silence,
+    /// so they reach the same state: the first is prepared and the
+    /// others are copies of it.
     fn prepare(&mut self, sample_rate: f32, panel: PanelControlValues) {
         self.sample_rate = sample_rate;
-        for lane in self.lanes.iter_mut() {
-            // Cleared first: the operating point must not depend on what
-            // the lane last played.
-            lane.input_highpass_filter.reset();
-            lane.difference_tone_generator.reset();
-            lane.slew_limiter.reset();
-            lane.parallel_amplifier.reset();
-            lane.high_band_limiter.reset();
-            lane.tone_section.reset();
-            lane.output_conditioner.reset();
-            lane.input_highpass_filter.prepare(sample_rate);
-            lane.difference_tone_generator.prepare(sample_rate);
-            lane.slew_limiter.prepare(sample_rate);
-            lane.parallel_amplifier
-                .prepare(sample_rate, self.design.power_pair_cold_bias_volts);
-            lane.high_band_limiter.prepare(sample_rate);
-            lane.tone_section.prepare(sample_rate);
-            lane.output_conditioner.prepare(sample_rate);
-            lane.previous_amplifier_output = 0.0;
-        }
+        let settled_supply = SettledSupply::at(sample_rate);
+        let (lane, others) = self.lanes.pair_mut();
+        // Cleared first: the operating point must not depend on what
+        // the lane last played.
+        lane.input_highpass_filter.reset();
+        lane.difference_tone_generator.reset();
+        lane.slew_limiter.reset();
+        lane.parallel_amplifier.reset();
+        lane.high_band_limiter.reset();
+        lane.tone_section.reset();
+        lane.output_conditioner.reset();
+        lane.input_highpass_filter.prepare(sample_rate);
+        lane.difference_tone_generator.prepare(sample_rate);
+        lane.slew_limiter.prepare(sample_rate);
+        lane.parallel_amplifier.prepare(
+            sample_rate,
+            self.design.power_pair_cold_bias_volts,
+            &settled_supply,
+        );
+        lane.high_band_limiter.prepare(sample_rate);
+        lane.tone_section.prepare(sample_rate);
+        lane.output_conditioner.prepare(sample_rate);
+        lane.previous_amplifier_output = 0.0;
+        others.clone_from(lane);
         self.settle(panel);
     }
 
     /// Voice every lane for `panel` and settle it at its real operating
     /// point (bias, blocking, cathode, supply), so silence in is silence
     /// out from the first block: run until the output stays under 1e-5
-    /// for 256 samples, at most one second.
+    /// for 256 samples, at most one second. Every lane is voiced alike
+    /// and fed the same silence, so one is run and copied to the others.
     fn settle(&mut self, panel: PanelControlValues) {
         self.last_input_settings.reset();
         self.last_difference_tone_injection_amount.reset();
@@ -150,19 +157,19 @@ impl Amplifier {
         self.last_output_settings.reset();
         self.apply(panel);
         let sample_rate = self.sample_rate;
-        for lane in self.lanes.iter_mut() {
-            let mut quiet = 0u32;
-            for _ in 0..sample_rate as usize {
-                quiet = if process_lane_sample(lane, 0.0).abs() < 1e-5 {
-                    quiet + 1
-                } else {
-                    0
-                };
-                if quiet >= 256 {
-                    break;
-                }
+        let (lane, others) = self.lanes.pair_mut();
+        let mut quiet = 0u32;
+        for _ in 0..sample_rate as usize {
+            quiet = if process_lane_sample(lane, 0.0).abs() < 1e-5 {
+                quiet + 1
+            } else {
+                0
+            };
+            if quiet >= 256 {
+                break;
             }
         }
+        others.clone_from(lane);
     }
 
     fn apply(&mut self, panel: PanelControlValues) {
@@ -266,18 +273,21 @@ impl Plugin for Anvil {
         // The render self-identifies: `build` = compile timestamp.
         taps.build
             .set(env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0));
+        // Every lane is built alike: one is built (its tube tables are
+        // the cost) and the others are copies of it.
+        let lane = ProcessingLane {
+            input_highpass_filter: Biquad::passthrough(),
+            difference_tone_generator: DifferenceToneGenerator::new(),
+            slew_limiter: Slew::new(8.0, 8.0),
+            previous_amplifier_output: 0.0,
+            parallel_amplifier: ParallelAmplifier::new(),
+            high_band_limiter: HighBandLimiter::new(),
+            tone_section: ToneSection::new(),
+            output_conditioner: OutputConditioner::new(),
+        };
         let amplifier = Amplifier {
                 sample_rate: 48_000.0,
-                lanes: PerChannel::new(|_| ProcessingLane {
-                    input_highpass_filter: Biquad::passthrough(),
-                    difference_tone_generator: DifferenceToneGenerator::new(),
-                    slew_limiter: Slew::new(8.0, 8.0),
-                    previous_amplifier_output: 0.0,
-                    parallel_amplifier: ParallelAmplifier::new(),
-                    high_band_limiter: HighBandLimiter::new(),
-                    tone_section: ToneSection::new(),
-                    output_conditioner: OutputConditioner::new(),
-                }),
+                lanes: PerChannel::new(|_| lane.clone()),
                 design: AnvilDesign::default(),
                 last_input_settings: LastAppliedSettings::new(),
                 last_difference_tone_injection_amount: LastAppliedSettings::new(),
@@ -427,7 +437,11 @@ mod performance_tests {
             &design,
         );
         let mut amplifier = ParallelAmplifier::new();
-        amplifier.prepare(48_000.0, design.power_pair_cold_bias_volts);
+        amplifier.prepare(
+            48_000.0,
+            design.power_pair_cold_bias_volts,
+            &SettledSupply::at(48_000.0),
+        );
         amplifier.apply_settings(settings.amplifier, settings.input);
         let mut tone_section = ToneSection::new();
         tone_section.prepare(48_000.0);

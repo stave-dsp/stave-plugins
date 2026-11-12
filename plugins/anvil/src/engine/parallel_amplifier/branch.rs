@@ -92,12 +92,38 @@ impl BranchDesign {
     }
 }
 
+/// The B+ supply run from switch-on at the idle load for
+/// [`SUPPLY_SETTLE_SECONDS`]: the same state for every branch at a given
+/// rate, so it is simulated once per prepare and copied into each branch
+/// (and copied back on every reset) instead of re-simulated per branch.
+#[derive(Clone)]
+pub struct SettledSupply {
+    supply: PowerSupply,
+    idle_volts: f64,
+}
+
+impl SettledSupply {
+    /// The supply settled at idle at `sample_rate`.
+    pub fn at(sample_rate: f32) -> Self {
+        let mut supply = PowerSupply::new(SUPPLY);
+        supply.prepare(sample_rate);
+        let idle_volts = supply.settle(IDLE_LOAD_AMPS, SUPPLY_SETTLE_SECONDS);
+        Self { supply, idle_volts }
+    }
+
+    /// Switched off: what a branch holds before its first prepare.
+    fn unsettled() -> Self {
+        Self { supply: PowerSupply::new(SUPPLY), idle_volts: 1.0 }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct AmplifierBranch {
     design: BranchDesign,
     preamp: RcCoupledTriodeCascade,
     power_pair: PushPull,
     power_supply: PowerSupply,
+    settled_supply: SettledSupply,
     idle_supply_volts: f64,
     supply_scale: f32,
     power_pair_input_gain: f32,
@@ -115,6 +141,7 @@ impl AmplifierBranch {
             preamp: RcCoupledTriodeCascade::new(),
             power_pair: PushPull::new(),
             power_supply: PowerSupply::new(SUPPLY),
+            settled_supply: SettledSupply::unsettled(),
             idle_supply_volts: 1.0,
             supply_scale: 1.0,
             power_pair_input_gain: 1.0,
@@ -126,7 +153,20 @@ impl AmplifierBranch {
         }
     }
 
-    pub(super) fn prepare(&mut self, sample_rate: f32, power_pair_cold_bias_volts: f64) {
+    /// `settled` is [`SettledSupply::at`] this `sample_rate`.
+    /// This branch, unprepared, as `design` builds it: construction
+    /// only records the design, so a copy is a fresh branch without
+    /// re-tabulating its tubes.
+    pub(super) fn redesigned(&self, design: BranchDesign) -> Self {
+        Self { design, ..self.clone() }
+    }
+
+    pub(super) fn prepare(
+        &mut self,
+        sample_rate: f32,
+        power_pair_cold_bias_volts: f64,
+        settled: &SettledSupply,
+    ) {
         self.input_high_shelf.prepare(sample_rate);
         self.output_high_shelf.prepare(sample_rate);
         if let Some(emphasis) = self.design.high_frequency_emphasis {
@@ -151,13 +191,12 @@ impl AmplifierBranch {
             .set_imbalance(self.design.power_pair_imbalance);
         self.power_pair.set_drive_db(0.0);
 
-        self.power_supply.prepare(sample_rate);
+        self.settled_supply.clone_from(settled);
         self.reset();
     }
 
     /// Back to the prepared idle operating point: signal state cleared,
-    /// the supply re-settled at the idle load (bounded compute, no
-    /// allocation).
+    /// the supply back to its settled idle state (a copy, no allocation).
     pub(super) fn reset(&mut self) {
         self.input_high_shelf.reset();
         self.output_high_shelf.reset();
@@ -170,10 +209,8 @@ impl AmplifierBranch {
         self.preamp.reset();
         self.power_pair.reset();
         self.power_pair.set_supply_scale(1.0);
-        self.power_supply.reset();
-        self.idle_supply_volts = self
-            .power_supply
-            .settle(IDLE_LOAD_AMPS, SUPPLY_SETTLE_SECONDS);
+        self.power_supply.clone_from(&self.settled_supply.supply);
+        self.idle_supply_volts = self.settled_supply.idle_volts;
         self.supply_scale = 1.0;
         self.previous_power_pair_input = 0.0;
         self.high_shelf_update_counter = 0;
@@ -328,7 +365,7 @@ mod tests {
             BranchDesign::high_band(),
         ] {
             let mut branch = AmplifierBranch::new(branch_design);
-            branch.prepare(48_000.0, 2.24);
+            branch.prepare(48_000.0, 2.24, &SettledSupply::at(48_000.0));
             branch.apply_live_settings(4, 15.0, 0.0, -12.0);
             let initial_cold_bias_volts = branch.power_pair_cold_bias_volts();
             branch.apply_live_settings(4, 15.0, 18.0, -12.0);

@@ -13,6 +13,7 @@ mod split_band_amplifier;
 use stave::prelude::*;
 
 use branch::{AmplifierBranch, BranchDesign};
+pub use branch::SettledSupply;
 pub use rc_coupled_triode_cascade::RcCoupledTriodeCascade;
 use split_band_amplifier::SplitBandAmplifier;
 
@@ -45,9 +46,12 @@ pub struct ParallelAmplifier {
 
 impl ParallelAmplifier {
     pub fn new() -> Self {
+        // Every branch is built alike until prepare voices it: one is
+        // built (its tube tables are the cost) and the others copied.
+        let full_band_branch = AmplifierBranch::new(BranchDesign::full_band());
         Self {
-            full_band_branch: AmplifierBranch::new(BranchDesign::full_band()),
-            split_band_amplifier: SplitBandAmplifier::new(),
+            split_band_amplifier: SplitBandAmplifier::new(&full_band_branch),
+            full_band_branch,
             full_band_phase_alignment: Biquad::new(FilterSpec::Allpass {
                 hz: FULL_BAND_PHASE_ALIGNMENT_HZ,
                 q: FULL_BAND_PHASE_ALIGNMENT_QUALITY,
@@ -57,12 +61,18 @@ impl ParallelAmplifier {
         }
     }
 
-    pub fn prepare(&mut self, sample_rate: f32, power_pair_cold_bias_volts: f64) {
+    /// `settled` is [`SettledSupply::at`] this `sample_rate`.
+    pub fn prepare(
+        &mut self,
+        sample_rate: f32,
+        power_pair_cold_bias_volts: f64,
+        settled: &SettledSupply,
+    ) {
         self.full_band_phase_alignment.prepare(sample_rate);
         self.full_band_branch
-            .prepare(sample_rate, power_pair_cold_bias_volts);
+            .prepare(sample_rate, power_pair_cold_bias_volts, settled);
         self.split_band_amplifier
-            .prepare(sample_rate, power_pair_cold_bias_volts);
+            .prepare(sample_rate, power_pair_cold_bias_volts, settled);
         self.measurements = AmplifierMeasurements::default();
     }
 
