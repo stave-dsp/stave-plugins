@@ -18,7 +18,7 @@
 //! * FORGET wipes the bank; and the memory LETS GO when you stop.
 //! * Maxed everything under noise stays bounded.
 //! * The GENERATED ROOM (SPACE 1) is a reverb, DECAY stretches it, the
-//!   map spans rooms from small to vast (all bounded), and memory STEERS
+//!   map spans rooms from small to vast (every point bounded), and memory STEERS
 //!   it: a recalled moment pulls the room toward where it was heard.
 //!   (The knob-room properties above pin SPACE 0.)
 
@@ -32,26 +32,54 @@ const BLOCK: usize = 256;
 /// the params `at` (time s, name, value) as automation does; the left
 /// output.
 fn render(set: &[(&str, f64)], at: &[(f32, &str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut h = set
-        .iter()
-        .fold(PluginHarness::<Engram>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
-        .build();
-    let mut out = Vec::with_capacity(input.len());
-    for (b, chunk) in input.chunks(BLOCK).enumerate() {
-        let t = (b * BLOCK) as f32 / FS;
-        for (s, n, v) in at {
-            if t >= *s && t < *s + BLOCK as f32 / FS {
-                h.set(*n, *v);
-            }
-        }
-        for ch in h.inputs_mut() {
-            ch[..chunk.len()].copy_from_slice(chunk);
-            ch[chunk.len()..].fill(0.0);
-        }
-        h.process(&[]);
-        out.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+    let mut r = Rendering::new(set, at, input);
+    r.advance(input.len());
+    r.out
+}
+
+/// A [`render`] made as far as asked: Engram is causal, so what has
+/// been rendered so far is the whole input's render, cut there. A
+/// measurement that is decided early stops paying for the rest.
+struct Rendering<'a> {
+    h: PluginHarness<Engram>,
+    at: &'a [(f32, &'a str, f64)],
+    input: &'a [f32],
+    out: Vec<f32>,
+}
+
+impl<'a> Rendering<'a> {
+    fn new(set: &[(&str, f64)], at: &'a [(f32, &'a str, f64)], input: &'a [f32]) -> Self {
+        let h = set
+            .iter()
+            .fold(PluginHarness::<Engram>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+            .build();
+        Rendering { h, at, input, out: Vec::with_capacity(input.len()) }
     }
-    out
+
+    fn done(&self) -> bool {
+        self.out.len() >= self.input.len()
+    }
+
+    /// At least `frames` more (whole blocks), or to the end.
+    fn advance(&mut self, frames: usize) {
+        let end = (self.out.len() + frames).min(self.input.len());
+        while self.out.len() < end {
+            let b = self.out.len() / BLOCK;
+            let chunk = &self.input[b * BLOCK..((b + 1) * BLOCK).min(self.input.len())];
+            let t = (b * BLOCK) as f32 / FS;
+            for (s, n, v) in self.at {
+                if t >= *s && t < *s + BLOCK as f32 / FS {
+                    self.h.set(*n, *v);
+                }
+            }
+            for ch in self.h.inputs_mut() {
+                ch[..chunk.len()].copy_from_slice(chunk);
+                ch[chunk.len()..].fill(0.0);
+            }
+            self.h.process(&[]);
+            self.out.extend_from_slice(&self.h.outputs()[0][..chunk.len()]);
+        }
+    }
 }
 
 fn rms(x: &[f32]) -> f32 {
@@ -91,10 +119,19 @@ fn click(secs: f32) -> Vec<f32> {
 /// T60 from the tail's energy decay between −10 and −30 dB of its
 /// 50–150 ms level (Schroeder-free, window RMS; fine for a property).
 fn t60(out: &[f32]) -> f32 {
+    t60_decided(out).unwrap_or(f32::INFINITY)
+}
+
+/// [`t60`] once `out` reaches −30 dB; `None` while it has not (so on any
+/// longer render of the same input it is the same).
+fn t60_decided(out: &[f32]) -> Option<f32> {
     let win = 2_400;
+    if out.len() <= (FS * 0.05) as usize + win {
+        return None;
+    }
     let level = |t: usize| 20.0 * rms(&out[t..t + win]).max(1e-12).log10();
     let start = level((FS * 0.05) as usize);
-    let (mut t10, mut t30) = (None, None);
+    let mut t10 = None;
     let mut t = (FS * 0.05) as usize;
     while t + win < out.len() {
         let l = level(t);
@@ -102,14 +139,35 @@ fn t60(out: &[f32]) -> f32 {
             t10 = Some(t);
         }
         if l < start - 30.0 {
-            t30 = Some(t);
-            break;
+            // −30 dB is past −10 dB: t10 is set by now.
+            return t10.map(|a| 3.0 * (t - a) as f32 / FS);
         }
         t += win / 2;
     }
-    match (t10, t30) {
-        (Some(a), Some(b)) => 3.0 * (b - a) as f32 / FS,
-        _ => f32::INFINITY,
+    None
+}
+
+/// `f` of each item, each on its own thread (every render here is its
+/// own instance), in order.
+fn side_by_side<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    std::thread::scope(|s| {
+        let f = &f;
+        let runs: Vec<_> = items.iter().map(|i| s.spawn(move || f(i))).collect();
+        runs.into_iter().map(|r| r.join().expect("a render panicked")).collect()
+    })
+}
+
+/// [`t60`] of the render's output from frame `from` on, rendered only
+/// as far as the measurement reads.
+fn rendered_t60(mut r: Rendering, from: usize) -> f32 {
+    loop {
+        if let Some(t) = r.out.get(from..).and_then(t60_decided) {
+            return t;
+        }
+        if r.done() {
+            return t60(r.out.get(from..).unwrap_or(&[]));
+        }
+        r.advance(BLOCK * 16);
     }
 }
 
@@ -128,8 +186,8 @@ fn mix_zero_is_bit_exact_and_silence_is_silent() {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn it_is_a_reverb_and_decay_sets_the_tail() {
-    let short = t60(&render(&with(wet(), &[("decay", 1.0), ("space", 0.0)]), &[], &click(6.0)));
-    let long = t60(&render(&with(wet(), &[("decay", 4.0), ("space", 0.0)]), &[], &click(12.0)));
+    let short = rendered_t60(Rendering::new(&with(wet(), &[("decay", 1.0), ("space", 0.0)]), &[], &click(6.0)), 0);
+    let long = rendered_t60(Rendering::new(&with(wet(), &[("decay", 4.0), ("space", 0.0)]), &[], &click(12.0)), 0);
     assert!((short - 1.0).abs() < 0.4, "DECAY 1 s measured T60 {short:.2} s");
     assert!((long - 4.0).abs() < 1.4, "DECAY 4 s measured T60 {long:.2} s");
 }
@@ -249,20 +307,27 @@ fn on_chord(x: &[f32], freqs: [f32; 3]) -> f64 {
 /// NOW, not the room still ringing with what was recalled earlier.
 fn memory_part(set: &[(&'static str, f64)], at: &[(f32, &str, f64)], input: &[f32]) -> Vec<f32> {
     let base = with(wet(), &[("decay", 0.4), ("deja", 2.0), ("space", 0.0), ("drift", 0.0)]);
-    let on = render(&with(with(base.clone(), set), &[("recall", 1.0)]), at, input);
-    let off = render(&with(with(base, set), &[("recall", 0.0)]), at, input);
+    let [on, off]: [Vec<f32>; 2] = side_by_side(&[1.0, 0.0], |&recall| {
+        render(&with(with(base.clone(), set), &[("recall", recall)]), at, input)
+    })
+    .try_into()
+    .unwrap();
     on.iter().zip(&off).map(|(a, b)| a - b).collect()
 }
 
 /// The memory's answer during the second A (8.0 – 8.68 s).
 fn during_second_a(m: &[f32]) -> &[f32] {
-    &m[(FS * 8.0) as usize..(FS * 8.0) as usize + 32_768]
+    &m[(FS * 8.0) as usize..SECOND_A_END]
 }
+
+/// Where [`during_second_a`] ends: a test that reads no further renders
+/// its input only this far (the render up to here is the same).
+const SECOND_A_END: usize = (FS * 8.0) as usize + 32_768;
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn it_remembers_by_harmony() {
-    let m = memory_part(&[("focus", 0.9)], &[], &a_b_a());
+    let m = memory_part(&[("focus", 0.9)], &[], &a_b_a()[..SECOND_A_END]);
     let w = during_second_a(&m);
     let (a, b) = (on_chord(w, A), on_chord(w, B));
     assert!(rms(w) > 1e-3, "the memory said nothing during the second A (rms {})", rms(w));
@@ -273,12 +338,12 @@ fn it_remembers_by_harmony() {
 #[cfg_attr(miri, ignore)]
 fn focus_is_attentions_temperature() {
     let share = |focus: f64| {
-        let m = memory_part(&[("focus", focus)], &[], &a_b_a());
+        let m = memory_part(&[("focus", focus)], &[], &a_b_a()[..SECOND_A_END]);
         let w = during_second_a(&m);
         let (a, b) = (on_chord(w, A), on_chord(w, B));
         b / (a + b)
     };
-    let (soft, sharp) = (share(0.0), share(1.0));
+    let [soft, sharp]: [f64; 2] = side_by_side(&[0.0, 1.0], |&f| share(f)).try_into().unwrap();
     assert!(soft > 0.03, "soft focus should blend B in (B share {soft:.3})");
     assert!(soft > 3.0 * sharp, "soft B share {soft:.3} vs sharp {sharp:.3}");
 }
@@ -287,7 +352,7 @@ fn focus_is_attentions_temperature() {
 #[cfg_attr(miri, ignore)]
 fn deja_gates_recall_by_age() {
     // DÉJÀ 30 s: every memory is younger than that — nothing to recall.
-    let m = memory_part(&[("focus", 0.9), ("deja", 30.0)], &[], &a_b_a());
+    let m = memory_part(&[("focus", 0.9), ("deja", 30.0)], &[], &a_b_a()[..SECOND_A_END]);
     let quiet = rms(during_second_a(&m));
     assert!(quiet < 1e-5, "with DÉJÀ 30 s it recalled a memory only seconds old (rms {quiet})");
 }
@@ -296,7 +361,7 @@ fn deja_gates_recall_by_age() {
 #[cfg_attr(miri, ignore)]
 fn forget_wipes_the_bank() {
     // Press FORGET in the breath before the second A.
-    let m = memory_part(&[("focus", 0.9)], &[(6.8, "forget", 1.0)], &a_b_a());
+    let m = memory_part(&[("focus", 0.9)], &[(6.8, "forget", 1.0)], &a_b_a()[..SECOND_A_END]);
     let after = rms(during_second_a(&m));
     assert!(after < 1e-5, "after FORGET it still remembered (rms {after})");
 }
@@ -306,7 +371,8 @@ fn forget_wipes_the_bank() {
 fn the_memory_lets_go_when_you_stop() {
     // The input ends at 9.5 s; DECAY 3 s (the recall fades at the
     // room's T60).
-    let m = memory_part(&[("focus", 0.9), ("decay", 3.0)], &[], &a_b_a());
+    // Rendered as far as the later window reads (it ends at 14.1 s).
+    let m = memory_part(&[("focus", 0.9), ("decay", 3.0)], &[], &a_b_a()[..(FS * 14.1) as usize]);
     let at = |t: f32| rms(&m[(FS * t) as usize..(FS * t) as usize + 4_800]);
     let (now, later) = (at(9.4), at(14.0));
     assert!(later < 0.01 * now, "4.5 s after you stopped the memory is still at {:.1} dB", 20.0 * (later / now).log10());
@@ -367,7 +433,7 @@ fn low_high(x: &[f32], lo: f64, hi: f64) -> (f64, f64) {
 #[test]
 #[cfg_attr(miri, ignore)]
 fn it_remembers_drums_by_their_sound() {
-    let m = memory_part(&[("focus", 0.9), ("texture", 0.1)], &[], &k_h_k());
+    let m = memory_part(&[("focus", 0.9), ("texture", 0.1)], &[], &k_h_k()[..SECOND_A_END]);
     let w = during_second_a(&m);
     let (low, high) = low_high(w, 250.0, 3_000.0);
     assert!(rms(w) > 1e-3, "the memory said nothing during the second kicks (rms {})", rms(w));
@@ -379,7 +445,8 @@ fn it_remembers_drums_by_their_sound() {
 fn percussive_memories_answer_your_hits() {
     // The tightest room (recalled memories mostly play INTO the room,
     // and a big one smears hits 250 ms apart into each other).
-    let m = memory_part(&[("focus", 0.9), ("texture", 0.1), ("size", 0.0), ("decay", 0.3)], &[], &k_h_k());
+    // Rendered as far as the last window reads (it ends before 9.25 s).
+    let m = memory_part(&[("focus", 0.9), ("texture", 0.1), ("size", 0.0), ("decay", 0.3)], &[], &k_h_k()[..(FS * 9.25) as usize]);
     // The second kicks land every 0.25 s from 7.0 s. Energy in the
     // 40 ms after each hit vs the 40 ms halfway between hits.
     let win = (0.04 * FS) as usize;
@@ -435,12 +502,11 @@ fn match_decides_what_alike_means() {
     x.extend(voiced(A, 2.5, false));
     x.extend(std::iter::repeat_n(0.0, (FS * 3.0) as usize));
     let recalled = |m: f64| {
-        let part = memory_part(&[("focus", 0.9), ("match", m), ("texture", 0.0)], &[], &x);
+        let part = memory_part(&[("focus", 0.9), ("match", m), ("texture", 0.0)], &[], &x[..SECOND_A_END]);
         let w = during_second_a(&part);
         (on_chord(w, A), on_chord(w, B))
     };
-    let (ha, hb) = recalled(0.0);
-    let (ta, tb) = recalled(1.0);
+    let [(ha, hb), (ta, tb)]: [(f64, f64); 2] = side_by_side(&[0.0, 1.0], |&m| recalled(m)).try_into().unwrap();
     assert!(ha > 3.0 * hb, "MATCH 0 (harmony) should recall the A: A {ha:.3e} vs B {hb:.3e}");
     assert!(tb > 3.0 * ta, "MATCH 1 (sound) should recall the dark B: A {ta:.3e} vs B {tb:.3e}");
 }
@@ -455,13 +521,13 @@ fn texture_runs_from_seamless_to_shattered() {
     x.extend(voiced(A, 2.5, false));
     x.extend(std::iter::repeat_n(0.0, (FS * 3.0) as usize));
     let leap_share = |texture: f64| {
-        let part = memory_part(&[("focus", 0.9), ("texture", texture)], &[], &x);
+        let part = memory_part(&[("focus", 0.9), ("texture", texture)], &[], &x[..SECOND_A_END]);
         let w = during_second_a(&part);
         let up = A.map(|f| f * 2.0);
         let down = A.map(|f| f * 0.5);
         (on_notes(w, up) + on_notes(w, down)) / on_notes(w, A).max(1e-12)
     };
-    let (smooth, shattered) = (leap_share(0.0), leap_share(1.0));
+    let [smooth, shattered]: [f64; 2] = side_by_side(&[0.0, 1.0], |&t| leap_share(t)).try_into().unwrap();
     assert!(shattered > 4.0 * smooth.max(1e-3), "TEXTURE 1 leap share {shattered:.3} vs TEXTURE 0 {smooth:.3}");
 }
 
@@ -473,46 +539,79 @@ fn generated() -> Vec<(&'static str, f64)> {
 
 /// T60 of the generated room's impulse response at a map point.
 fn map_t60(x: f64, y: f64, secs: f32) -> f32 {
-    t60(&render(&with(generated(), &[("space x", x), ("space y", y)]), &[], &click(secs)))
+    rendered_t60(Rendering::new(&with(generated(), &[("space x", x), ("space y", y)]), &[], &click(secs)), 0)
 }
 
 #[test]
 #[cfg_attr(miri, ignore)]
 fn the_generated_room_is_a_reverb_and_decay_stretches_it() {
-    let base = t60(&render(&with(generated(), &[("decay", 3.0)]), &[], &click(12.0)));
-    let long = t60(&render(&with(generated(), &[("decay", 6.0)]), &[], &click(20.0)));
+    let base = rendered_t60(Rendering::new(&with(generated(), &[("decay", 3.0)]), &[], &click(12.0)), 0);
+    let long = rendered_t60(Rendering::new(&with(generated(), &[("decay", 6.0)]), &[], &click(20.0)), 0);
     assert!(base.is_finite() && base > 0.1, "T60 {base}");
     let r = long / base;
     assert!((1.5..2.6).contains(&r), "DECAY ×2 stretched T60 ×{r:.2} ({base:.2} → {long:.2} s)");
 }
 
-/// Every map point, at DECAY's top under loud noise, never RUNS AWAY:
-/// finite, sane headroom (a 30 s room under −3 dBFS noise peaks near 3
-/// by physics), and once the noise stops it decays. (Per-pass stability
-/// is proven in decay_eq's `no_frequency_ever_gains`.) And the map spans
-/// rooms from small to vast.
+/// The 4 × 4 map points the generated room is checked at.
+fn map_grid() -> Vec<(f64, f64)> {
+    (0..4).flat_map(|i| (0..4).map(move |j| (0.1 + 0.8 * f64::from(i) / 3.0, 0.1 + 0.8 * f64::from(j) / 3.0))).collect()
+}
+
+/// The map spans rooms from small to vast.
 #[test]
 #[cfg_attr(miri, ignore)]
-fn the_map_spans_small_to_vast_rooms_all_bounded() {
-    let input = noise((FS * 3.0) as usize, 0.7);
-    let peak = |out: &[f32]| out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-    let mut t = Vec::new();
-    for i in 0..4 {
-        for j in 0..4 {
-            let (x, y) = (0.1 + 0.8 * f64::from(i) / 3.0, 0.1 + 0.8 * f64::from(j) / 3.0);
-            t.push(map_t60(x, y, 14.0));
-            let mut x_in = input.clone();
-            x_in.extend(std::iter::repeat_n(0.0, (FS * 3.0) as usize));
-            let out = render(&with(generated(), &[("space x", x), ("space y", y), ("decay", 30.0)]), &[], &x_in);
-            let p = peak(&out);
-            let after = |a: f32, b: f32| rms(&out[(FS * a) as usize..(FS * b) as usize]);
-            assert!(out.iter().all(|v| v.is_finite()) && p < 4.0, "map ({x:.2}, {y:.2}): peak {p:.2}");
-            assert!(after(5.5, 6.0) < after(3.0, 3.5), "map ({x:.2}, {y:.2}) does not decay once the noise stops");
-        }
-    }
+fn the_map_spans_small_to_vast_rooms() {
+    let t = side_by_side(&map_grid(), |&(x, y)| map_t60(x, y, 14.0));
     let lo = t.iter().copied().fold(f32::MAX, f32::min);
     let hi = t.iter().copied().filter(|v| v.is_finite()).fold(0.0f32, f32::max);
     assert!(hi / lo > 3.0, "the map's rooms span only {lo:.2} … {hi:.2} s");
+}
+
+/// Every map point (of [`map_grid`], a test per column of it), at
+/// DECAY's top under loud noise, never RUNS AWAY: finite, sane headroom
+/// (a 30 s room under −3 dBFS noise peaks near 3 by physics), and once
+/// the noise stops it decays. (Per-pass stability is proven in
+/// decay_eq's `no_frequency_ever_gains`.)
+fn the_map_is_bounded_in_column(column: usize) {
+    let mut input = noise((FS * 3.0) as usize, 0.7);
+    input.extend(std::iter::repeat_n(0.0, (FS * 3.0) as usize));
+    let peak = |out: &[f32]| out.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let points = &map_grid()[4 * column..4 * column + 4];
+    // Per point: finite, peak, and the level just after the noise and
+    // 2.5 s later.
+    let runs = side_by_side(points, |&(x, y)| {
+        let out = render(&with(generated(), &[("space x", x), ("space y", y), ("decay", 30.0)]), &[], &input);
+        let after = |a: f32, b: f32| rms(&out[(FS * a) as usize..(FS * b) as usize]);
+        (out.iter().all(|v| v.is_finite()), peak(&out), after(3.0, 3.5), after(5.5, 6.0))
+    });
+    for (&(x, y), &(finite, p, stopped, later)) in points.iter().zip(&runs) {
+        assert!(finite && p < 4.0, "map ({x:.2}, {y:.2}): peak {p:.2}");
+        assert!(later < stopped, "map ({x:.2}, {y:.2}) does not decay once the noise stops");
+    }
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn the_map_is_bounded_at_x_0_10() {
+    the_map_is_bounded_in_column(0);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn the_map_is_bounded_at_x_0_37() {
+    the_map_is_bounded_in_column(1);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn the_map_is_bounded_at_x_0_63() {
+    the_map_is_bounded_in_column(2);
+}
+
+#[test]
+#[cfg_attr(miri, ignore)]
+fn the_map_is_bounded_at_x_0_90() {
+    the_map_is_bounded_in_column(3);
 }
 
 /// Play A in a small room, B in a vast one, then A again (the map left
@@ -522,13 +621,9 @@ fn the_map_spans_small_to_vast_rooms_all_bounded() {
 #[cfg_attr(miri, ignore)]
 fn memory_steers_the_room_to_where_it_heard_you() {
     // The smallest and the largest room on a coarse scan.
-    let mut pts = Vec::new();
-    for i in 0..3 {
-        for j in 0..3 {
-            let (x, y) = (0.15 + 0.35 * f64::from(i), 0.15 + 0.35 * f64::from(j));
-            pts.push((map_t60(x, y, 14.0), x, y));
-        }
-    }
+    let grid: Vec<(f64, f64)> =
+        (0..3).flat_map(|i| (0..3).map(move |j| (0.15 + 0.35 * f64::from(i), 0.15 + 0.35 * f64::from(j)))).collect();
+    let mut pts = side_by_side(&grid, |&(x, y)| (map_t60(x, y, 14.0), x, y));
     pts.retain(|p| p.0.is_finite());
     pts.sort_by(|a, b| a.0.total_cmp(&b.0));
     let (small, vast) = (pts[0], pts[pts.len() - 1]);
@@ -543,10 +638,9 @@ fn memory_steers_the_room_to_where_it_heard_you() {
     x.extend(std::iter::repeat_n(0.0, (FS * 10.0) as usize));
     let tail_t60 = |steer: f64| {
         let set = with(generated(), &[("space x", small.1), ("space y", small.2), ("steer", steer), ("deja", 3.0), ("focus", 0.8)]);
-        let out = render(&set, &[(4.25, "space x", vast.1), (4.25, "space y", vast.2)], &x);
-        t60(&out[stop..])
+        rendered_t60(Rendering::new(&set, &[(4.25, "space x", vast.1), (4.25, "space y", vast.2)], &x), stop)
     };
-    let (free, steered) = (tail_t60(0.0), tail_t60(1.0));
+    let [free, steered]: [f32; 2] = side_by_side(&[0.0, 1.0], |&s| tail_t60(s)).try_into().unwrap();
     assert!(steered < 0.75 * free, "STEER 1 tail {steered:.2} s vs STEER 0 {free:.2} s (rooms {:.2} / {:.2} s)", small.0, vast.0);
 }
 

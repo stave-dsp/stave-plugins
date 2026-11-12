@@ -632,8 +632,14 @@ mod calibration {
 
     /// The late network's impulse energy (one channel), with the
     /// generated decay at T60 `t` everywhere, SIZE `size`, the default
-    /// drawing — fed as the engine feeds it at SPACE 1 (both channels).
+    /// drawing — fed as the engine feeds it at SPACE 1 (both channels),
+    /// summed over two T60s.
     fn late_energy(t: f32, size: f32) -> f32 {
+        late_energy_over(t, size, 2.0 * t)
+    }
+
+    /// [`late_energy`] summed over the first `secs`.
+    fn late_energy_over(t: f32, size: f32, secs: f32) -> f32 {
         let sr = 48_000.0;
         let mut room = Room::new();
         room.prepare(sr);
@@ -652,7 +658,7 @@ mod calibration {
         dl.prepare(sr);
         dr.prepare(sr);
         let mut e = 0.0f64;
-        let n = (t * 2.0 * sr) as usize;
+        let n = (secs * sr) as usize;
         for i in 0..n {
             if i % 256 == 0 {
                 room.aim_late(&[t; 7], shape);
@@ -716,11 +722,19 @@ mod calibration {
     }
 
     /// The table (and its interpolation) is what the late network does,
-    /// off the grid too.
+    /// off the grid too. Measured over one T60, not the table's two: the
+    /// tail past it is 60 dB down (measured 2026-11-12: 0.2 % of the
+    /// energy at T60 0.2 s, a millionth from 0.7 s up — ln-ratios moved
+    /// ≤ 0.002 against a 0.15 tolerance). The points run side by side.
     #[test]
     fn late_energy_is_calibrated() {
-        for (t, size) in [(0.2f32, 0.1f32), (0.7, 0.6), (2.0, 0.5), (5.0, 0.9), (20.0, 0.3)] {
-            let (got, want) = (late_energy(t, size), super::late_energy(t, size));
+        let points = [(0.2f32, 0.1f32), (0.7, 0.6), (2.0, 0.5), (5.0, 0.9), (20.0, 0.3)];
+        let got: Vec<f32> = std::thread::scope(|s| {
+            let runs: Vec<_> = points.iter().map(|&(t, size)| s.spawn(move || late_energy_over(t, size, t))).collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        for (&(t, size), got) in points.iter().zip(got) {
+            let want = super::late_energy(t, size);
             assert!((got / want).ln().abs() < 0.15, "T60 {t} size {size}: measured {got:.4} vs table {want:.4}");
         }
     }
@@ -768,16 +782,30 @@ mod loudness {
     #[test]
     fn the_generated_room_is_as_loud_as_the_knobs_room() {
         let base = [("mix", 1.0), ("recall", 0.0), ("size", 0.5), ("plasticity", 0.0), ("drift", 0.0), ("steer", 0.0)];
+        let points = [(0.1f64, 0.1f64), (0.3, 0.7), (0.5, 0.5), (0.7, 0.3), (0.9, 0.9), (0.2, 0.9), (0.9, 0.2)];
+        // Every render is its own instance: they run side by side.
+        let dbs: Vec<(f32, f32)> = std::thread::scope(|s| {
+            let runs: Vec<_> = points
+                .iter()
+                .map(|&(x, y)| {
+                    s.spawn(move || {
+                        let a = super::decode(&super::at_map(x as f32, y as f32));
+                        let t = super::late_t60(&a, 3.0, super::TONE_REF);
+                        let mut g = base.to_vec();
+                        g.extend([("space", 1.0), ("tone", 0.6), ("space x", x), ("space y", y), ("decay", 3.0)]);
+                        let mut k = base.to_vec();
+                        k.extend([("space", 0.0), ("tone", 1.0), ("decay", f64::from(t[1]))]);
+                        let knobs = s.spawn(move || wet_rms(&k));
+                        let generated = wet_rms(&g);
+                        (t[1], 20.0 * (generated / knobs.join().unwrap()).log10())
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
+        });
         let mut worst = 0.0f32;
-        for (x, y) in [(0.1f64, 0.1f64), (0.3, 0.7), (0.5, 0.5), (0.7, 0.3), (0.9, 0.9), (0.2, 0.9), (0.9, 0.2)] {
-            let a = super::decode(&super::at_map(x as f32, y as f32));
-            let t = super::late_t60(&a, 3.0, super::TONE_REF);
-            let mut g = base.to_vec();
-            g.extend([("space", 1.0), ("tone", 0.6), ("space x", x), ("space y", y), ("decay", 3.0)]);
-            let mut k = base.to_vec();
-            k.extend([("space", 0.0), ("tone", 1.0), ("decay", f64::from(t[1]))]);
-            let db = 20.0 * (wet_rms(&g) / wet_rms(&k)).log10();
-            println!("({x}, {y}) mid T60 {:.2} s: {db:+.1} dB", t[1]);
+        for (&(x, y), (t, db)) in points.iter().zip(dbs) {
+            println!("({x}, {y}) mid T60 {t:.2} s: {db:+.1} dB");
             worst = worst.max(db.abs());
         }
         assert!(worst < 3.0, "a map point is {worst:.1} dB off the knobs' room");
