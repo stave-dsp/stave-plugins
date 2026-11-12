@@ -72,16 +72,30 @@ fn gain_db(set: &[(&'static str, f64)], freq: f32) -> f64 {
 /// The frequency of maximum gain over a log grid — the measured
 /// resonance peak. Grid step ~2.5%, so an 8% assertion is honest.
 fn peak_hz(set: &[(&'static str, f64)], lo: f32, hi: f32) -> f64 {
+    peak(set, lo, hi).0
+}
+
+/// [`peak_hz`] and the gain there. Coarse to fine: every 4th grid
+/// point, then every point between the best one's neighbours — the
+/// grid's maximum for one resonance in the window (each test's window
+/// holds one), at 17 renders instead of 41.
+fn peak(set: &[(&'static str, f64)], lo: f32, hi: f32) -> (f64, f64) {
     let n = 41;
-    let mut best = (lo as f64, f64::NEG_INFINITY);
-    for k in 0..n {
-        let f = lo as f64 * (hi as f64 / lo as f64).powf(k as f64 / (n - 1) as f64);
-        let g = gain_db(set, f as f32);
-        if g > best.1 {
-            best = (f, g);
+    let at = |k: usize| lo as f64 * (hi as f64 / lo as f64).powf(k as f64 / (n - 1) as f64);
+    let best_of = |ks: &mut dyn Iterator<Item = usize>| {
+        let mut best = (0, f64::NEG_INFINITY);
+        for k in ks {
+            let g = gain_db(set, at(k) as f32);
+            if g > best.1 {
+                best = (k, g);
+            }
         }
-    }
-    best.0
+        best
+    };
+    let coarse = best_of(&mut (0..n).step_by(4));
+    let fine = best_of(&mut (coarse.0.saturating_sub(3)..=(coarse.0 + 3).min(n - 1)).filter(|k| k % 4 != 0));
+    let (k, g) = if fine.1 > coarse.1 { fine } else { coarse };
+    (at(k), g)
 }
 
 /// Harmonic level: project the settled tail onto sin/cos at `k·f0`
@@ -164,8 +178,8 @@ fn the_box_stiffens_the_spring() {
 fn the_amp_lets_the_cone_bloom() {
     let bloom = |damping: f64| {
         let set = with(BENCH, &[("damping", damping), ("back", 0.0)]);
-        let fc = peak_hz(&set, 60.0, 170.0);
-        gain_db(&set, fc as f32) - gain_db(&set, 1_000.0)
+        let (_, at_fc) = peak(&set, 60.0, 170.0);
+        at_fc - gain_db(&set, 1_000.0)
     };
     let tube = bloom(1.0);
     let solid = bloom(0.0);
