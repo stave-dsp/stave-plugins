@@ -57,7 +57,10 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
+      # The pinned toolchain from rust-toolchain.toml, and only it: the
+      # cache key hashes every installed toolchain, so the image's own
+      # stable would turn every cache cold whenever the image updates it.
+      - run: rustup toolchain install && rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
         with: { key: "shard-${{ matrix.shard }}-of-3", cache-on-failure: true }
       - uses: taiki-e/install-action@v2.90.3
@@ -82,7 +85,10 @@ jobs:
       - name: Fetch the framework over SSH (private repo only)
         if: env.HAS_FRAMEWORK_KEY == 'true'
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
+      # The pinned toolchain from rust-toolchain.toml, and only it: the
+      # cache key hashes every installed toolchain, so the image's own
+      # stable would turn every cache cold whenever the image updates it.
+      - run: rustup toolchain install && rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
       - name: Install clap-validator
         run: command -v clap-validator || cargo install --locked --git https://github.com/free-audio/clap-validator.git --tag 0.4.1 clap-validator

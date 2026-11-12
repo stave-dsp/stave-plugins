@@ -46,7 +46,10 @@ jobs:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev xvfb
-      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
+      # The pinned toolchain from rust-toolchain.toml, and only it: the
+      # cache key hashes every installed toolchain, so the image's own
+      # stable would turn every cache cold whenever the image updates it.
+      - run: rustup toolchain install && rustup toolchain uninstall stable
       - uses: Swatinem/rust-cache@v2
         with: { key: "shard-${{ matrix.shard }}-of-${{ matrix.of }}", cache-on-failure: true }
       - uses: taiki-e/install-action@v2.90.3
