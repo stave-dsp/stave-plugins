@@ -22,7 +22,7 @@
 //!   whisper of noise enters every loop — the "noise floor" the
 //!   strings bloom from with nothing played.
 
-use stave_dsp::{DelayLine, Xorshift32};
+use stave::dsp::{DelayLine, Xorshift32};
 
 use super::detect::{class_hz, CLASSES};
 
@@ -154,7 +154,7 @@ impl Strings {
         self.sr = sr;
         let cap = (sr / LOWEST_HZ) as usize + 8;
         for l in self.main.iter_mut().chain(self.upper.iter_mut()) {
-            l.line.prepare(cap);
+            l.line.allocate(cap);
             l.lp = 0.0;
         }
         self.octave = -1;

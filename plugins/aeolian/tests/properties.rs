@@ -12,9 +12,8 @@
 //! * WIND is velocity: a quiet note wakes the strings only when the
 //!   sensitivity is up.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx, Tap};
+use stave_aeolian_vst3::{Aeolian, AeolianTaps};
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -29,41 +28,21 @@ struct Run {
 }
 
 fn render(set: &[(&str, f64)], input: &[f32]) -> Run {
-    let mut plugin = stave_aeolian_vst3::Aeolian::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table.by_name(n).unwrap_or_else(|| panic!("param '{n}'")).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Aeolian>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let (mut l, mut r) = (Vec::with_capacity(input.len()), Vec::with_capacity(input.len()));
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
     for chunk in input.chunks(BLOCK) {
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        l.extend_from_slice(&ol[..chunk.len()]);
-        r.extend_from_slice(&or[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        l.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+        r.extend_from_slice(&h.outputs()[1][..chunk.len()]);
     }
-    let mut leds = [0.0; 12];
-    for (k, led) in leds.iter_mut().enumerate() {
-        *led = Tap::new(stave_aeolian_vst3::LED_TAPS[k]).get(&bus).unwrap_or(0.0);
-    }
-    let _ = Arc::strong_count(&bus);
+    let leds = AeolianTaps::RINGS.map(|tap| h.telemetry().value(tap).unwrap_or(0.0));
     Run { l, r, leds }
 }
 

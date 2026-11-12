@@ -1,14 +1,12 @@
 //! The harp window's picture: twelve strings strung between brass
 //! bridges over black felt. Each string vibrates and glows with its own
-//! ring (the `ring <note>` taps), in time with the harp's clock (`harp
-//! clock`) — the display IS the instrument.
+//! ring (the `ring_*` taps), in time with the harp's clock (`clock`) — the display IS the instrument.
 
 use core::f64::consts::{PI, TAU};
 
-use stave_core::face::prelude::*;
-use stave_core::ui::scene::{Brush, Pt};
+use stave::prelude::*;
 
-use crate::{CLOCK_TAP, LED_TAPS};
+use crate::AeolianTaps;
 
 const NOTES: [&str; 12] = ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"];
 
@@ -36,19 +34,19 @@ fn bridges(r: Rect) -> (f64, f64) {
 pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     felt(r, s);
     let (top, bot) = bridges(r);
-    let t = finite(f.probe(CLOCK_TAP));
+    let t = finite(f.tap(AeolianTaps::CLOCK));
     let pitch = (r.w - 2.0 * SIDE) / 11.0;
-    for (c, tap) in LED_TAPS.iter().enumerate() {
-        let level = finite(f.probe(tap)).clamp(0.0, 1.0);
+    for (c, tap) in AeolianTaps::RINGS.into_iter().enumerate() {
+        let level = finite(f.tap(tap)).clamp(0.0, 1.0);
         string(s, string_x(r, c), top + 4.0, bot - 4.0, c, level, t, pitch);
     }
     for &y in &[top, bot] {
         bridge(r, s, y);
     }
-    let ty = &f.theme.type_;
+    let ty = &f.theme.typography;
     for (c, name) in NOTES.iter().enumerate() {
         let sharp = name.chars().count() > 1;
-        let (size, ink) = if sharp { (ty.caption_size, f.theme.ink_soft) } else { (ty.legend_size, f.theme.ink) };
+        let (size, ink) = if sharp { (ty.caption_size, f.theme.palette.ink_soft) } else { (ty.legend_size, f.theme.palette.ink) };
         s.text_in(pt(string_x(r, c), r.y + r.h - 11.0), *name, size, ink, ty.legend);
     }
 }
@@ -63,19 +61,17 @@ fn finite(v: f64) -> f64 {
 
 /// Black felt, lit from above and falling into the bezel's shadow.
 fn felt(r: Rect, s: &mut Scene) {
-    let path = rrect_path(r, 7.0);
-    s.fill(
-        path,
-        Brush::Linear {
-            from: pt(r.x, r.y),
-            to: pt(r.x, r.y + r.h),
-            stops: vec![
-                (0.0, Color::rgba(0.02, 0.03, 0.03, 1.0)),
-                (0.18, Color::rgba(0.075, 0.08, 0.08, 1.0)),
-                (0.75, Color::rgba(0.055, 0.06, 0.06, 1.0)),
-                (1.0, Color::rgba(0.025, 0.03, 0.03, 1.0)),
-            ],
-        },
+    vertical_gradient(
+        s,
+        r,
+        7.0,
+        (r.y, r.y + r.h),
+        &[
+            (0.0, Color::rgba(0.02, 0.03, 0.03, 1.0)),
+            (0.18, Color::rgba(0.075, 0.08, 0.08, 1.0)),
+            (0.75, Color::rgba(0.055, 0.06, 0.06, 1.0)),
+            (1.0, Color::rgba(0.025, 0.03, 0.03, 1.0)),
+        ],
     );
 }
 
@@ -83,13 +79,12 @@ fn felt(r: Rect, s: &mut Scene) {
 fn bridge(r: Rect, s: &mut Scene, y: f64) {
     let (x0, x1) = (r.x + 14.0, r.x + r.w - 14.0);
     s.solid(Path::rect(pt(x0, y + 3.0), x1 - x0, 5.0), Color::rgba(0.0, 0.0, 0.0, 0.45));
-    s.fill(
-        rrect_path(Rect { x: x0, y: y - 3.5, w: x1 - x0, h: 7.0 }, 3.0),
-        Brush::Linear {
-            from: pt(0.0, y - 3.5),
-            to: pt(0.0, y + 3.5),
-            stops: vec![(0.0, BRASS_LO), (0.3, BRASS_HI), (0.6, BRASS), (1.0, BRASS_LO)],
-        },
+    vertical_gradient(
+        s,
+        Rect { x: x0, y: y - 3.5, w: x1 - x0, h: 7.0 },
+        3.0,
+        (y - 3.5, y + 3.5),
+        &[(0.0, BRASS_LO), (0.3, BRASS_HI), (0.6, BRASS), (1.0, BRASS_LO)],
     );
     for c in 0..12 {
         let p = pt(string_x(r, c), y);
@@ -110,7 +105,7 @@ fn string(s: &mut Scene, x: f64, y0: f64, y1: f64, c: usize, level: f64, t: f64,
     let width = 2.0 - 0.8 * k;
     let amp = 0.2 * pitch * level.powf(1.3);
     let phase = (t * (6.0 + 0.85 * c as f64) * TAU).sin();
-    let pts = |off: f64, a: f64| -> Vec<Pt> {
+    let pts = |off: f64, a: f64| -> Vec<_> {
         (0..=SEGS)
             .map(|i| {
                 let u = i as f64 / SEGS as f64;
@@ -138,6 +133,47 @@ fn string(s: &mut Scene, x: f64, y0: f64, y1: f64, c: usize, level: f64, t: f64,
         Path::polyline(&pts(-0.35 * width, amp * phase)),
         Stroke::round(Color::rgba(1.0, 1.0, 1.0, 0.45 + 0.3 * level), 0.55),
     );
+}
+
+/// A vertical linear gradient (`stops` over `y0..y1`) filling the
+/// rounded rect `r` (corner `radius`; a square with half-side radius is
+/// a circle). The face's author surface has no gradient brush, so it is
+/// painted as 1 pt bands of solid colour, each overlapping the next by a
+/// band so no seam shows.
+fn vertical_gradient(s: &mut Scene, r: Rect, radius: f64, (y0, y1): (f64, f64), stops: &[(f64, Color)]) {
+    const BAND: f64 = 1.0;
+    let rad = radius.min(r.w / 2.0).min(r.h / 2.0);
+    // The outline's horizontal inset at height y.
+    let inset = |y: f64| {
+        let dy = (r.y + rad - y).max(y - (r.y + r.h - rad)).clamp(0.0, rad);
+        rad - (rad * rad - dy * dy).sqrt()
+    };
+    let colour = |t: f64| {
+        let t = t.clamp(0.0, 1.0);
+        let i = stops.iter().position(|(at, _)| *at >= t).unwrap_or(stops.len() - 1);
+        if i == 0 {
+            return stops[0].1;
+        }
+        let ((ta, a), (tb, b)) = (stops[i - 1], stops[i]);
+        let u = if tb > ta { (t - ta) / (tb - ta) } else { 1.0 };
+        let mix = |x: f64, y: f64| x + (y - x) * u;
+        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
+    };
+    let bands = (r.h / BAND).ceil().max(1.0) as usize;
+    for i in 0..bands {
+        let top = r.y + i as f64 * BAND;
+        let bot = (top + 2.0 * BAND).min(r.y + r.h);
+        let ys = [top, (top + bot) / 2.0, bot];
+        let mut path = Path::new().move_to(pt(r.x + inset(top), top));
+        for &y in &ys[1..] {
+            path = path.line_to(pt(r.x + inset(y), y));
+        }
+        for &y in ys.iter().rev() {
+            path = path.line_to(pt(r.x + r.w - inset(y), y));
+        }
+        let mid = (top + BAND / 2.0).min(r.y + r.h);
+        s.solid(path.close(), colour((mid - y0) / (y1 - y0)));
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 
 use core::f32::consts::TAU;
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 const BASE_MS: f32 = 11.0;
 /// Sweep depth at full DRIFT, ms.
@@ -29,7 +29,7 @@ impl Ensemble {
         self.sr = sr;
         let n = ((BASE_MS + DEPTH_MS + 2.0) * 0.001 * sr) as usize + 8;
         for l in &mut self.lines {
-            l.prepare(n);
+            l.allocate(n);
         }
         self.phase = [0.0, 1.0 / 3.0, 2.0 / 3.0];
         self.amount = 0.0;

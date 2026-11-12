@@ -1,10 +1,6 @@
 //! Factory presets — each states the FULL face.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::editor_kit::preset;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::AeolianParams;
 
@@ -20,18 +16,18 @@ struct Face {
 }
 
 fn face(name: &'static str, p: &AeolianParams, f: Face) -> Preset {
-    preset(
+    Preset::from_pairs(
         name,
         &[
-            (&p.mix, f.mix), (&p.tone, f.tone), (&p.drift, f.drift), (&p.wind, f.wind),
-            (&p.sustain, f.sustain), (&p.register, f.register), (&p.air, f.air),
-            (&p.sway, f.sway), (&p.output, 0.0),
+            (p.mix.id(), f.mix), (p.tone.id(), f.tone), (p.drift.id(), f.drift), (p.wind.id(), f.wind),
+            (p.sustain.id(), f.sustain), (p.register.id(), f.register), (p.air.id(), f.air),
+            (p.sway.id(), f.sway), (p.output.id(), 0.0),
         ],
     )
 }
 
 pub fn presets(p: &AeolianParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         face("INIT", p, Face {
             mix: 0.5, tone: 0.6, drift: 0.3, wind: 0.5, sustain: 0.6, register: 2.0, air: 1.0, sway: 0.0,
         }),

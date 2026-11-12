@@ -5,18 +5,13 @@
 //! * `strings.rs` — `Strings`: twelve doubled Karplus–Strong voices,
 //!   SUSTAIN = decay, TONE = damping, VIBRATO = per-voice drift.
 //! * `ensemble.rs` — `Ensemble`: CHORUS width.
-//! * `telemetry.rs` — `Telemetry`: each string's ring level and the
+//! * `telemetry.rs` — `AeolianTaps`: each string's ring level and the
 //!   harp's clock → the face's vibrating strings.
 //!
 //! Stereo: the twelve voices are spread around the circle of fifths,
 //! so a chord fans out across the image.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::ContinuousControl;
-use stave_core::{DebugBus, Environment, ProcessCtx, Tail};
-use stave_dsp::Svf;
+use stave::prelude::*;
 
 use crate::params::AeolianParams;
 
@@ -28,7 +23,7 @@ mod telemetry;
 use self::detect::{Detector, CLASSES};
 use self::ensemble::Ensemble;
 use self::strings::{Strings, Voicing};
-use self::telemetry::Telemetry;
+pub use self::telemetry::AeolianTaps;
 
 /// The REGISTER selector's first position (C2) puts the strings in octave 2.
 const LOW_OCTAVE: i32 = 2;
@@ -39,11 +34,8 @@ const WET_GAIN: f32 = 0.45;
 /// The wet's top end: TONE sweeps this low-pass.
 const TONE_LO_HZ: f32 = 500.0;
 const TONE_HI_HZ: f32 = 14_000.0;
-
-#[inline]
-fn db_to_amp(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
-}
+/// The wet low-pass's Q: a touch under Butterworth (k = 1.8).
+const TONE_Q: f32 = 1.0 / 1.8;
 
 /// Each voice's (left, right) gains: spread on the circle of fifths.
 fn pans() -> [[f32; 2]; CLASSES] {
@@ -55,102 +47,109 @@ fn pans() -> [[f32; 2]; CLASSES] {
 }
 
 struct Controls {
-    mix: ContinuousControl,
-    tone: ContinuousControl,
-    drift: ContinuousControl,
-    wind: ContinuousControl,
-    sustain: ContinuousControl,
-    output: ContinuousControl,
+    mix: Smoother,
+    tone: Smoother,
+    drift: Smoother,
+    wind: Smoother,
+    sustain: Smoother,
+    output: Smoother,
 }
 
 impl Controls {
     fn new(p: &AeolianParams) -> Self {
         Self {
-            mix: ContinuousControl::new(&p.mix),
-            tone: ContinuousControl::new(&p.tone),
-            drift: ContinuousControl::new(&p.drift),
-            wind: ContinuousControl::new(&p.wind),
-            sustain: ContinuousControl::new(&p.sustain),
-            output: ContinuousControl::new(&p.output),
+            mix: Smoother::new(&p.mix),
+            tone: Smoother::new(&p.tone),
+            drift: Smoother::new(&p.drift),
+            wind: Smoother::new(&p.wind),
+            sustain: Smoother::new(&p.sustain),
+            output: Smoother::new(&p.output),
         }
     }
 
-    fn prepare(&mut self, sr: f64, p: &AeolianParams) {
-        self.mix.prepare(sr, &p.mix);
-        self.tone.prepare(sr, &p.tone);
-        self.drift.prepare(sr, &p.drift);
-        self.wind.prepare(sr, &p.wind);
-        self.sustain.prepare(sr, &p.sustain);
-        self.output.prepare(sr, &p.output);
+    fn prepare(&mut self, env: &Environment) {
+        self.mix.prepare(env);
+        self.tone.prepare(env);
+        self.drift.prepare(env);
+        self.wind.prepare(env);
+        self.sustain.prepare(env);
+        self.output.prepare(env);
     }
 }
 
-pub struct AeolianEngine {
+pub struct Aeolian {
     params: Arc<AeolianParams>,
     controls: Controls,
-    sr: f32,
+    sample_rate: f32,
     detector: Detector,
     strings: Strings,
     ensemble: Ensemble,
-    tone: Svf,
+    tone: [Svf; 2],
     pans: [[f32; 2]; CLASSES],
-    telemetry: Telemetry,
+    taps: AeolianTaps,
     /// Seconds of audio played (wrapped) — the strings' animation clock.
     clock: f64,
 }
 
-impl stave_core::Processor for AeolianEngine {
+impl Plugin for Aeolian {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.aeolian.vst3",
+        name: "Stave Aeolian",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "A sympathetic string harp: twelve voices that ring with what you play.",
+        features: &[Feature::AudioEffect, Feature::Filter, Feature::Stereo],
+        ..Info::EFFECT
+    };
     type Params = AeolianParams;
 
-    fn new(params: Arc<AeolianParams>) -> Self {
+    fn new(params: &Arc<AeolianParams>, telemetry: &Telemetry) -> Self {
         Self {
-            controls: Controls::new(&params),
-            params,
-            sr: 48_000.0,
+            controls: Controls::new(params),
+            params: params.clone(),
+            sample_rate: 48_000.0,
             detector: Detector::new(),
             strings: Strings::new(),
             ensemble: Ensemble::new(),
-            tone: Svf::new(),
+            tone: [Svf::new(TONE_HI_HZ, TONE_Q); 2],
             pans: pans(),
-            telemetry: Telemetry::new(),
+            taps: AeolianTaps::new(telemetry),
             clock: 0.0,
         }
     }
 
-    fn activate(&mut self, env: Environment) {
-        self.sr = env.sample_rate;
-        self.controls.prepare(f64::from(env.sample_rate), &self.params);
+    fn prepare(&mut self, env: &Environment) {
+        self.sample_rate = env.sample_rate;
+        self.controls.prepare(env);
         self.detector.prepare(env.sample_rate);
         self.strings.prepare(env.sample_rate);
         self.ensemble.prepare(env.sample_rate);
         self.ensemble.reset_to(self.params.air.value());
-        self.tone.prepare(env.sample_rate);
+        for lp in &mut self.tone {
+            lp.prepare(env.sample_rate);
+        }
     }
 
-    fn attach_telemetry(&mut self, bus: Arc<DebugBus>) {
-        self.telemetry.attach(bus);
-    }
-
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
-        let p = self.params.clone();
+    fn process(&mut self, block: &mut Block<'_>) {
+        let p = &self.params;
         // 1. Bind: the register and the switches.
-        let octave = LOW_OCTAVE + p.register.index() as i32;
+        let octave = LOW_OCTAVE + p.register.value().0 as i32;
         let (chorus, vibrato) = (p.air.value(), p.sway.value());
-        let nyq = 0.45 * self.sr;
+        let nyq = 0.45 * self.sample_rate;
 
         // 2. The audio block.
         let c = &mut self.controls;
-        let mut mix_ramp = c.mix.begin_block(ctx.params, &p.mix);
-        let mut tone_ramp = c.tone.begin_block(ctx.params, &p.tone);
-        let mut mod_ramp = c.drift.begin_block(ctx.params, &p.drift);
-        let mut sens_ramp = c.wind.begin_block(ctx.params, &p.wind);
-        let mut fb_ramp = c.sustain.begin_block(ctx.params, &p.sustain);
-        let mut out_ramp = c.output.begin_block(ctx.params, &p.output);
+        let mut mix_ramp = c.mix.ramp(block, &p.mix);
+        let mut tone_ramp = c.tone.ramp(block, &p.tone);
+        let mut mod_ramp = c.drift.ramp(block, &p.drift);
+        let mut sens_ramp = c.wind.ramp(block, &p.wind);
+        let mut fb_ramp = c.sustain.ramp(block, &p.sustain);
+        let mut out_ramp = c.output.ramp(block, &p.output);
         let (detector, strings, ensemble, tone, pans) =
             (&mut self.detector, &mut self.strings, &mut self.ensemble, &mut self.tone, &self.pans);
         let mut frame = 0usize;
 
-        let lanes = ctx.lanes::<2>();
+        let lanes = block.lanes::<2>();
         let active = lanes.active();
         lanes.run(|fr| {
             let (t, m, s, fb) = (tone_ramp.next(), mod_ramp.next(), sens_ramp.next(), fb_ramp.next());
@@ -162,7 +161,10 @@ impl stave_core::Processor for AeolianEngine {
                     wind: s,
                     vibrato: if vibrato { m } else { 0.0 },
                 });
-                tone.set((TONE_LO_HZ * (TONE_HI_HZ / TONE_LO_HZ).powf(t)).min(nyq), 0.1);
+                let hz = (TONE_LO_HZ * (TONE_HI_HZ / TONE_LO_HZ).powf(t)).min(nyq);
+                for lp in tone.iter_mut() {
+                    lp.set(hz, TONE_Q);
+                }
             }
             frame += 1;
 
@@ -177,7 +179,7 @@ impl stave_core::Processor for AeolianEngine {
                 harp[1] += v * g[1];
             }
             let w = ensemble.tick([harp[0] * WET_GAIN, harp[1] * WET_GAIN], chorus, m);
-            let w = [tone.process_lp(w[0], 0), tone.process_lp(w[1], 1)];
+            let w = [tone[0].tick(w[0]), tone[1].tick(w[1])];
 
             let a = mix_ramp.next() * core::f32::consts::FRAC_PI_2;
             // MIX 0 is bit-exact: cos(0) = 1 exactly, sin(0) = 0 exactly.
@@ -192,12 +194,8 @@ impl stave_core::Processor for AeolianEngine {
         });
 
         // 3. What happened, reported out.
-        self.clock = (self.clock + ctx.frames as f64 / f64::from(self.sr)) % 3600.0;
-        self.telemetry.publish(self.strings.levels(), self.clock);
-    }
-
-    fn latency_samples(&self) -> u32 {
-        0
+        self.clock = (self.clock + block.frames() as f64 / f64::from(self.sample_rate)) % 3600.0;
+        self.taps.publish(self.strings.levels(), self.clock);
     }
 
     /// The loops ring for up to their T60; at the top they sustain.
@@ -206,8 +204,16 @@ impl stave_core::Processor for AeolianEngine {
         if p.sustain.value() > 0.97 {
             Tail::Infinite
         } else {
-            Tail::Samples((40.0 * self.sr) as u32)
+            Tail::Samples((40.0 * self.sample_rate) as u32)
         }
+    }
+
+    fn face(params: &AeolianParams) -> Option<Face> {
+        Some(crate::editor::face(params))
+    }
+
+    fn presets(params: &AeolianParams) -> Vec<Preset> {
+        crate::presets::presets(params)
     }
 }
 

@@ -8,13 +8,7 @@
 //!   aeolian                         ✦ [foot]
 //! ```
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// The strings' register, named by its lowest string: C2 puts the
@@ -50,44 +44,48 @@ pub struct AeolianParams {
     pub sway: BoolParam,
 }
 
-impl AeolianParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            mix: FloatParam::new(3, "mix", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Strings")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            tone: FloatParam::new(4, "tone", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Strings")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            drift: FloatParam::new(5, "drift", 0.3, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Motion")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            wind: FloatParam::new(6, "wind", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Strings")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            sustain: FloatParam::new(7, "sustain", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Strings")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            register: EnumParam::new(8, "register", Register(2)).with_group("Strings"),
-            air: BoolParam::new(9, "air", true)
-                .with_group("Motion")
-                .with_names("OFF", "ON"),
-            sway: BoolParam::new(10, "sway", false)
-                .with_group("Motion")
-                .with_names("OFF", "ON"),
-        })
+impl Default for AeolianParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            mix: FloatParam::new(ParamId(3), "mix", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Strings")
+                .smooth(Smooth::ms(10.0)),
+            tone: FloatParam::new(ParamId(4), "tone", unit())
+                .default(0.6)
+                .unit(Unit::Percent)
+                .group("Strings")
+                .smooth(Smooth::ms(30.0)),
+            drift: FloatParam::new(ParamId(5), "drift", unit())
+                .default(0.3)
+                .unit(Unit::Percent)
+                .group("Motion")
+                .smooth(Smooth::ms(40.0)),
+            wind: FloatParam::new(ParamId(6), "wind", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Strings")
+                .smooth(Smooth::ms(30.0)),
+            sustain: FloatParam::new(ParamId(7), "sustain", unit())
+                .default(0.6)
+                .unit(Unit::Percent)
+                .group("Strings")
+                .smooth(Smooth::ms(50.0)),
+            register: EnumParam::new(ParamId(8), "register", Register(2)).group("Strings"),
+            air: BoolParam::new(ParamId(9), "air", true)
+                .group("Motion")
+                .names("OFF", "ON"),
+            sway: BoolParam::new(ParamId(10), "sway", false)
+                .group("Motion")
+                .names("OFF", "ON"),
+        }
     }
 }

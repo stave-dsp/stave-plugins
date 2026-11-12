@@ -12,7 +12,7 @@
 //! semitone neighbour — the band-passes leak, and leakage must not
 //! strum the whole harp.
 
-use stave_dsp::Svf;
+use stave::prelude::*;
 
 pub(super) const CLASSES: usize = 12;
 const OCTAVES: usize = 5;
@@ -53,7 +53,7 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 impl Detector {
     pub(super) fn new() -> Self {
         Self {
-            bands: core::array::from_fn(|_| core::array::from_fn(|_| Svf::new())),
+            bands: core::array::from_fn(|_| core::array::from_fn(|_| Svf::default())),
             norm: 1.0 / Q,
             env: [0.0; CLASSES],
             att: 0.0,
@@ -61,17 +61,16 @@ impl Detector {
         }
     }
 
-    pub(super) fn prepare(&mut self, sr: f32) {
-        let res = 1.0 - 1.0 / (2.0 * Q);
+    pub(super) fn prepare(&mut self, sample_rate: f32) {
         for (c, row) in self.bands.iter_mut().enumerate() {
             for (k, f) in row.iter_mut().enumerate() {
-                f.prepare(sr);
-                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * sr), res);
+                f.prepare(sample_rate);
+                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * sample_rate), Q);
             }
         }
         self.env = [0.0; CLASSES];
-        self.att = 1.0 - (-1000.0 / (ATTACK_MS * sr)).exp();
-        self.rel = 1.0 - (-1000.0 / (RELEASE_MS * sr)).exp();
+        self.att = 1.0 - (-1000.0 / (ATTACK_MS * sample_rate)).exp();
+        self.rel = 1.0 - (-1000.0 / (RELEASE_MS * sample_rate)).exp();
     }
 
     /// One frame of mono input → each class's drive level (its band
@@ -82,7 +81,7 @@ impl Detector {
         for c in 0..CLASSES {
             let mut s = 0.0;
             for f in self.bands[c].iter_mut() {
-                s += f.process(x, 0).bp;
+                s += f.taps(x).bp;
             }
             let a = (s * self.norm).abs();
             let k = if a > self.env[c] { self.att } else { self.rel };
