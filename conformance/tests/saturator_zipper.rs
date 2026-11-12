@@ -75,6 +75,7 @@ fn spray(ty: SaturationCharacter, automate: impl FnMut(&mut BandSaturator, usize
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn automation_adds_nothing_over_the_drive_matched_floor() {
     let tau = 0.05 * FS;
     let drive_traj = move |i: usize| (1.0 + 11.0 * (1.0 - (-(i as f64) / tau).exp())) as f32;

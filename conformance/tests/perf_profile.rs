@@ -1,7 +1,7 @@
 //! Component-level cost attribution — the "what is most expensive" table
 //! the host bench can't see. Run explicitly:
 //!
-//!   cargo test -p stave-test --release --test perf_profile -- --ignored --nocapture
+//!   cargo test -p stave-plugins-conformance --release --test perf_profile -- --ignored --nocapture
 //!
 //! Each primitive is timed standalone at the rate it actually runs in a
 //! plugin (4× inner rate for in-oversampler stages, base rate for the
@@ -15,9 +15,9 @@ use std::time::Instant;
 
 use stave_anvil_vst3::RcCoupledTriodeCascade;
 use stave_dsp::{
-    shapes, Bias, Chain, CurveStage, EnvelopeFollower, EnvelopeTimes, FilterSpec, FilterStage,
-    Frame, Hysteresis, ModMatrix, NonlinearRc, Oversampler2xFir, Oversampler2xFirInner, Route,
-    Slew, SmoothSat, Stage, StageKind, Target, Triode,
+    shapes, Bias, Biquad, Chain, CurveStage, EnvelopeFollower, EnvelopeTimes, FilterSpec, Frame,
+    Hysteresis, ModMatrix, NonlinearRc, Oversampled2x, Route, Slew, SmoothSat, Stage, StageKind,
+    StageTarget, Target, Triode,
 };
 use stave_multiband_comp_vst3::saturation::BandSaturator;
 
@@ -120,12 +120,12 @@ fn component_cost_table() {
     cs.prepare(os_rate);
     rows.push(time_fn("Triode curve @4x", 4.0, |x| cs.tick(x)));
 
-    let mut fs = FilterStage::new(FilterSpec::HighShelf {
+    let mut fs = Biquad::new(FilterSpec::HighShelf {
         hz: 900.0,
         db: -6.0,
     });
     fs.prepare(os_rate);
-    rows.push(time_fn("FilterStage shelf @4x", 4.0, |x| fs.tick(x)));
+    rows.push(time_fn("Biquad shelf @4x", 4.0, |x| fs.tick(x)));
 
     let mut sl = Slew::new(1.0, 1.0);
     sl.prepare(os_rate);
@@ -159,7 +159,7 @@ fn component_cost_table() {
     let bypass_farads = 60e-3 / cathode_biased.cathode_ohms();
     cathode_biased.set_bias(Bias::Cathode { bypass_farads });
     rows.push(time_fn("Triode cathode-biased @4x", 4.0, |x| {
-        cathode_biased.process_sample(x)
+        cathode_biased.tick(x)
     }));
 
     // A Forge-shaped 5-stage chain: curve, shelf, curve, slew, hysteresis.
@@ -169,40 +169,37 @@ fn component_cost_table() {
         6.0,
         0.0,
         shapes::knee(1.6),
-    )));
-    ch.push(StageKind::Filter(FilterStage::new(FilterSpec::HighShelf {
+    )))
+    .unwrap();
+    ch.push(StageKind::Filter(Biquad::new(FilterSpec::HighShelf {
         hz: 900.0,
         db: -6.0,
-    })));
+    })))
+    .unwrap();
     ch.push(StageKind::Curve(CurveStage::from_fn(
         -6.0,
         6.0,
         0.0,
         shapes::knee(4.0),
-    )));
-    ch.push(StageKind::Slew(Slew::new(1.0, 1.0)));
-    ch.push(StageKind::Hysteresis(Hysteresis::new(2.0, 0.5)));
+    )))
+    .unwrap();
+    ch.push(StageKind::Slew(Slew::new(1.0, 1.0))).unwrap();
+    ch.push(StageKind::Hysteresis(Hysteresis::new(2.0, 0.5)))
+        .unwrap();
     ch.prepare(os_rate);
     rows.push(time_fn("Chain<5> forge-like @4x", 4.0, |x| ch.tick(x)));
 
     // ---- Oversamplers (cost per base input sample, identity inner) ------
-    let mut os = Oversampler2xFir::new();
+    // `StageKind::Bypass` is the identity interior.
+    let mut os = Oversampled2x::front(StageKind::Bypass);
     os.prepare(BASE);
-    rows.push(time_fn("Oversampler2xFir (outer pair)", 1.0, |x| {
-        os.process_one(x, |s| s)
-    }));
-    let mut inner = Oversampler2xFirInner::new();
-    inner.prepare(BASE * 2.0);
-    rows.push(time_fn("Oversampler2xFirInner @2x", 2.0, |x| {
-        inner.process_one(x, |s| s)
-    }));
-    let mut os = Oversampler2xFir::new();
+    rows.push(time_fn("Oversampled2x front (pair)", 1.0, |x| os.tick(x)));
+    let mut nested = Oversampled2x::nested(StageKind::Bypass);
+    nested.prepare(BASE * 2.0);
+    rows.push(time_fn("Oversampled2x nested @2x", 2.0, |x| nested.tick(x)));
+    let mut os = Oversampled2x::front(Oversampled2x::nested(StageKind::Bypass));
     os.prepare(BASE);
-    let mut inner = Oversampler2xFirInner::new();
-    inner.prepare(BASE * 2.0);
-    rows.push(time_fn("Nested 4x OS (identity)", 1.0, |x| {
-        os.process_one(x, |s| inner.process_one(s, |t| t))
-    }));
+    rows.push(time_fn("Nested 4x OS (identity)", 1.0, |x| os.tick(x)));
 
     // ---- Base-rate control plane -----------------------------------------
     let mut env = EnvelopeFollower::new(EnvelopeTimes {
@@ -214,12 +211,14 @@ fn component_cost_table() {
     rows.push(time_fn("EnvelopeFollower @base", 1.0, |x| env.tick(x)));
 
     let mut ch2 = Chain::<2>::new();
-    let id = ch2.push(StageKind::Curve(CurveStage::from_fn(
-        -4.0,
-        4.0,
-        0.0,
-        shapes::knee(2.0),
-    )));
+    let id = ch2
+        .push(StageKind::Curve(CurveStage::from_fn(
+            -4.0,
+            4.0,
+            0.0,
+            shapes::knee(2.0),
+        )))
+        .unwrap();
     ch2.prepare(BASE);
     let mut mm = ModMatrix::<1, 4>::new([EnvelopeFollower::new(EnvelopeTimes {
         attack_ms: 5.0,
@@ -228,17 +227,23 @@ fn component_cost_table() {
     })]);
     mm.prepare(BASE);
     mm.push_route(Route {
-        driver: 0,
-        stage: id,
-        target: Target::Bias,
+        source: 0,
+        target: StageTarget {
+            stage: id,
+            target: Target::Bias,
+        },
         amount: 0.4,
-    });
+    })
+    .unwrap();
     mm.push_route(Route {
-        driver: 0,
-        stage: id,
-        target: Target::Gain,
+        source: 0,
+        target: StageTarget {
+            stage: id,
+            target: Target::Gain,
+        },
         amount: 0.3,
-    });
+    })
+    .unwrap();
     let base_frames = [(id, Frame::NEUTRAL)];
     rows.push(time_fn("ModMatrix 1d/2r @base", 1.0, |x| {
         mm.tick(&[x], &mut ch2, &base_frames, &[]);
@@ -246,16 +251,10 @@ fn component_cost_table() {
     }));
 
     // ---- Block API: same components, block dispatch ------------
-    let mut os = Oversampler2xFir::new();
+    let mut os = Oversampled2x::front(Oversampled2x::nested(StageKind::Bypass));
     os.prepare(BASE);
-    let mut inner = Oversampler2xFirInner::new();
-    inner.prepare(BASE * 2.0);
-    let mut up2 = vec![0.0f32; 2 * BLOCK];
-    let mut up4 = vec![0.0f32; 4 * BLOCK];
     rows.push(time_block_fn("Nested 4x OS block(128) ident", 1.0, |io| {
-        os.process_block(io, &mut up2, |b2| {
-            inner.process_block(b2, &mut up4, |_b4| {});
-        });
+        os.process(io);
     }));
 
     let mut chb = Chain::<5>::new();
@@ -264,22 +263,26 @@ fn component_cost_table() {
         6.0,
         0.0,
         shapes::knee(1.6),
-    )));
-    chb.push(StageKind::Filter(FilterStage::new(FilterSpec::HighShelf {
+    )))
+    .unwrap();
+    chb.push(StageKind::Filter(Biquad::new(FilterSpec::HighShelf {
         hz: 900.0,
         db: -6.0,
-    })));
+    })))
+    .unwrap();
     chb.push(StageKind::Curve(CurveStage::from_fn(
         -6.0,
         6.0,
         0.0,
         shapes::knee(4.0),
-    )));
-    chb.push(StageKind::Slew(Slew::new(1.0, 1.0)));
-    chb.push(StageKind::Hysteresis(Hysteresis::new(2.0, 0.5)));
+    )))
+    .unwrap();
+    chb.push(StageKind::Slew(Slew::new(1.0, 1.0))).unwrap();
+    chb.push(StageKind::Hysteresis(Hysteresis::new(2.0, 0.5)))
+        .unwrap();
     chb.prepare(os_rate);
     rows.push(time_block_fn("Chain<5> block(128) @4x", 4.0, |io| {
-        chb.process_block(io);
+        chb.process(io);
     }));
 
     // ---- Full engines (own their oversampling; cost per base sample) ----
@@ -308,7 +311,7 @@ fn component_cost_table() {
     let mut tri = Triode::new();
     tri.prepare(BASE);
     tri.set_grid_drive(11.11);
-    rows.push(time_fn("Triode (full)", 1.0, |x| tri.process_sample(x)));
+    rows.push(time_fn("Triode (full)", 1.0, |x| tri.tick(x)));
 
     // ---- Report ----------------------------------------------------------
     rows.sort_by(|a, b| {

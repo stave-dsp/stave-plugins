@@ -6,20 +6,34 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Cross-plugin conformance: plugin engines measured against the framework's alias, zipper, invariance and preset contracts."
+description = "Cross-plugin conformance: every plugin's identity pinned, and plugin engines measured against the framework's alias, zipper, invariance and preset contracts."
 publish = false
 
 [lib]
 path = "src/lib.rs"
 
 [dev-dependencies]
-stave-core.workspace = true
+stave.workspace = true
 stave-dsp.workspace = true
 stave-host.workspace = true
 stave-measure.workspace = true
+stave-aeolian-vst3 = { path = "../plugins/aeolian" }
 stave-anvil-vst3 = { path = "../plugins/anvil" }
+stave-chime-vst3 = { path = "../plugins/chime" }
+stave-dynamo-vst3 = { path = "../plugins/dynamo" }
+stave-eddy-vst3 = { path = "../plugins/eddy" }
+stave-engram-vst3 = { path = "../plugins/engram" }
 stave-forge-vst3 = { path = "../plugins/forge" }
+stave-halo-vst3 = { path = "../plugins/halo" }
+stave-heirloom-vst3 = { path = "../plugins/heirloom" }
 stave-multiband-comp-vst3 = { path = "../plugins/multiband-comp" }
+stave-opal-vst3 = { path = "../plugins/opal" }
+stave-revenant-vst3 = { path = "../plugins/revenant" }
+stave-ribbon-vst3 = { path = "../plugins/ribbon" }
+stave-saga-vst3 = { path = "../plugins/saga" }
+stave-smear-vst3 = { path = "../plugins/smear" }
+stave-tolex-vst3 = { path = "../plugins/tolex" }
+stave-vault-vst3 = { path = "../plugins/vault" }
 
 [lints]
 workspace = true

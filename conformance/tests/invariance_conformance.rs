@@ -10,13 +10,13 @@
 //!   block boundary must be a bit-exact no-op (catches per-block filter
 //!   resets / zipper classes).
 
+mod common;
+
+use common::Velvet4x;
 use stave_anvil_vst3::RcCoupledTriodeCascade;
-use stave_dsp::{
-    Bias, EnvelopeFollower, EnvelopeTimes, Oversampler2xFir, Oversampler2xFirInner, SmoothSat,
-    Triode,
-};
+use stave_dsp::{Bias, EnvelopeFollower, EnvelopeTimes, SmoothSat, Source, Stage, Triode};
 use stave_measure::dynamics::time_to_fraction;
-use stave_measure::tone_test::ToneTest;
+use stave_measure::tone_window::ToneWindow;
 
 /// The cathode self-bias `time_ms` sets the PHYSICAL cathode RC. Measure
 /// the observed bias-shift decay in silence, at three rates.
@@ -34,6 +34,7 @@ use stave_measure::tone_test::ToneTest;
 ///    preparing at the host rate while ticking inside a 2×/4×
 ///    oversampler — was a clean 2×/4× error, far outside this band.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn cathode_tau_is_rate_invariant() {
     let tau_ms = 60.0f32;
     let mut measured = vec![];
@@ -49,12 +50,12 @@ fn cathode_tau_is_rate_invariant() {
         for i in 0..drive_samples {
             let s =
                 0.8 * (2.0 * core::f64::consts::PI * 200.0 * i as f64 / sample_rate).sin() as f32;
-            let _ = t.process_sample(s);
+            let _ = t.tick(s);
         }
         // Silence: record the bias shift decaying toward 0.
         let mut shift = Vec::with_capacity((sample_rate * 0.5) as usize);
         for _ in 0..(sample_rate * 0.5) as usize {
-            let _ = t.process_sample(0.0);
+            let _ = t.tick(0.0);
             shift.push(t.bias_shift() as f32);
         }
         let k = time_to_fraction(&shift, (-1.0f32).exp())
@@ -87,6 +88,7 @@ fn cathode_tau_is_rate_invariant() {
 /// Memory's envelope presets are labelled in ms; the TubeBias release is
 /// exactly one pole of the labelled τ, so the limit is tight (±10%).
 #[test]
+#[cfg_attr(miri, ignore)]
 fn memory_time_is_rate_invariant() {
     let tau_ms = 120.0f32;
     let mut measured = vec![];
@@ -132,6 +134,7 @@ fn memory_time_is_rate_invariant() {
 /// silently 4× off when the cascade was prepared at the host rate but
 /// run inside the 4× oversampler.)
 #[test]
+#[cfg_attr(miri, ignore)]
 fn preamp_coupling_cutoff_is_rate_invariant() {
     let coupling_hz = 41.0f32; // sits exactly on a bin at both rates below
     for (sample_rate, n) in [(48_000.0f64, 16_384usize), (96_000.0, 32_768)] {
@@ -147,7 +150,7 @@ fn preamp_coupling_cutoff_is_rate_invariant() {
             p.set_blocking_depth(0.0);
             // Small amplitude keeps the triode in its linear region so the
             // response measurement isn't polluted by harmonics.
-            ToneTest {
+            ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate,
@@ -169,16 +172,13 @@ fn preamp_coupling_cutoff_is_rate_invariant() {
 /// bit-exact no-op. (The regression class: per-block `set_*` calls that
 /// reset filter state — a discontinuity every buffer, audible as zipper.)
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothsat_chain_is_block_size_invariant() {
     let sample_rate = 48_000.0f64;
     let n = 8192usize;
     let render = |block: usize| -> Vec<f32> {
-        let mut s = SmoothSat::new();
-        s.prepare(sample_rate as f32);
-        let mut outer = Oversampler2xFir::new();
-        outer.prepare(sample_rate as f32);
-        let mut inner = Oversampler2xFirInner::new();
-        inner.prepare(sample_rate as f32 * 2.0);
+        let mut velvet = Velvet4x::new();
+        velvet.prepare(sample_rate as f32);
         let apply = |s: &mut SmoothSat| {
             s.set_drive(1.6);
             s.set_even(0.15);
@@ -189,14 +189,12 @@ fn smoothsat_chain_is_block_size_invariant() {
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
             if i % block == 0 {
-                apply(&mut s);
+                apply(velvet.sat());
             }
             let x = (0.7 * (2.0 * core::f64::consts::PI * 171.0 * i as f64 / n as f64).sin()
                 + 0.2 * (2.0 * core::f64::consts::PI * 1195.0 * i as f64 / n as f64).sin())
                 as f32;
-            let pre = s.process_pre(x);
-            let shaped = outer.process_one(pre, |a| inner.process_one(a, |b| s.shape(b)));
-            out.push(s.process_post(shaped));
+            out.push(velvet.tick(x));
         }
         out
     };

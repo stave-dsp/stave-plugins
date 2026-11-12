@@ -6,11 +6,12 @@
 //! decimator's deliberate transition-shoulder trade. Both numbers are
 //! printed so the trade stays visible.
 
-use stave_dsp::{
-    EnvelopeFollower, EnvelopeTimes, Oversampler2xFir, Oversampler2xFirInner, SmoothSat, Triode,
-};
+mod common;
+
+use common::Velvet4x;
+use stave_dsp::{EnvelopeFollower, EnvelopeTimes, Oversampled2x, SmoothSat, Source, Stage, Triode};
 use stave_measure::spectrum::goertzel;
-use stave_measure::tone_test::{ToneTest, TwoToneTest};
+use stave_measure::tone_window::{ToneWindow, TwoToneWindow};
 use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
 
 /// Triode + 1st-order LUT-ADAA inside a single 2× FIR half-band, swept
@@ -18,6 +19,7 @@ use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
 /// (Butterworth) ceiling was −31…−41 dB *full-band*. The audible-band
 /// residual is the ADAA machinery's own inner-rate fold, measured here.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn triode_2x_audible_alias_matrix() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -25,20 +27,19 @@ fn triode_2x_audible_alias_matrix() {
     for (label, m) in [("~5 kHz", 853usize), ("~7 kHz", 1195), ("~9 kHz", 1536)] {
         // Grid volts per unit: hot (25 V) and extreme (110 V).
         for drive in [25.34, 110.4] {
-            let mut t = Triode::new();
-            // Rate contract: the triode ticks at 2× inside the oversampler.
-            t.prepare(fs as f32 * 2.0);
-            t.set_grid_drive(drive);
-            let mut os = Oversampler2xFir::new();
+            // Rate contract: the triode ticks at 2× inside the oversampler,
+            // and the region prepares its interior at that rate.
+            let mut os = Oversampled2x::front(Triode::new());
             os.prepare(fs as f32);
-            let r = ToneTest {
+            os.inner.set_grid_drive(drive);
+            let r = ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate: fs,
                 amplitude: 0.5,
                 warmup_windows: 1,
             }
-            .alias(|x: f32| os.process_one(x, |s| t.process_sample(s)));
+            .alias(|x: f32| os.tick(x));
             println!(
                 "triode 2×  {label} drive {drive:>5.1} V: audible {:>6.1} dB (full {:>6.1} dB)",
                 r.audible_db, r.full_db
@@ -61,6 +62,7 @@ fn triode_2x_audible_alias_matrix() {
 /// The full production tube path: BandSaturator (nested 4× FIR + ADAA triode
 /// + level makeup), hot and bright. This is the headline number.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn saturator_tube_4x_audible_alias() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -77,8 +79,8 @@ fn saturator_tube_4x_audible_alias() {
             sat.set_mix(1.0);
             sat.set_drive_db(drive);
             // Warm-up: 2 windows > the 80 ms makeup-envelope release and
-            // the 99-sample latency, so the capture is steady-state.
-            let r = ToneTest {
+            // the 84-sample latency, so the capture is steady-state.
+            let r = ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate: fs,
@@ -112,31 +114,25 @@ fn saturator_tube_4x_audible_alias() {
 /// Velvet's engine: SmoothSat through the same nested 4× FIR stack, at
 /// its default-ish settings, on a bright tone.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothsat_4x_audible_alias() {
     let fs = 48_000.0;
     let n = 8192usize;
     let m = 1195usize; // ~7 kHz
-    let mut s = SmoothSat::new();
-    s.prepare(fs as f32);
+    let mut velvet = Velvet4x::new();
+    velvet.prepare(fs as f32);
+    let s = velvet.sat();
     s.set_drive(1.6);
     s.set_smoothness(0.7);
     s.set_hf_smoothing(4.0);
-    let mut outer = Oversampler2xFir::new();
-    outer.prepare(fs as f32);
-    let mut inner = Oversampler2xFirInner::new();
-    inner.prepare(fs as f32 * 2.0);
-    let r = ToneTest {
+    let r = ToneWindow {
         bin: m,
         window: n,
         sample_rate: fs,
         amplitude: 0.7,
         warmup_windows: 2,
     }
-    .alias(|x: f32| {
-        let pre = s.process_pre(x);
-        let shaped = outer.process_one(pre, |a| inner.process_one(a, |b| s.shape(b)));
-        s.process_post(shaped)
-    });
+    .alias(|x: f32| velvet.tick(x));
     println!(
         "smoothsat 4× ~7 kHz: audible {:.1} dB (full {:.1} dB)",
         r.audible_db, r.full_db
@@ -157,12 +153,13 @@ fn smoothsat_4x_audible_alias() {
 /// (drive 0 / bypass) must take the SAME delay so latency is constant
 /// across settings.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn saturator_wet_dry_and_bypass_are_time_aligned() {
     let fs = 48_000.0f32;
     let lat = {
         let mut sat = BandSaturator::new();
         sat.prepare(fs);
-        sat.latency_samples() as usize
+        sat.latency() as usize
     };
     // Peak index of an impulse response for a given config.
     let peak_index = |mix: f32, drive: f32| -> usize {
@@ -194,6 +191,7 @@ fn saturator_wet_dry_and_bypass_are_time_aligned() {
 /// failure mode for bright material; SmoothSat's HF companding exists to
 /// crush it — that claim gets a number and a limit here.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothsat_companding_cuts_ccif_imd() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -204,14 +202,14 @@ fn smoothsat_companding_cuts_ccif_imd() {
         s.set_drive(1.8);
         s.set_smoothness(0.6);
         s.set_hf_smoothing(hf);
-        TwoToneTest {
+        TwoToneWindow {
             low_bin: m1,
             high_bin: m2,
             window: n,
             amplitude: 0.4,
             warmup_windows: 1,
         }
-        .ccif_db(|x: f32| s.process(x))
+        .ccif_db(|x: f32| s.tick(x))
     };
     let off = imd_for(0.0);
     let on = imd_for(10.0);
@@ -232,6 +230,7 @@ fn smoothsat_companding_cuts_ccif_imd() {
 /// bias, so under sustained level h2 must bloom from ~nothing, and the
 /// model must recover in silence.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -257,7 +256,7 @@ fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
     let step = |x: f32, mem: &mut EnvelopeFollower, s: &mut SmoothSat| -> f32 {
         let st = (mem.tick(x.abs()) * depth).min(2.0);
         s.set_bias((st * 0.3).clamp(0.0, 0.75));
-        s.process(x) * (1.0 - 0.33 * st).max(0.0)
+        s.tick(x) * (1.0 - 0.33 * st).max(0.0)
     };
     let sig = |i: usize| {
         0.6 * (2.0 * core::f64::consts::PI * m as f64 * i as f64 / n as f64).sin() as f32
@@ -275,10 +274,7 @@ fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
         s0.set_odd(0.25);
         s0.set_smoothness(0.7);
         s0.set_hf_smoothing(0.0);
-        let out: Vec<f64> = (0..2 * n)
-            .map(|i| s0.process(sig(i)) as f64)
-            .skip(n)
-            .collect();
+        let out: Vec<f64> = (0..2 * n).map(|i| s0.tick(sig(i)) as f64).skip(n).collect();
         20.0 * h2_of(&out).log10()
     };
     // Settle the model (τ = 120 ms ⇒ 5 windows ≈ 0.85 s ≫ 5τ), capture.
@@ -326,6 +322,7 @@ fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
 ///    lobe back (rectification). Bounded, not eliminated — it is the
 ///    sound the setting asks for.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothness_fold_back_is_bounded_and_vanishes() {
     // Total descent (cumulative fold-back) of the transfer over x ∈ [−2, 2].
     let fold_back = |even: f32, odd: f32, smooth: f32| -> f32 {
@@ -404,6 +401,7 @@ fn smoothness_fold_back_is_bounded_and_vanishes() {
 /// hold: IMD ~vanishes at zero drive (the stage is calibrated ~linear
 /// there) and grows monotonically with drive.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn saturator_tube_smpte_imd_grows_with_drive_from_clean() {
     let fs = 48_000.0f32;
     let n = 8192usize;
@@ -415,7 +413,7 @@ fn saturator_tube_smpte_imd_grows_with_drive_from_clean() {
         sat.set_type(SaturationCharacter::Tube);
         sat.set_mix(1.0);
         sat.set_drive_db(drive);
-        let imd = TwoToneTest {
+        let imd = TwoToneWindow {
             low_bin: m1,
             high_bin: m2,
             window: n,
@@ -442,8 +440,8 @@ fn saturator_tube_smpte_imd_grows_with_drive_from_clean() {
 /// shape across the recipe matrix to interpolation precision. This is
 /// the unification contract: one representation, no drift.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothsat_curve_stage_bridge_is_faithful() {
-    use stave_dsp::Stage as _;
     let mut worst = 0.0f64;
     for &(even, odd, smooth) in &[
         (0.15f32, 0.10f32, 0.7f32),

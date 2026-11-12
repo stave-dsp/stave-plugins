@@ -23,8 +23,11 @@
 //! band reaches down to exactly 20 kHz, which is why these tests run at
 //! 44.1 kHz as well as 48 kHz.
 
-use stave_dsp::{Oversampler2xFir, Oversampler2xFirInner, SmoothSat};
-use stave_measure::tone_test::ToneTest;
+mod common;
+
+use common::Velvet4x;
+use stave_dsp::{SmoothSat, Stage};
+use stave_measure::tone_window::ToneWindow;
 use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
 
 /// Companding reciprocity: with the shaper ~linear (tiny signal, gentle
@@ -34,6 +37,7 @@ use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
 /// near Nyquist. A reciprocity error would read as a treble shift that
 /// grows with the smooth-highs knob.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn companding_shelves_cancel_exactly_up_to_20k() {
     for fs in [44_100.0f64, 48_000.0] {
         let n = 8192usize;
@@ -42,28 +46,21 @@ fn companding_shelves_cancel_exactly_up_to_20k() {
         let m_ref = (1_000.0 * n as f64 / fs) as usize;
         let probes = [(8_000.0), (12_000.0), (16_000.0), (18_500.0)];
         let chain_gain = |m: usize| -> f64 {
-            let mut s = SmoothSat::new();
-            s.prepare(fs as f32);
+            let mut velvet = Velvet4x::new();
+            velvet.prepare(fs as f32);
+            let s = velvet.sat();
             s.set_drive(0.5);
             s.set_hf_smoothing(18.0); // deepest companding = worst case
-            let mut outer = Oversampler2xFir::new();
-            outer.prepare(fs as f32);
-            let mut inner = Oversampler2xFirInner::new();
-            inner.prepare(fs as f32 * 2.0);
-            // Tiny amplitude keeps the Chebyshev shape in its linear
-            // region, so the measurement isolates the FILTERS.
-            ToneTest {
+                                      // Tiny amplitude keeps the Chebyshev shape in its linear
+                                      // region, so the measurement isolates the FILTERS.
+            ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate: fs,
                 amplitude: 0.02,
                 warmup_windows: 1,
             }
-            .gain_db(|x: f32| {
-                let pre = s.process_pre(x);
-                let sh = outer.process_one(pre, |a| inner.process_one(a, |b| s.shape(b)));
-                s.process_post(sh)
-            })
+            .gain_db(|x: f32| velvet.tick(x))
         };
         let g_ref = chain_gain(m_ref);
         let mut worst = 0.0f64;
@@ -95,6 +92,7 @@ fn companding_shelves_cancel_exactly_up_to_20k() {
 /// audible-band energy besides the fundamental is alias/artifact.
 /// Run at both 44.1 kHz (shoulder reaches 20 kHz) and 48 kHz.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn saturator_tube_is_clean_on_near_nyquist_tones() {
     let n = 8192usize;
     let mut worst = -300.0f64;
@@ -106,7 +104,7 @@ fn saturator_tube_is_clean_on_near_nyquist_tones() {
             sat.set_type(SaturationCharacter::Tube);
             sat.set_mix(1.0);
             sat.set_drive_db(12.0);
-            let r = ToneTest {
+            let r = ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate: fs,
@@ -139,33 +137,27 @@ fn saturator_tube_is_clean_on_near_nyquist_tones() {
 
 /// Same sweep through the Velvet chain (SmoothSat + nested 4×).
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothsat_is_clean_on_near_nyquist_tones() {
     let n = 8192usize;
     let mut worst = -300.0f64;
     for fs in [44_100.0f64, 48_000.0] {
         for hz in [12_000.0f64, 15_000.0, 18_000.0] {
             let m = (hz * n as f64 / fs).round() as usize;
-            let mut s = SmoothSat::new();
-            s.prepare(fs as f32);
+            let mut velvet = Velvet4x::new();
+            velvet.prepare(fs as f32);
+            let s = velvet.sat();
             s.set_drive(1.6);
             s.set_smoothness(0.7);
             s.set_hf_smoothing(4.0);
-            let mut outer = Oversampler2xFir::new();
-            outer.prepare(fs as f32);
-            let mut inner = Oversampler2xFirInner::new();
-            inner.prepare(fs as f32 * 2.0);
-            let r = ToneTest {
+            let r = ToneWindow {
                 bin: m,
                 window: n,
                 sample_rate: fs,
                 amplitude: 0.7,
                 warmup_windows: 2,
             }
-            .alias(|x: f32| {
-                let pre = s.process_pre(x);
-                let sh = outer.process_one(pre, |a| inner.process_one(a, |b| s.shape(b)));
-                s.process_post(sh)
-            });
+            .alias(|x: f32| velvet.tick(x));
             println!(
                 "velvet 4× {:.1} kHz @ {:.1}k: audible {:>6.1} dB (full {:>6.1} dB)",
                 hz / 1000.0,
@@ -197,6 +189,7 @@ fn smoothsat_is_clean_on_near_nyquist_tones() {
 /// like a low-pass. With slope normalisation, a quiet 12 kHz probe must
 /// pass at identical gain at every smoothness (and every odd weight).
 #[test]
+#[cfg_attr(miri, ignore)]
 fn smoothness_does_not_regain_quiet_highs() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -210,14 +203,14 @@ fn smoothness_does_not_regain_quiet_highs() {
         s.set_smoothness(smooth);
         s.set_hf_smoothing(0.0);
         // Amplitude far below the knee: measures the small-signal gain.
-        ToneTest {
+        ToneWindow {
             bin: m,
             window: n,
             sample_rate: fs,
             amplitude: 0.02,
             warmup_windows: 1,
         }
-        .gain_db(|x: f32| s.process(x))
+        .gain_db(|x: f32| s.tick(x))
     };
     let mut worst = 0.0f64;
     let reference = gain_at(0.0, 0.12);
@@ -240,6 +233,7 @@ fn smoothness_does_not_regain_quiet_highs() {
 /// quiet or hot input (LUT edges, envelope makeup, table extrapolation
 /// are all level-dependent machinery).
 #[test]
+#[cfg_attr(miri, ignore)]
 fn saturator_alias_floor_holds_across_input_levels() {
     let fs = 48_000.0;
     let n = 8192usize;
@@ -251,7 +245,7 @@ fn saturator_alias_floor_holds_across_input_levels() {
         sat.set_type(SaturationCharacter::Tube);
         sat.set_mix(1.0);
         sat.set_drive_db(12.0);
-        let r = ToneTest {
+        let r = ToneWindow {
             bin: m,
             window: n,
             sample_rate: fs,
