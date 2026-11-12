@@ -249,14 +249,29 @@ fn voices_place_energy_differently() {
     let names = ["FLAT", "SCOOP", "BUMP", "BRIGHT", "DARK", "HONK"];
     // Profile = fundamental gain at f, relative to the 200 Hz anchor —
     // measured THROUGH the full nonlinear chain, which is the point.
+    // Every voice × tone is its own rig: the voices run side by side.
+    let voices: Vec<usize> = (0..6).collect();
+    let gains = std::thread::scope(|s| {
+        let runs: Vec<_> = voices
+            .iter()
+            .map(|&v| {
+                let freqs = &freqs;
+                s.spawn(move || {
+                    freqs
+                        .iter()
+                        .map(|&f| {
+                            let mut r = rig(&[("stack", 1.0), ("filter", v as f64)]);
+                            let out = r.render_tone(f, 0.35, 0.8);
+                            20.0 * (goertzel(&out, f) / 0.35).log10()
+                        })
+                        .collect::<Vec<f64>>()
+                })
+            })
+            .collect();
+        runs.into_iter().map(|r| r.join().expect("a render panicked")).collect::<Vec<_>>()
+    });
     let mut profiles: Vec<Vec<f64>> = vec![];
-    for v in 0..6 {
-        let mut p = vec![];
-        for &f in &freqs {
-            let mut r = rig(&[("stack", 1.0), ("filter", v as f64)]);
-            let out = r.render_tone(f, 0.35, 0.8);
-            p.push(20.0 * (goertzel(&out, f) / 0.35).log10());
-        }
+    for (v, p) in gains.into_iter().enumerate() {
         let anchor = p[0];
         let rel: Vec<f64> = p.iter().map(|g| g - anchor).collect();
         println!(

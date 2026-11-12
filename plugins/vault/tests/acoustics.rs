@@ -28,7 +28,7 @@
 //! exists (no dispersion chirp yet — recorded, not pretended).
 
 mod common;
-use common::render_stereo;
+use common::{render_stereo, side_by_side};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -410,28 +410,30 @@ fn the_scoreboard() {
     println!(
         "  (flut note: tank-only classes read SLOW ENVELOPE BEATING (finite mode density), not repetition — probe showed monotone acf, no line-period peak; ER masks it in room classes; cure = mode density, on the roadmap)"
     );
-    for (name, _t60, set, secs) in classes() {
-        for ex in [Excite::Impulse, Excite::Burst] {
-            let m = measure(&set, ex, secs);
-            println!(
-                "  {:<9} {:<5} {:>6.2} {:>7.2} {:>7.2} {:>7.3} {:>7.2} {:>6.1} {:>6.2} {:>6.0} {:>6.2} {:>6.2} {:>6.1} {:>6.2} {:>6.2}",
-                name,
-                if ex == Excite::Impulse { "imp" } else { "burst" },
-                m.t30,
-                m.edt / m.t30,
-                m.residual,
-                m.ned_t90,
-                m.ned_at25,
-                m.c80,
-                m.d50,
-                m.ts,
-                m.iacc_early,
-                m.iacc_late,
-                m.ridge,
-                m.flutter,
-                m.peak,
-            );
-        }
+    let runs: Vec<(Class, Excite)> = classes()
+        .into_iter()
+        .flat_map(|class| [Excite::Impulse, Excite::Burst].map(|ex| (class.clone(), ex)))
+        .collect();
+    let measured = side_by_side(&runs, |((_, _, set, secs), ex)| measure(set, *ex, *secs));
+    for (((name, _, _, _), ex), m) in runs.iter().zip(measured) {
+        println!(
+            "  {:<9} {:<5} {:>6.2} {:>7.2} {:>7.2} {:>7.3} {:>7.2} {:>6.1} {:>6.2} {:>6.0} {:>6.2} {:>6.2} {:>6.1} {:>6.2} {:>6.2}",
+            name,
+            if *ex == Excite::Impulse { "imp" } else { "burst" },
+            m.t30,
+            m.edt / m.t30,
+            m.residual,
+            m.ned_t90,
+            m.ned_at25,
+            m.c80,
+            m.d50,
+            m.ts,
+            m.iacc_early,
+            m.iacc_late,
+            m.ridge,
+            m.flutter,
+            m.peak,
+        );
     }
 }
 

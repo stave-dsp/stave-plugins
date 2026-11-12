@@ -60,3 +60,13 @@ pub fn render_stereo_lr(set: &[(&str, f64)], in_l: &[f32], in_r: &[f32], extra_b
 pub fn render(set: &[(&str, f64)], input: &[f32], extra_blocks: usize) -> Vec<f32> {
     render_stereo(set, input, extra_blocks).0
 }
+
+/// `f` of each item, each on its own thread (every render is its own
+/// instance), in order.
+pub fn side_by_side<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    std::thread::scope(|s| {
+        let f = &f;
+        let runs: Vec<_> = items.iter().map(|i| s.spawn(move || f(i))).collect();
+        runs.into_iter().map(|r| r.join().expect("a render panicked")).collect()
+    })
+}

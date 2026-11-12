@@ -8,7 +8,7 @@
 //! machines (MEMORY) are fed fairly.
 
 mod common;
-use common::render;
+use common::{render, side_by_side};
 
 const FS: f32 = 48_000.0;
 
@@ -71,14 +71,8 @@ fn comb_regularity(mag: &[f64], bin_hz: f64) -> f64 {
 /// that sounds right).
 #[test]
 fn every_machine_passes_the_metal_meter() {
-    let mut fails: Vec<String> = Vec::new();
-    for (name, topo) in [
-        ("ROOM", 0.0),
-        ("PLATE", 1.0),
-        ("MEMORY", 2.0),
-        ("DETONATE", 3.0),
-        ("VOID", 4.0),
-    ] {
+    let machines = [("ROOM", 0.0), ("PLATE", 1.0), ("MEMORY", 2.0), ("DETONATE", 3.0), ("VOID", 4.0)];
+    let measured = side_by_side(&machines, |&(name, topo)| {
         let mut set = vec![
             ("mix", 1.0),
             ("predelay", 0.0),
@@ -95,8 +89,10 @@ fn every_machine_passes_the_metal_meter() {
         let out = render(&set, &burst(), 700);
         let mag = late_spectrum(&out, from_s, 800, 400.0, 6_000.0);
         let bin_hz = (6_000.0 - 400.0) / 799.0;
-        let f = flatness(&mag);
-        let c = comb_regularity(&mag, bin_hz);
+        (flatness(&mag), comb_regularity(&mag, bin_hz))
+    });
+    let mut fails: Vec<String> = Vec::new();
+    for ((name, _), (f, c)) in machines.iter().zip(measured) {
         println!("  {name:<9} flatness {f:.3}  comb {c:.3}");
         if f < 0.10 || c > 0.60 {
             fails.push(format!("{name}: flatness {f:.3} comb {c:.3}"));
