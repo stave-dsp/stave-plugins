@@ -38,9 +38,15 @@ if [[ "$FORMATS" != vst3 ]]; then
   command -v clap-validator >/dev/null || { echo "clap-validator not on PATH" >&2; exit 2; }
   for c in "${crates[@]}"; do make_bundle "$c" release "$OUT_DIR" clap >/dev/null; done
   for b in "$OUT_DIR"/*.clap; do
-    result=$(clap-validator validate "$b" 2>&1 | tail -1)
+    # clap-validator exits non-zero when a test fails; keep going and
+    # show the failures instead of dying silently under pipefail.
+    out=$(clap-validator validate "$b" 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' || true)
+    result=$(printf '%s\n' "$out" | tail -1)
     echo "$(basename "$b"): $result"
-    [[ "$result" == *" 0 failed"* ]] || fail=1
+    if [[ "$result" != *" 0 failed"* ]]; then
+      printf '%s\n' "$out" | grep -iE 'failed|error|warning' | head -40
+      fail=1
+    fi
   done
 fi
 exit "$fail"
