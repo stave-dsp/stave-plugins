@@ -43,23 +43,33 @@ against the framework's alias, zipper, invariance and preset contracts.
 
 ## Building
 
-The plugins build against a sibling checkout of the framework:
+The framework is a cargo git dependency pinned to a stave release tag
+(see `[workspace.dependencies]` in `Cargo.toml`), so a plain clone builds:
 
 ```sh
-git clone https://github.com/stave-dsp/stave
-git clone https://github.com/stave-dsp/stave-plugins
-cd stave-plugins
+git clone https://github.com/stave-dsp/stave-plugins && cd stave-plugins
 
 # Build + bundle + validate + install one plugin (fresh inodes —
 # never cp -R over a loaded bundle):
 bash scripts/install.sh stave-eddy-vst3 release
 
-# Open it in stave's host:
-cargo run --release --manifest-path ../stave/Cargo.toml -p stave-play -- \
-  "$PWD/build/StaveEddy.vst3"
+# Install stave's host tools at the same tag, then open the plugin:
+cargo install --locked --git https://github.com/stave-dsp/stave --tag v0.1.0 stave-play stave-bench
+stave-play build/StaveEddy.vst3
 ```
 
 `scripts/bundle-all.sh` builds and installs every plugin.
+
+### Working on the framework at the same time
+
+```sh
+git clone https://github.com/stave-dsp/stave ../stave
+scripts/link-framework.sh          # build against ../stave instead of the tag
+scripts/link-framework.sh --off    # back to the pinned tag before committing
+```
+
+CI rejects a commit made while linked. To ship framework changes, tag a
+stave release and bump the tag in `Cargo.toml`.
 
 ## The gates
 

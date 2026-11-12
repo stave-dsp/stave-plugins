@@ -43,21 +43,22 @@ missing_safety_doc = "deny"
 needless_range_loop = "allow"
 
 [workspace.dependencies]
-# The framework, from a sibling checkout of github.com/stave-dsp/stave
-# (clone both repos side by side; CI does the same).
+# The framework, pinned to a release tag of github.com/stave-dsp/stave.
+# Upgrade by bumping the tag (all twelve together). To co-edit a sibling
+# checkout at ../stave instead, see scripts/link-framework.sh.
 libc = "0.2"
-stave-ui = { path = "../stave/crates/stave-ui" }
-stave-ui-cocoa = { path = "../stave/crates/stave-ui-cocoa" }
-stave-raster = { path = "../stave/crates/stave-raster" }
-stave-macros = { path = "../stave/crates/stave-macros" }
-stave-core = { path = "../stave/crates/stave-core" }
-stave-clap = { path = "../stave/crates/stave-clap" }
-stave-vst3 = { path = "../stave/crates/stave-vst3" }
-stave-debug = { path = "../stave/crates/stave-debug" }
-stave-dsp = { path = "../stave/crates/stave-dsp" }
-stave-test = { path = "../stave/crates/stave-test" }
-stave-host = { path = "../stave/crates/stave-host" }
-stave-measure = { path = "../stave/crates/stave-measure" }
+stave-ui = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-ui-cocoa = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-raster = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-macros = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-core = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-clap = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-vst3 = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-debug = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-dsp = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-test = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-host = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
+stave-measure = { git = "https://github.com/stave-dsp/stave", tag = "v0.1.0" }
 thiserror = "2"
 
 [profile.release]

@@ -12,3 +12,8 @@ rustflags = ["-C", "target-cpu=apple-m1"]
 # the user's log directory.
 [env]
 STAVE_LOG_DIR = { value = "target/logs", relative = true }
+
+# Fetch the framework with the git CLI so private-repo credentials
+# (gh, keychain, CI's deploy key) work the way plain `git` does.
+[net]
+git-fetch-with-cli = true

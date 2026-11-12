@@ -1,10 +1,8 @@
-# CI for the plugin suite. The plugins build against the framework at
-# ../stave, so every job checks out both repos side by side:
-#   $GITHUB_WORKSPACE/stave-plugins   (this repo)
-#   $GITHUB_WORKSPACE/stave           (github.com/stave-dsp/stave, main)
-# Builds are not --locked: the framework tracks its main branch, so a
-# new framework dependency would otherwise fail here until this lock
-# file caught up.
+# CI for the plugin suite. The framework is a cargo git dependency pinned
+# to a release tag of github.com/stave-dsp/stave (Cargo.lock records the
+# commit), so builds are --locked. While the framework repo is private,
+# jobs fetch it with a read-only deploy key (secret STAVE_DEPLOY_KEY);
+# once it is public that step skips itself.
 name: ci
 
 on:
@@ -12,9 +10,6 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  # Lets the framework (or you) re-run this suite after a framework change.
-  repository_dispatch:
-    types: [framework-updated]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -25,10 +20,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-
-defaults:
-  run:
-    working-directory: stave-plugins
+  HAS_FRAMEWORK_KEY: ${{ secrets.STAVE_DEPLOY_KEY != '' }}
 
 jobs:
   test:
@@ -36,47 +28,58 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with: { path: stave-plugins }
-      - uses: actions/checkout@v4
-        with: { repository: stave-dsp/stave, path: stave }
+      - name: Framework access (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
+      - name: Fetch the framework over SSH (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: stave-plugins }
       - uses: taiki-e/install-action@nextest
+      - name: Framework is pinned, not linked
+        run: "! grep -q '>>> link-framework' Cargo.toml || { echo 'Cargo.toml has a local link-framework block: run scripts/link-framework.sh --off'; exit 1; }"
       - run: scripts/check-file-sizes.sh
       - run: scripts/check-view-bindings.sh
       - run: scripts/check-plugin-rules.sh
-      - run: cargo nextest run --workspace --profile ci
-      - run: cargo test --workspace --doc
+      - run: cargo nextest run --workspace --locked --profile ci
+      - run: cargo test --workspace --doc --locked
 
   lint:
     name: zero warnings (rustc + clippy)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with: { path: stave-plugins }
-      - uses: actions/checkout@v4
-        with: { repository: stave-dsp/stave, path: stave }
+      - name: Framework access (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
+      - name: Fetch the framework over SSH (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
       - uses: dtolnay/rust-toolchain@stable
         with: { components: clippy }
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: stave-plugins }
-      - run: cargo build --workspace --all-targets
+      - run: cargo build --workspace --all-targets --locked
         env:
           RUSTFLAGS: -D warnings
-      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
 
   clap-validator:
     name: clap-validator (every plugin)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with: { path: stave-plugins }
-      - uses: actions/checkout@v4
-        with: { repository: stave-dsp/stave, path: stave }
+      - name: Framework access (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
+      - name: Fetch the framework over SSH (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: stave-plugins }
       - name: Install clap-validator
         run: cargo install --locked --git https://github.com/free-audio/clap-validator.git clap-validator
       - run: scripts/validate-formats.sh clap
@@ -87,17 +90,20 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-        with: { path: stave-plugins }
-      - uses: actions/checkout@v4
-        with: { repository: stave-dsp/stave, path: stave }
+      - name: Framework access (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        uses: webfactory/ssh-agent@v0.9.0
+        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
+      - name: Fetch the framework over SSH (private repo only)
+        if: env.HAS_FRAMEWORK_KEY == 'true'
+        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-        with: { workspaces: stave-plugins }
       - name: Cache VST3 SDK build
         id: sdk-cache
         uses: actions/cache@v4
         with:
-          path: stave-plugins/vst3sdk
+          path: vst3sdk
           key: vst3sdk-validator-${{ runner.os }}-v1
       - name: Build Steinberg validator
         if: steps.sdk-cache.outputs.cache-hit != 'true'
