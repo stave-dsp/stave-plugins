@@ -6,9 +6,9 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id (per-op ids
 //!               blocked in tens, so the table reads like the panel)
-//! diagram.rs  the algorithm picture (opal's OWN, via the open
-//!               scene kind — bespoke visuals live in the project)
-//! editor.rs   the UI tree: global card + tabbed operator pages
+//! diagram.rs  the algorithm picture (opal's OWN, a Display draw
+//!               fn — bespoke visuals live in the project)
+//! editor.rs   the face: algorithm plate + paged operators, LFO, MOD
 //! presets.rs  factory presets, pure function of params
 //! engine/     the ENGINE half:
 //!   mod.rs    OpalVoice × 16 under a VoiceRack + the event bridge
@@ -61,8 +61,8 @@ impl Spec for OpalEngine {
     fn params() -> Arc<OpalParams> {
         OpalParams::new()
     }
-    fn editor(params: &OpalParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &OpalParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &OpalParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

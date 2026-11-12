@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 
 use stave_core::params::ContinuousControl;
-use stave_core::{DebugBus, Environment, ProcessCtx};
+use stave_core::{DebugBus, Environment, ProcessCtx, Scope, Tap};
 
 use crate::params::{MbParams, BANDS, GR_PROBES};
 
@@ -30,6 +30,11 @@ pub struct MultibandEngine {
     controls: [BandControls; BANDS],
     bands: [Band; BANDS],
     bus: Option<Arc<DebugBus>>,
+    /// The face's spectrum feed: mono input and output on the capture
+    /// wire (allocated in `activate`, zero cost with no bus attached).
+    scope: Scope,
+    /// The rate the spectrum's frequency axis is drawn at.
+    rate_tap: Tap,
 }
 
 impl MultibandEngine {
@@ -80,6 +85,8 @@ impl stave_core::Processor for MultibandEngine {
             controls: core::array::from_fn(|i| BandControls::new(&params.bands[i])),
             bands: GR_PROBES.map(Band::new),
             bus: None,
+            scope: Scope::new(),
+            rate_tap: Tap::new("sample_rate"),
             params,
         }
     }
@@ -88,6 +95,7 @@ impl stave_core::Processor for MultibandEngine {
         let p = self.params.clone();
         let rate = f64::from(env.sample_rate);
         self.sample_rate = env.sample_rate;
+        self.scope.prepare(env.max_block);
         self.split.reset();
         self.sidechain_split.reset();
         self.sidechain_was_live = false;
@@ -147,8 +155,11 @@ impl stave_core::Processor for MultibandEngine {
             crossover_hz,
             controls,
             bands,
+            scope,
+            bus,
             ..
         } = self;
+        let capture = bus.is_some();
         let [low, high] = crossovers;
         let mut low = low.begin_block(ctx.params, &p.xover_low);
         let mut high = high.begin_block(ctx.params, &p.xover_high);
@@ -190,8 +201,14 @@ impl stave_core::Processor for MultibandEngine {
             if stereo {
                 fr.write(1, out.1);
             }
+            if capture {
+                let mono_out = if stereo { 0.5 * (out.0 + out.1) } else { out.0 };
+                scope.write(fr.index(), 0.5 * (left + right), mono_out);
+            }
         });
         if let Some(bus) = &self.bus {
+            self.scope.publish(bus, ctx.frames);
+            self.rate_tap.set(bus, f64::from(self.sample_rate));
             for band in &self.bands {
                 band.publish(bus);
             }

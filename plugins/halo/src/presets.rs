@@ -1,10 +1,18 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use stave_core::editor_kit::preset;
+use stave_core::params::AnyParam;
 use stave_core::Preset;
 
 use crate::params::HaloParameters;
+
+/// A preset from (parameter, plain value) pairs.
+fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
+    Preset {
+        name,
+        values: pairs.iter().map(|(p, v)| (p.meta().id, *v)).collect(),
+    }
+}
 
 pub fn build_presets(parameters: &HaloParameters) -> Vec<Preset> {
     alloc::vec![

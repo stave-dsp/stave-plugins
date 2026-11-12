@@ -6,7 +6,7 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets — the character space's corners
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face, a pure function of params
 //! engine/     the ENGINE half: mod.rs orchestration, tank.rs (the
 //!               8-line Hadamard FDN), diffuser.rs (input allpasses)
 //! tests/      the shared checks: validation, editor bindings, no-alloc,
@@ -52,8 +52,8 @@ impl Spec for VaultEngine {
     fn params() -> Arc<VaultParams> {
         VaultParams::new()
     }
-    fn editor(params: &VaultParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &VaultParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &VaultParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

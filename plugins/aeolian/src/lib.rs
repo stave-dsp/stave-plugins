@@ -1,7 +1,7 @@
 //! Stave Aeolian — a sympathetic string harp: twelve plucked-string
 //! voices, one per pitch class, that ring when you play their note in
 //! any octave. WIND is velocity, SUSTAIN the decay, REGISTER the
-//! octave; AIR and SWAY move it. Behind a photoreal verdigris-and-
+//! octave; AIR and SWAY move it. Behind a verdigris-and-
 //! brass face whose harp window shows the twelve strings themselves,
 //! vibrating as they sing. **Start here**: this file is the plugin's
 //! root; everything below is one click away.
@@ -11,9 +11,8 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
-//! editor.rs   the face: one photoreal pedal scene
-//! pedal/      the pedal's picture: the bake (render.rs, on the shared
-//!               stave_ui::photo studio) + the live parts (mod.rs)
+//! editor.rs   the face: parts from the stave-face design system
+//! harp.rs     the harp window's picture: twelve live strings
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: bind → render → observe
 //!   detect.rs     Detector — twelve pitch-class bands → excitation
@@ -31,8 +30,8 @@ use stave_vst3::stave_vst3_export;
 
 mod editor;
 mod engine;
+mod harp;
 mod params;
-mod pedal;
 mod presets;
 
 pub use engine::AeolianEngine;
@@ -55,8 +54,8 @@ impl Spec for AeolianEngine {
     fn params() -> Arc<AeolianParams> {
         AeolianParams::new()
     }
-    fn editor(params: &AeolianParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &AeolianParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &AeolianParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

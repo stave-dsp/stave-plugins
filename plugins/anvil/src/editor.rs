@@ -1,70 +1,113 @@
-//! The anvil editor as owned `ui!` markup — the whole window, a
-//! pure function of params.
+//! The anvil face — the whole window, a pure function of params. A
+//! modern high-gain head: black tolex with red piping, a black grille
+//! band carrying the chrome badge, and a black crinkle faceplate with
+//! ivory chicken-heads. The faceplate reads like the amp's signal
+//! path: the preamp and the stack on top (large), the
+//! voicing, the power section and the master beneath.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::editor_kit::{Knob, Power, PresetBar};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens::{self, text as typography};
-use stave_core::ui::{ui, Dim, TextStyle, TypeRole};
-use stave_core::UiNode;
+use stave_core::face::prelude::*;
+use stave_core::face::{CapStyle, Finish};
+use stave_core::params::BindParam;
+use stave_core::ui::photo::hex;
 
 use crate::params::AnvilParameters;
 
-const CONTROL_CELL_WIDTH: f64 = 100.0;
-const CONTROL_CELL_HEIGHT: f64 = 92.0;
-
-const CAPTION: TextStyle = TextStyle {
-    role: TypeRole::Tick,
-    size: 9.0,
-    kern: 1.6,
-    color: tokens::INK_MUTED,
-};
-
-fn build_control_group(
-    caption: &'static str,
-    control_nodes: Vec<UiNode>,
-    column_count: u16,
-) -> UiNode {
-    let group_width = column_count as f64 * CONTROL_CELL_WIDTH + 24.0;
-    ui! {
-        <Column w={Dim::Px(group_width)} pad=12 gap=6 bg={tokens::BG_1} radius={tokens::RADIUS_MD}
-                border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>{caption}</Text>
-            {stave_core::ui::grid(column_count, control_nodes)}
-        </Column>
+/// Black crinkle faceplate, chrome print, ivory chicken-heads, black
+/// tolex with red piping.
+fn theme() -> Theme {
+    Theme {
+        name: "anvil",
+        surface: hex(0x1A1A1C),
+        finish: Finish::Crinkle,
+        plate: hex(0x121213),
+        desk: hex(0x0B0B0C),
+        ink: Color::rgba(0.93, 0.93, 0.94, 1.0),
+        ink_soft: Color::rgba(0.93, 0.93, 0.94, 0.55),
+        accent: Color::rgba(1.0, 0.24, 0.14, 1.0),
+        lamp: [1.95, 0.22, 0.08],
+        caps: CapStyle::Chicken,
+        cap: hex(0xE6E2D8),
+        pointer: Color::rgba(0.07, 0.07, 0.08, 1.0),
+        screen: Color::rgba(0.03, 0.03, 0.03, 1.0),
+        phosphor: Color::rgba(1.0, 0.4, 0.22, 1.0),
+        tolex: hex(0x0F0F10),
+        piping: hex(0xA3161A),
+        grille: hex(0x1C1C1E),
+        badge: [0.9, 0.9, 0.93],
+        radius: 10.0,
+        ..Theme::graphite()
     }
 }
 
-fn build_knob(parameter: &dyn AnyParam) -> UiNode {
-    Knob {
-        param: parameter,
-        band: None,
-    }
-    .node()
-    .size(CONTROL_CELL_WIDTH, CONTROL_CELL_HEIGHT)
+/// A printed section of the faceplate: its name over its knobs.
+fn section(title: &'static str, knobs: Vec<FaceNode>, gap: f64) -> FaceNode {
+    column(vec![Caption::new(title).node(), row(knobs).gap(gap).align(Align::End)])
+        .gap(6.0)
+        .align(Align::Center)
 }
 
-pub fn build_editor(parameters: &AnvilParameters) -> UiNode {
-    ui! {
-        <Column w=1030 bg={tokens::BG_0}>
-            <Row w={Dim::Fill(1.0)} h=42
-                 pad={stave_core::ui::Edges { t: 9.0, r: 12.0, b: 0.0, l: 14.0 }} gap=8>
-                <Text class={typography::WORDMARK} tag="bypass-dim">"STAVE"</Text>
-                <Text class={typography::SECTION}>"ANVIL"</Text>
-                <Spacer/>
-                {PresetBar { presets: crate::presets::build_presets(parameters) }
-                    .node().size(176.0, 26.0)}
-                <Power param={&parameters.bypass} w=24 h=24/>
-            </Row>
-            <Shape kind=Line w={Dim::Fill(1.0)} h=1 bg={tokens::LINE}/>
-            <Row w={Dim::Fill(1.0)} pad=18 gap=16 justify=Center>
-                {build_control_group("GAIN", alloc::vec![build_knob(&parameters.preamp_gain), build_knob(&parameters.input_low_cut), build_knob(&parameters.topology_separation_amount), build_knob(&parameters.difference_tone), build_knob(&parameters.high_frequency_emphasis)], 2)}
-                {build_control_group("TONE", alloc::vec![build_knob(&parameters.bass_tone), build_knob(&parameters.midrange_tone), build_knob(&parameters.treble_tone)], 3)}
-                {build_control_group("POWER", alloc::vec![build_knob(&parameters.power_pair_overdrive), build_knob(&parameters.presence_tone), build_knob(&parameters.depth_tone)], 3)}
-                {build_control_group("OUTPUT", alloc::vec![build_knob(&parameters.output_level)], 1)}
-            </Row>
-        </Column>
-    }
+pub fn face(p: &AnvilParameters) -> Face {
+    let theme = theme();
+    let gap = theme.space(3);
+    let wide = theme.space(5);
+
+    let preamp = section(
+        "PREAMP",
+        vec![
+            Knob::new(p.preamp_gain.bind()).large().node(),
+            Knob::new(p.topology_separation_amount.bind()).large().node(),
+        ],
+        gap,
+    );
+    let tone = section(
+        "TONE STACK",
+        vec![
+            Knob::new(p.bass_tone.bind()).large().node(),
+            Knob::new(p.midrange_tone.bind()).large().node(),
+            Knob::new(p.treble_tone.bind()).large().node(),
+        ],
+        gap,
+    );
+    let top = row(vec![
+        column(vec![Lamp::pilot().label("POWER").node(), Presets::default().node()])
+            .gap(gap)
+            .align(Align::Start),
+        spacer(),
+        preamp,
+        tone,
+    ])
+    .gap(wide)
+    .align(Align::End);
+
+    let voicing = section(
+        "VOICING",
+        vec![
+            Knob::new(p.input_low_cut.bind()).node(),
+            Knob::new(p.difference_tone.bind()).node(),
+            Knob::new(p.high_frequency_emphasis.bind()).node(),
+        ],
+        gap,
+    );
+    let power = section(
+        "POWER",
+        vec![
+            Knob::new(p.power_pair_overdrive.bind()).node(),
+            Knob::new(p.presence_tone.bind()).centered().node(),
+            Knob::new(p.depth_tone.bind()).centered().node(),
+        ],
+        gap,
+    );
+    let master = section("MASTER", vec![Knob::new(p.output_level.bind()).centered().node()], gap);
+    let bottom = row(vec![
+        voicing,
+        power,
+        master,
+        spacer(),
+        Footswitch::bypass(p.bypass.bind()).compact().node(),
+    ])
+    .gap(wide)
+    .align(Align::End);
+
+    let body = column(vec![top, bottom]).gap(theme.space(4)).align(Align::Stretch);
+    Face::new(theme, Panel::amp_head().grille(Side::Top, 116.0, Some("ANVIL")).around(body))
 }

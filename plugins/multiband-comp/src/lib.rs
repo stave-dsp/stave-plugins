@@ -8,7 +8,8 @@
 //!               program dependence
 //! detector.rs   a band's detector: HPF, peak/RMS, retimed follower
 //! saturation.rs the per-band saturator
-//! editor.rs     the UI tree, a pure function of params
+//! editor.rs     the face, a pure function of params
+//! views.rs      the face's screens: spectrum, GR, transfer curves
 //! engine/
 //!   mod.rs      the split, the bands, the sum
 //!   band.rs     one band: controls, gain, saturation, blend
@@ -35,6 +36,7 @@ mod params;
 #[doc(hidden)]
 pub mod saturation;
 pub mod style;
+mod views;
 
 pub use engine::MultibandEngine;
 use params::MbParams;
@@ -71,8 +73,8 @@ impl stave_core::Spec for MultibandEngine {
     fn params() -> Arc<MbParams> {
         MbParams::new()
     }
-    fn editor(params: &MbParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &MbParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
 }
 

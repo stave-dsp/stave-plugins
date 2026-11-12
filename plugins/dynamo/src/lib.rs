@@ -8,7 +8,8 @@
 //! lib.rs      ← you are here: identity, ports, params, editor —
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face, a pure function of params
+//! machine.rs  the living machine diagram (a Display draw fn)
 //! engine/     the ENGINE half (split when the matrix arrived —
 //!               the growth rule):
 //!   mod.rs    DynamoVoice × 16 under a VoiceRack + the event bridge
@@ -57,8 +58,8 @@ impl Spec for DynamoEngine {
     fn params() -> Arc<DynamoParams> {
         DynamoParams::new()
     }
-    fn editor(params: &DynamoParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &DynamoParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
 }
 

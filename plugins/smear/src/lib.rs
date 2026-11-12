@@ -6,7 +6,7 @@
 //!               surround variant), params, editor — the
 //!               DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face (and the garden's picture), a pure function of params
 //! engine/     the ENGINE half:
 //!   mod.rs    the spine: the process loop + drift updates
 //!   garden.rs the resonator lattice (one garden per lane) — a
@@ -75,8 +75,8 @@ impl stave_core::Spec for SmearEngine {
     fn params() -> Arc<SmearParams> {
         Arc::new(SmearParams::new())
     }
-    fn editor(params: &SmearParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &SmearParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
 }
 

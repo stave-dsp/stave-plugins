@@ -1,14 +1,7 @@
-//! Owned-editor bindings: the tree resolves against the table; widgets
-//! agree with declared endpoints.
-
-use stave_test::editor::{endpoints_agree, owned_tree_resolves};
+//! The face's bindings resolve against the table, each control on a
+//! parameter of the right kind.
 
 #[test]
-fn tree_resolves() {
-    owned_tree_resolves::<stave_anvil_vst3::Anvil>("anvil");
-}
-
-#[test]
-fn widgets_agree_with_declared_endpoints() {
-    endpoints_agree::<stave_anvil_vst3::Anvil>("anvil");
+fn face_binds_resolve() {
+    stave_test::face::binds_resolve::<stave_anvil_vst3::Anvil>("anvil");
 }

@@ -1,14 +1,6 @@
-//! Owned-editor bindings: the tree resolves against the table; widgets
-//! agree with declared endpoints.
-
-use stave_test::editor::{endpoints_agree, owned_tree_resolves};
+//! The face's bindings resolve against the table.
 
 #[test]
-fn tree_resolves() {
-    owned_tree_resolves::<stave_chime_vst3::Chime>("chime");
-}
-
-#[test]
-fn widgets_agree_with_declared_endpoints() {
-    endpoints_agree::<stave_chime_vst3::Chime>("chime");
+fn face_binds_resolve() {
+    stave_test::face::binds_resolve::<stave_chime_vst3::Chime>("chime");
 }

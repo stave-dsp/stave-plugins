@@ -38,8 +38,8 @@ impl Spec for HaloEngine {
         HaloParameters::new()
     }
 
-    fn editor(parameters: &HaloParameters) -> Option<stave_core::UiNode> {
-        Some(editor::build_editor(parameters))
+    fn face(parameters: &HaloParameters) -> Option<stave_core::face::Face> {
+        Some(editor::face(parameters))
     }
 
     fn presets(parameters: &HaloParameters) -> alloc::vec::Vec<stave_core::Preset> {

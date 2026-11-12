@@ -1,108 +1,140 @@
-//! The chime editor as owned `ui!` markup — the whole window, a
-//! pure function of params: a header, the envelope card (with its
-//! PICTURE), the voice card. Cards come from the KIT.
+//! The chime face — the whole window, a pure function of params, on
+//! a warm ivory powder coat (a bell's case, not a rack's).
+//!
+//! ```text
+//! header   CHIME · VOICE/MOD pager · bypass
+//! VOICE    ENVELOPE (picture + A D S R) · VOICE (shape, output)
+//!          LFO (rate, rise, shape, sync, trig)
+//! MOD      four route slots, one row each: live source trace ·
+//!          source · destination · amount · via · mode · lag · quant
+//! ```
 
 extern crate alloc;
+use alloc::vec;
 
-use stave_core::editor::SlotShaping;
-use stave_core::editor_kit::{
-    card, wide_card, EnvelopeDisplay, Knob, ModRings, ModSources, Power, Selector, CELL_H, CELL_W,
-};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens::{self, text as ty};
-use stave_core::ui::{ui, Dim};
-use stave_core::UiNode;
+use stave_core::face::prelude::*;
+use stave_core::params::{BindParam, ParamEnum, RouteParams};
 
 use crate::params::ChimeParams;
 
-fn knob(p: &dyn AnyParam) -> UiNode {
-    Knob {
-        param: p,
-        band: None,
+/// The editor-local page set (VOICE / MOD) — view state, never a param.
+const PAGES: u32 = 1;
+
+/// Chime's finish: the cream powder coat, warmed toward ivory, with a
+/// bell-bronze accent.
+fn theme() -> Theme {
+    use stave_ui::photo::hex;
+    Theme {
+        name: "chime",
+        surface: hex(0xEFE6D2),
+        plate: hex(0xE4D8BE),
+        accent: Color::rgba(0.62, 0.38, 0.16, 1.0),
+        phosphor: Color::rgba(1.0, 0.74, 0.42, 1.0),
+        ..Theme::cream()
     }
-    .node()
-    .size(CELL_W, CELL_H)
 }
 
-pub fn editor(p: &ChimeParams) -> UiNode {
-    ui! {
-        <Column w=700 bg={tokens::BG_0}>
-            <Row w={Dim::Fill(1.0)} h=42
-                 pad={stave_core::ui::Edges { t: 9.0, r: 12.0, b: 0.0, l: 14.0 }} gap=8>
-                <Text class={ty::WORDMARK} tag="bypass-dim">"STAVE"</Text>
-                <Text class={ty::SECTION}>"CHIME"</Text>
-                <Spacer/>
-                <Text class={ty::TAGLINE} tag="bypass-tag">"POLY SYNTH"</Text>
-                <Power param={&p.bypass} w=24 h=24/>
-            </Row>
-            <Shape kind=Line w={Dim::Fill(1.0)} h=1 bg={tokens::LINE}/>
+/// The ADSR picture, from the four binds the display declares
+/// (attack, decay, sustain, release — `reads` in `face`).
+fn envelope(f: &Frame<'_>, r: Rect, s: &mut Scene) {
+    screens::envelope(f, r, s, f.bound(0), f.bound(1), f.bound(2), f.bound(3));
+}
 
-            // The ring declaration (zero-size): which knob each
-            // route target touches. PITCH has no knob (None);
-            // LEVEL rings the output; DECAY rings decay.
-            {ModRings {
-                slots: &[
-                    (&p.routes[0].src, &p.routes[0].tgt, &p.routes[0].depth),
-                    (&p.routes[1].src, &p.routes[1].tgt, &p.routes[1].depth),
-                    (&p.routes[2].src, &p.routes[2].tgt, &p.routes[2].depth),
-                    (&p.routes[3].src, &p.routes[3].tgt, &p.routes[3].depth),
-                ],
-                targets: &[None, Some(&p.output), Some(&p.decay)],
-                probes: &["mod 1", "mod 2", "mod 3", "mod 4"],
-                extras: &[
-                    SlotShaping { via: &p.routes[0].via, mode: &p.routes[0].mode, lag: &p.routes[0].lag, quant: &p.routes[0].quant },
-                    SlotShaping { via: &p.routes[1].via, mode: &p.routes[1].mode, lag: &p.routes[1].lag, quant: &p.routes[1].quant },
-                    SlotShaping { via: &p.routes[2].via, mode: &p.routes[2].mode, lag: &p.routes[2].lag, quant: &p.routes[2].quant },
-                    SlotShaping { via: &p.routes[3].via, mode: &p.routes[3].mode, lag: &p.routes[3].lag, quant: &p.routes[3].quant },
-                ],
-            }.node()}
-            <Row w={Dim::Fill(1.0)} pad=18 gap=16 justify=Center>
-                {wide_card("ENVELOPE", 4.0 * CELL_W + 24.0, alloc::vec![
-                    EnvelopeDisplay {
-                        attack: &p.attack,
-                        decay: &p.decay,
-                        sustain: &p.sustain,
-                        release: &p.release,
-                    }
-                        .node()
-                        .width(Dim::Fill(1.0))
-                        .height(Dim::Px(64.0)),
-                    stave_core::ui::row(alloc::vec![
-                        knob(&p.attack), knob(&p.decay), knob(&p.sustain), knob(&p.release),
-                    ])
-                    .gap(0.0),
-                ])}
-                {card("VOICE", alloc::vec![
-                    Selector { param: &p.shape, labels: crate::params::SHAPES, pill: false }
-                        .node()
-                        .size(CELL_W, CELL_H),
-                    knob(&p.output),
-                ], 2)}
-            </Row>
-            // The patch bay: the LFO's full voice (rate, rise,
-            // shape/sync/trig) + source outlets in one card; every
-            // ringed knob carries its own inlet. Drag a cable to
-            // route — slot params underneath, as always.
-            <Row w={Dim::Fill(1.0)} pad=18 gap=16 justify=Center>
-                {wide_card("LFO", 560.0, alloc::vec![
-                    stave_core::ui::row(alloc::vec![
-                        knob(&p.lfo_rate),
-                        knob(&p.lfo_rise),
-                        stave_core::ui::column(alloc::vec![
-                            Selector { param: &p.lfo_shape, labels: crate::params::LFO_SHAPES, pill: true }
-                                .node().size(104.0, 26.0),
-                            Selector { param: &p.lfo_sync, labels: crate::params::LFO_SYNC, pill: true }
-                                .node().size(104.0, 26.0),
-                            Selector { param: &p.lfo_trig, labels: crate::params::LFO_TRIG, pill: true }
-                                .node().size(104.0, 26.0),
-                        ]).gap(6.0),
-                    ])
-                        .gap(16.0)
-                        .justify(stave_core::ui::Justify::Center)
-                        .width(Dim::Fill(1.0)),
-                    ModSources {}.node().width(Dim::Fill(1.0)).height(Dim::Px(84.0)),
-                ])}
-            </Row>
-        </Column>
+/// One route slot as a channel strip: the source's live trace (the
+/// slot's number printed on it), then every one of its seven params.
+pub(crate) fn route_row<S: ParamEnum, T: ParamEnum>(
+    r: &RouteParams<S, T>,
+    probe: &'static str,
+    label: &'static str,
+) -> FaceNode {
+    row(vec![
+        Trace::new(probe, 64.0, 44.0, (-1.0, 1.0)).label(label).node(),
+        Stepper::new(r.src.bind()).label("SOURCE").width(120.0).node(),
+        Stepper::new(r.tgt.bind()).label("DEST").width(120.0).node(),
+        Knob::new(r.depth.bind()).small().centered().label("AMOUNT").node(),
+        Stepper::new(r.via.bind()).label("VIA").width(120.0).node(),
+        Toggle::new(r.mode.bind()).label("MODE").node(),
+        Knob::new(r.lag.bind()).small().label("LAG").node(),
+        Stepper::new(r.quant.bind()).label("QUANT").width(96.0).node(),
+    ])
+    .gap(10.0)
+    .align(Align::Center)
+}
+
+pub fn face(p: &ChimeParams) -> Face {
+    let theme = theme();
+    let gap = theme.space(3);
+
+    let header = row(vec![
+        Title::new("CHIME").tagline("polyphonic sine · saw synth").node(),
+        Pager::new(PAGES, &["VOICE", "MOD"]).node(),
+        Footswitch::bypass(p.bypass.bind()).compact().node(),
+    ])
+    .gap(theme.space(4))
+    .align(Align::Center);
+
+    // ---- VOICE ---------------------------------------------------
+    let env = Plate::titled("ENVELOPE").around(
+        column(vec![
+            Display::new(500.0, 112.0, envelope)
+                .reads(&[p.attack.bind(), p.decay.bind(), p.sustain.bind(), p.release.bind()])
+                .node(),
+            row(vec![
+                Knob::new(p.attack.bind()).large().node(),
+                Knob::new(p.decay.bind()).large().node(),
+                Knob::new(p.sustain.bind()).large().node(),
+                Knob::new(p.release.bind()).large().node(),
+            ])
+            .gap(theme.space(5)),
+        ])
+        .gap(gap)
+        .align(Align::Center),
+    );
+    let voice = Plate::titled("VOICE").around(
+        column(vec![
+            Toggle::new(p.shape.bind()).label("SHAPE").node(),
+            Knob::new(p.output.bind()).huge().centered().node(),
+        ])
+        .gap(gap)
+        .align(Align::Center),
+    );
+    let lfo = Plate::titled("LFO").around(
+        row(vec![
+            Knob::new(p.lfo_rate.bind()).label("RATE").large().node(),
+            Knob::new(p.lfo_rise.bind()).label("RISE").large().node(),
+            Selector::new(p.lfo_shape.bind()).label("SHAPE").node(),
+            Selector::new(p.lfo_sync.bind()).label("SYNC").node(),
+            Toggle::new(p.lfo_trig.bind()).label("TRIG").node(),
+        ])
+        .gap(theme.space(5))
+        .align(Align::Center),
+    );
+    let voice_page = column(vec![row(vec![env, voice]).gap(gap).align(Align::Stretch), lfo])
+        .gap(gap)
+        .align(Align::Stretch);
+
+    // ---- MOD -----------------------------------------------------
+    const PROBES: [&str; 4] = ["mod 1", "mod 2", "mod 3", "mod 4"];
+    const LABELS: [&str; 4] = ["1", "2", "3", "4"];
+    let routes = Plate::titled("MODULATION").around(
+        column(p.routes.iter().enumerate().map(|(i, r)| route_row(r, PROBES[i], LABELS[i])).collect())
+            .gap(gap)
+            .align(Align::Center),
+    );
+    let pages = pages(PAGES, vec![voice_page, routes]);
+    let body = column(vec![header, pages]).gap(theme.space(4)).align(Align::Stretch);
+    Face::new(theme, Panel::default().around(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every page fits the window budget.
+    #[test]
+    fn the_face_fits() {
+        let rt = stave_core::face::Runtime::new(face(&ChimeParams::new()));
+        let (w, h) = rt.size();
+        assert!(w <= 1000.0 && h <= 720.0, "chime face is {w}×{h}");
     }
 }

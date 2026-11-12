@@ -6,12 +6,12 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id (the full
 //!               planned ledger is in plugins/tolex/docs/design.md)
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face (a speaker cabinet), a pure function of params
 //! presets.rs  factory presets — BREAKDOWN is the flagship
 //! curve.rs    ONE truth for picture and sound: the full response
 //!               assembled from the engine's display twins, plus
 //!               the baked population envelope (statistics only)
-//! scene.rs    the response display — live curve over the
+//! response.rs the response screen — live curve over the
 //!               population territory (law-pinned: the picture
 //!               cannot lie, tests/curve_properties.rs)
 //! engine/     the ENGINE half — the cabinet in components:
@@ -38,7 +38,7 @@ mod editor;
 mod engine;
 mod params;
 mod presets;
-mod scene;
+mod response;
 
 pub use engine::TolexEngine;
 pub use params::TolexParams;
@@ -60,8 +60,8 @@ impl Spec for TolexEngine {
     fn params() -> Arc<TolexParams> {
         TolexParams::new()
     }
-    fn editor(params: &TolexParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &TolexParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &TolexParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

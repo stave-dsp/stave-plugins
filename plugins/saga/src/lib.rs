@@ -10,7 +10,7 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  the pedal's RED / GREEN / BLUE + postcards
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face, a pure function of params
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: bind → render → observe
 //!   motion.rs     Motion — the clock: base, DIVE/RISE, MOD LFO
@@ -64,8 +64,8 @@ impl Spec for SagaEngine {
     fn params() -> Arc<SagaParams> {
         SagaParams::new()
     }
-    fn editor(params: &SagaParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &SagaParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &SagaParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

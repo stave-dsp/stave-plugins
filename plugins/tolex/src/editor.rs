@@ -1,158 +1,132 @@
-//! The tolex editor as owned `ui!` markup — the whole window, a
-//! pure function of params. The signal path reads left to right:
-//! SPEAKER → AMP → CAB → MIC → OUTPUT, same order the engine runs.
+//! The tolex face — the whole window, a pure function of params: a
+//! speaker cabinet. Black tolex around a wheat grille with the badge;
+//! the control strip below reads the response (the model over the
+//! reference population, and the cone's travel), then the build in
+//! signal order: SPEAKER → AMP, CAB → MIC → OUTPUT.
 
 extern crate alloc;
+use alloc::vec;
 use alloc::vec::Vec;
 
-use stave_core::editor_kit::{History, Knob, Power, PresetBar, Selector, Spectrum};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens::{self, text as ty};
-use stave_core::ui::{ui, Dim, TextStyle, TypeRole};
-use stave_core::UiNode;
+use stave_core::face::prelude::*;
+use stave_core::face::{CapStyle, Finish};
+use stave_core::params::BindParam;
+use stave_ui::photo::hex;
 
 use crate::params::TolexParams;
+use crate::response;
 
-const CELL_W: f64 = 80.0;
-const CELL_H: f64 = 76.0;
-/// Selector-bearing cards get wider cells — the dropdown pills need
-/// ~90 px before they collide with their card borders.
-const SEL_W: f64 = 94.0;
-
-const CAPTION: TextStyle = TextStyle {
-    role: TypeRole::Tick,
-    size: 9.0,
-    kern: 1.6,
-    color: tokens::INK_MUTED,
-};
-
-fn card(caption: &'static str, cells: Vec<UiNode>, cols: u16) -> UiNode {
-    let w = cols as f64 * CELL_W + 24.0;
-    ui! {
-        <Column w={Dim::Px(w)} pad=12 gap=6 bg={tokens::BG_1} radius={tokens::RADIUS_MD}
-                border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>{caption}</Text>
-            {stave_core::ui::grid(cols, cells)}
-        </Column>
+/// Tolex's look: black tolex, cream piping, a wheat grille, cream
+/// chicken heads on a dark crinkle strip, amber glass.
+pub fn theme() -> Theme {
+    let base = Theme::graphite();
+    Theme {
+        name: "tolex",
+        surface: hex(0x242220),
+        finish: Finish::Crinkle,
+        plate: hex(0x1B1A19),
+        desk: hex(0x191817),
+        ink: Color::rgba(0.94, 0.90, 0.80, 1.0),
+        ink_soft: Color::rgba(0.94, 0.90, 0.80, 0.55),
+        accent: Color::rgba(1.0, 0.72, 0.30, 1.0),
+        caps: CapStyle::Chicken,
+        cap: hex(0xE8DFC8),
+        tolex: hex(0x141312),
+        piping: hex(0xDCD2BA),
+        grille: hex(0x5A4A36),
+        badge: [0.93, 0.89, 0.80],
+        phosphor: Color::rgba(1.0, 0.74, 0.38, 1.0),
+        screen: Color::rgba(0.05, 0.04, 0.03, 1.0),
+        ..base
     }
 }
 
-fn knob(p: &dyn AnyParam) -> UiNode {
-    Knob {
-        param: p,
-        band: None,
-    }
-    .node()
-    .size(CELL_W, CELL_H)
+fn group(title: &'static str, parts: Vec<FaceNode>, gap: f64) -> FaceNode {
+    Plate::titled(title).around(row(parts).gap(gap).align(Align::Center))
 }
 
-fn response_card(p: &TolexParams) -> UiNode {
-    ui! {
-        <Column w={Dim::Fill(1.0)} pad=12 gap=6 bg={tokens::BG_1} radius={tokens::RADIUS_MD}
-                border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>"RESPONSE — MODEL OVER THE REFERENCE POPULATION"</Text>
-            {crate::scene::response_node(p)}
-            {Spectrum { splits: &[], thresholds: &[], sc_hpfs: &[], gr_probes: &[] }
-                .node()
-                .width(Dim::Fill(1.0))
-                .height(Dim::Px(32.0))}
-            <Text class={CAPTION}>"CONE TRAVEL"</Text>
-            {History { probe: "travel" }.node().width(Dim::Fill(1.0)).height(Dim::Px(20.0))}
-        </Column>
-    }
-}
+pub fn face(p: &TolexParams) -> Face {
+    let theme = theme();
+    let gap = theme.space(2);
+    let row_gap = theme.space(3);
 
-pub fn editor(p: &TolexParams) -> UiNode {
-    // ONE row of five cards, every card exactly two cells tall —
-    // no ragged bottoms, no dead corners. The bypass Power fills
-    // OUTPUT's second cell (where it belongs anyway); the header
-    // keeps only the wordmark. Selector-bearing cards use SEL_W
-    // cells so the pills stop kissing their borders.
-    let speaker = card(
+    let view = row(vec![
+        Display::new(470.0, 104.0, response::draw)
+            .probes(&["excursion"])
+            .reads(&response::reads(p))
+            .node(),
+        Trace::new("travel", 120.0, 108.0, (0.0, 1.0))
+            .label("CONE TRAVEL")
+            .node(),
+        column(vec![
+            Presets { width: 176.0 }.node(),
+            row(vec![Footswitch::bypass(p.bypass.bind()).compact().node()])
+                .justify(Justify::Center),
+        ])
+        .gap(0.0)
+        .align(Align::Center),
+    ])
+    .gap(row_gap)
+    .align(Align::Center);
+
+    let speaker = group(
         "SPEAKER",
-        alloc::vec![
-            Selector {
-                param: &p.size,
-                labels: crate::params::SIZES,
-                pill: false
-            }
-            .node()
-            .size(CELL_W, CELL_H),
-            knob(&p.resonance),
-            knob(&p.q),
-            knob(&p.cone),
-            knob(&p.mass),
-            knob(&p.breakup),
-            knob(&p.doping),
-            stave_core::ui::spacer().size(CELL_W, CELL_H),
+        vec![
+            Selector::new(p.size.bind()).node(),
+            Knob::new(p.resonance.bind()).node(),
+            Knob::new(p.q.bind()).node(),
+            Knob::new(p.cone.bind()).node(),
+            Knob::new(p.mass.bind()).node(),
+            Knob::new(p.breakup.bind()).node(),
+            Knob::new(p.doping.bind()).node(),
         ],
-        4,
+        gap,
     );
-    let amp = card("AMP", alloc::vec![knob(&p.drive), knob(&p.damping)], 1);
-    let cab = ui! {
-        <Column w={Dim::Px(2.0 * SEL_W + 24.0)} pad=12 gap=6 bg={tokens::BG_1}
-                radius={tokens::RADIUS_MD} border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>"CAB"</Text>
-            {stave_core::ui::grid(2, alloc::vec![
-                Selector { param: &p.back, labels: crate::params::BACKS, pill: false }
-                    .node()
-                    .size(SEL_W, CELL_H),
-                knob(&p.cab).size(SEL_W, CELL_H),
-                Selector { param: &p.material, labels: crate::params::MATERIALS, pill: false }
-                    .node()
-                    .size(SEL_W, CELL_H),
-                Selector { param: &p.speakers, labels: crate::params::SPEAKERS, pill: false }
-                    .node()
-                    .size(SEL_W, CELL_H),
-            ])}
-        </Column>
-    };
-    let mic = ui! {
-        <Column w={Dim::Px(2.0 * SEL_W + 24.0)} pad=12 gap=6 bg={tokens::BG_1}
-                radius={tokens::RADIUS_MD} border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>"MIC"</Text>
-            {Selector { param: &p.model, labels: crate::params::MICS, pill: false }
-                .node()
-                .size(2.0 * SEL_W, CELL_H)}
-            {stave_core::ui::grid(2, alloc::vec![
-                knob(&p.mic).size(SEL_W, CELL_H),
-                knob(&p.position).size(SEL_W, CELL_H),
-            ])}
-        </Column>
-    };
-    let output = card(
-        "OUTPUT",
-        alloc::vec![
-            knob(&p.output),
-            Power { param: &p.bypass }.node().size(CELL_W, CELL_H),
+    let amp = group(
+        "AMP",
+        vec![
+            Knob::new(p.drive.bind()).node(),
+            Knob::new(p.damping.bind()).node(),
         ],
-        1,
+        gap,
+    );
+    let cab = group(
+        "CAB",
+        vec![
+            Toggle::new(p.back.bind()).node(),
+            Toggle::new(p.material.bind()).node(),
+            Toggle::new(p.speakers.bind()).node(),
+            Knob::new(p.cab.bind()).node(),
+        ],
+        gap,
+    );
+    let mic = group(
+        "MIC",
+        vec![
+            Stepper::new(p.model.bind()).width(112.0).node(),
+            Knob::new(p.mic.bind()).label("DISTANCE").node(),
+            Knob::new(p.position.bind()).node(),
+        ],
+        gap,
+    );
+    let output = group(
+        "OUTPUT",
+        vec![Knob::new(p.output.bind()).centered().node()],
+        gap,
     );
 
-    ui! {
-        <Column w=1060 bg={tokens::BG_0}>
-            <Row w={Dim::Fill(1.0)} h=36
-                 pad={stave_core::ui::Edges { t: 8.0, r: 12.0, b: 0.0, l: 14.0 }} gap=8>
-                <Text class={ty::WORDMARK}>"STAVE"</Text>
-                <Text class={ty::SECTION}>"TOLEX"</Text>
-                <Spacer/>
-                {PresetBar { presets: crate::presets::presets(p) }
-                    .node().size(176.0, 26.0)}
-            </Row>
-            <Shape kind=Line w={Dim::Fill(1.0)} h=1 bg={tokens::LINE}/>
-            <Row w={Dim::Fill(1.0)}
-                 pad={stave_core::ui::Edges { t: 12.0, r: 14.0, b: 0.0, l: 14.0 }}>
-                {response_card(p)}
-            </Row>
-            <Row w={Dim::Fill(1.0)}
-                 pad={stave_core::ui::Edges { t: 12.0, r: 14.0, b: 14.0, l: 14.0 }} gap=12
-                 justify=Center>
-                {speaker}
-                {amp}
-                {cab}
-                {mic}
-                {output}
-            </Row>
-        </Column>
-    }
+    let body = column(vec![
+        view,
+        row(vec![speaker, amp]).gap(row_gap).align(Align::Stretch),
+        row(vec![cab, mic, output])
+            .gap(row_gap)
+            .align(Align::Stretch),
+    ])
+    .gap(row_gap)
+    .align(Align::Stretch);
+    let panel = Panel {
+        margin: 10.0,
+        ..Panel::cabinet().grille(Side::Top, 140.0, Some("Tolex"))
+    };
+    Face::new(theme, panel.around(body))
 }

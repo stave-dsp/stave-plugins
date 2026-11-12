@@ -5,7 +5,7 @@
 //! lib.rs      ← you are here: identity, ports, params, editor —
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face, a pure function of params
 //! engine.rs   the ENGINE half — grows into engine/ components the
 //!               day the second concept arrives (the growth rule)
 //! tests/      the shared checks: validation, editor bindings, no-alloc,
@@ -51,8 +51,8 @@ impl Spec for AnvilEngine {
     fn params() -> Arc<AnvilParameters> {
         AnvilParameters::new()
     }
-    fn editor(params: &AnvilParameters) -> Option<stave_core::UiNode> {
-        Some(editor::build_editor(params))
+    fn face(params: &AnvilParameters) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &AnvilParameters) -> alloc::vec::Vec<stave_core::Preset> {
         presets::build_presets(params)

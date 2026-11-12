@@ -14,9 +14,7 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
-//! editor.rs   the face: one photoreal scene
-//! pedal/      the face's picture: the bake (render.rs) + the live
-//!               machine and controls (mod.rs)
+//! editor.rs   the face: parts on oxblood + the running tape window
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: bind → render → observe
 //!   tape.rs       Tape — the loop, the heads, the motor
@@ -35,7 +33,6 @@ use stave_vst3::stave_vst3_export;
 mod editor;
 mod engine;
 mod params;
-mod pedal;
 mod presets;
 
 pub use engine::RibbonEngine;
@@ -58,8 +55,8 @@ impl Spec for RibbonEngine {
     fn params() -> Arc<RibbonParams> {
         RibbonParams::new()
     }
-    fn editor(params: &RibbonParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &RibbonParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &RibbonParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

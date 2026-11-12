@@ -17,9 +17,8 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
-//! editor.rs   the face: one photoreal scene
-//! pedal/      the face's picture: the bake (render.rs) + the live
-//!               display and controls (mod.rs)
+//! editor.rs   the face: parts from the stave-face design system
+//! vfd/        the glass windows' pictures: MEMORY, NEURONS, SPACE
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: hear → remember → attend → recall → room → mix
 //!   room.rs       Room — the sixteen-line reservoir, shaped by geometry
@@ -39,8 +38,8 @@ use stave_vst3::stave_vst3_export;
 mod editor;
 mod engine;
 mod params;
-mod pedal;
 mod presets;
+mod vfd;
 
 pub use engine::EngramEngine;
 pub use params::EngramParams;
@@ -62,8 +61,8 @@ impl Spec for EngramEngine {
     fn params() -> Arc<EngramParams> {
         EngramParams::new()
     }
-    fn editor(params: &EngramParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &EngramParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &EngramParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

@@ -1,181 +1,188 @@
-//! The multiband editor as owned `ui!` markup: header, spectrum, three
-//! band cards and the crossover footer, a pure function of params.
+//! The Multiband face — the whole window, a pure function of params.
+//! Up top, the whole program at once: the output spectrum with the
+//! crossovers, each band's threshold and its gain reduction drawn in,
+//! the three GR meters and the crossover knobs. Below, one band at a
+//! time (LOW / MID / HIGH pages): its compressor, its transfer curve
+//! with solo and mute, its envelope and its colour.
 
 extern crate alloc;
+use alloc::vec;
+use alloc::vec::Vec;
 
-use stave_core::editor_kit::{Knob, Plot, Power, Selector, Spectrum, Toggle};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens::{self, text as ty};
-use stave_core::ui::{ui, Dim, Edges, TextStyle, TypeRole};
-use stave_core::UiNode;
+use stave_core::face::prelude::*;
+use stave_core::face::{CapStyle, Finish};
+use stave_core::params::BindParam;
+use stave_ui::photo::hex;
 
-use crate::params::{BandParams, MbParams, GR_PROBES};
-use crate::saturation::SATURATIONS;
-use crate::style::STYLES;
+use crate::params::{BandParams, MbParams};
+use crate::views;
 
-const CARD_W: f64 = 368.0;
-const CARD_H: f64 = 372.0;
+/// Space between a band page's plates.
+const PLATE_GAP: f64 = 8.0;
 
-pub fn editor(p: &MbParams) -> UiNode {
-    let [low, mid, high] = &p.bands;
-    let spectrum = Spectrum {
-        splits: &[&p.xover_low, &p.xover_high],
-        thresholds: &[&low.threshold, &mid.threshold, &high.threshold],
-        sc_hpfs: &[&low.sidechain_hpf, &mid.sidechain_hpf, &high.sidechain_hpf],
-        gr_probes: &GR_PROBES,
-    }
-    .node();
-    ui! {
-        <Column w=1180 align=Center bg={tokens::BG_0}
-                pad={Edges { t: 6.0, r: 20.0, b: 18.0, l: 20.0 }}>
-            <Row w=Fill h=28 gap=8 align=Center pad={Edges { r: 4.0, ..Edges::ZERO }}>
-                <Text class={ty::WORDMARK} w=78 h=20 tag="bypass-dim">"STAVE"</Text>
-                <Text class={ty::SECTION} w=220 h=16>"MULTIBAND"</Text>
-                <Spacer/>
-                <Text class={ty::TAGLINE} w=150 h=12 tag="bypass-tag">"3-BAND  DYNAMICS"</Text>
-                <Power param={&p.bypass} w=24 h=24 margin={Edges { l: 10.0, ..Edges::ZERO }}/>
-            </Row>
-            <Shape kind=Line w=Fill h=1 bg={tokens::LINE}/>
-            {spectrum.width(Dim::Fill(1.0)).height(Dim::Px(64.0)).margin_edges(Edges { t: 4.0, ..Edges::ZERO })}
-            <Text class={ty::CAPTION} w=Fill h=10 margin={Edges { t: 8.0, ..Edges::ZERO }}>"DYNAMICS"</Text>
-            <Row gap=18 margin={Edges { t: 6.0, ..Edges::ZERO }}>
-                {band_card(0, "LOW", low)}
-                {band_card(1, "MID", mid)}
-                {band_card(2, "HIGH", high)}
-            </Row>
-            {crossover(&[&p.xover_low, &p.xover_high]).margin_edges(Edges { t: 20.0, ..Edges::ZERO })}
-        </Column>
+/// The band page set.
+const BANDS_KEY: u32 = 1;
+
+/// Multiband's look: cool studio graphite, aluminium caps, a green
+/// phosphor and amber light.
+pub fn theme() -> Theme {
+    let base = Theme::graphite();
+    Theme {
+        name: "multiband",
+        surface: hex(0x33383B),
+        finish: Finish::Anodized,
+        plate: hex(0x272B2E),
+        desk: hex(0x1B1D1E),
+        ink: Color::rgba(0.92, 0.93, 0.90, 1.0),
+        ink_soft: Color::rgba(0.92, 0.93, 0.90, 0.55),
+        accent: Color::rgba(0.62, 0.90, 0.48, 1.0),
+        lamp: [0.55, 1.5, 0.35],
+        caps: CapStyle::Aluminium,
+        phosphor: Color::rgba(0.66, 0.92, 0.52, 1.0),
+        screen: Color::rgba(0.03, 0.05, 0.04, 1.0),
+        ..base
     }
 }
 
-/// Knob grid reading order: compression curve row (threshold, ratio,
-/// knee, makeup), envelope row (attack, release, sc HPF, rms), tone row
-/// (drive, sat mix, mix).
-fn band_card(slot: usize, title: &'static str, b: &BandParams) -> UiNode {
-    BandCard {
-        title,
-        slot,
-        knobs: [
-            &b.threshold,
-            &b.ratio,
-            &b.knee,
-            &b.makeup,
-            &b.attack,
-            &b.release,
-            &b.sidechain_hpf,
-            &b.rms,
-            &b.drive,
-            &b.saturation_mix,
-            &b.mix,
+fn knobs(ks: Vec<FaceNode>, gap: f64) -> FaceNode {
+    row(ks).gap(gap).align(Align::Center)
+}
+
+/// One band's page.
+fn band_page(b: &BandParams, transfer: Draw, gr: &'static [&'static str], gap: f64) -> FaceNode {
+    let dynamics = Plate::titled("COMPRESSOR").around(knobs(
+        vec![
+            Selector::new(b.style.bind()).label("STYLE").node(),
+            Knob::new(b.threshold.bind()).label("THRESHOLD").node(),
+            Knob::new(b.ratio.bind()).label("RATIO").node(),
+            Knob::new(b.knee.bind()).label("KNEE").node(),
+            Knob::new(b.makeup.bind()).label("MAKEUP").node(),
         ],
-        solo: &b.solo,
-        mute: &b.mute,
-        sat: &b.saturation,
-        style: &b.style,
-        gr_probe: GR_PROBES[slot],
+        gap,
+    ));
+    let curve = Plate::titled("TRANSFER · SOLO · MUTE").around(knobs(
+        vec![
+            Display::new(150.0, 98.0, transfer)
+                .probes(gr)
+                .reads(&[
+                    b.threshold.bind(),
+                    b.ratio.bind(),
+                    b.knee.bind(),
+                    b.makeup.bind(),
+                    b.style.bind(),
+                ])
+                .node(),
+            Footswitch::new(b.solo.bind())
+                .compact()
+                .label("SOLO")
+                .node(),
+            Footswitch::new(b.mute.bind())
+                .compact()
+                .label("MUTE")
+                .node(),
+        ],
+        gap,
+    ));
+    let envelope = Plate::titled("DETECTOR").around(knobs(
+        vec![
+            Knob::new(b.attack.bind()).label("ATTACK").node(),
+            Knob::new(b.release.bind()).label("RELEASE").node(),
+            Knob::new(b.transient.bind()).label("TRANSIENT").node(),
+            Knob::new(b.rms.bind()).label("RMS").node(),
+            Knob::new(b.sidechain_hpf.bind()).label("SC HPF").node(),
+        ],
+        gap,
+    ));
+    let colour = Plate::titled("COLOUR").around(knobs(
+        vec![
+            Selector::new(b.saturation.bind())
+                .label("SATURATION")
+                .node(),
+            Knob::new(b.drive.bind()).label("DRIVE").node(),
+            Knob::new(b.saturation_mix.bind()).label("SAT MIX").node(),
+            Knob::new(b.mix.bind()).label("MIX").node(),
+        ],
+        gap,
+    ));
+    column(vec![
+        row(vec![dynamics, curve])
+            .gap(PLATE_GAP)
+            .align(Align::Stretch),
+        row(vec![envelope, colour])
+            .gap(PLATE_GAP)
+            .align(Align::Stretch),
+    ])
+    .gap(PLATE_GAP)
+    .align(Align::Stretch)
+}
+
+pub fn face(p: &MbParams) -> Face {
+    let theme = theme();
+    let gap = theme.space(2);
+    let row_gap = theme.space(3);
+    let [low, mid, high] = &p.bands;
+
+    let header = row(vec![
+        Title::new("MULTIBAND")
+            .tagline("three-band dynamics · LR4 split")
+            .node(),
+        spacer(),
+        Pager::new(BANDS_KEY, &["LOW", "MID", "HIGH"]).node(),
+        spacer(),
+        Footswitch::new(p.external_sidechain.bind())
+            .compact()
+            .label("EXT SC")
+            .node(),
+        Footswitch::bypass(p.bypass.bind()).compact().node(),
+    ])
+    .gap(theme.space(4))
+    .align(Align::Center);
+
+    let mut reads = vec![p.xover_low.bind(), p.xover_high.bind()];
+    for b in &p.bands {
+        reads.push(b.threshold.bind());
     }
-    .node()
-}
-
-/// One band's card: title and voicing pills, the knob grid, the transfer
-/// plot, solo/mute.
-struct BandCard<'a> {
-    title: &'static str,
-    slot: usize,
-    knobs: [&'a dyn AnyParam; 11],
-    solo: &'a dyn AnyParam,
-    mute: &'a dyn AnyParam,
-    sat: &'a dyn AnyParam,
-    style: &'a dyn AnyParam,
-    gr_probe: &'static str,
-}
-
-impl BandCard<'_> {
-    fn node(self) -> UiNode {
-        let accent = |a: f64| tokens::band_color(self.slot, a);
-        let title = TextStyle {
-            color: accent(1.0),
-            ..ty::CARD_TITLE
-        };
-        let col_w = (CARD_W - 24.0) / 4.0;
-        let toggle_w = (CARD_W - 36.0) * 0.5;
-        let knobs = self
-            .knobs
-            .iter()
-            .map(|p| {
-                Knob {
-                    param: *p,
-                    band: Some(self.slot),
-                }
-                .node()
-                .size(col_w, 40.0)
-            })
-            .collect::<alloc::vec::Vec<_>>();
-        let plot = Plot {
-            threshold: self.knobs[0],
-            ratio: self.knobs[1],
-            makeup: self.knobs[3],
-            style: Some((self.style, STYLES)),
-            knee: Some(self.knobs[2]),
-            gr_probe: self.gr_probe,
-            band: self.slot,
-        }
+    let spectrum = Display::new(450.0, 118.0, views::spectrum)
+        .probes(&["sample_rate", "gr_lo", "gr_mid", "gr_hi"])
+        .reads(&reads)
+        .animated()
         .node();
-        ui! {
-            <Stack w={Dim::Px(CARD_W)} h={Dim::Px(CARD_H)} bg={tokens::BG_2}
-                   radius={tokens::RADIUS_MD} border={(1.0, tokens::LINE)} shadow={tokens::ELEV_1}>
-                <Shape kind=Rect w={Dim::Px(CARD_W - 12.0)} h=1 bg={accent(0.55)}
-                       margin={Edges { l: 6.0, ..Edges::ZERO }}/>
-                <Shape kind=RRect w=3 h={Dim::Px(CARD_H - 16.0)} radius=1.5 bg={accent(1.0)}
-                       margin={Edges { t: 8.0, ..Edges::ZERO }}/>
-                <Column w=Fill h=Fill>
-                    <Row h=22 gap=4 margin={Edges { t: 8.0, r: 4.0, b: 0.0, l: 14.0 }}>
-                        <Text class={title} w=70 h=22 margin={Edges { t: 2.0, ..Edges::ZERO }}>{self.title}</Text>
-                        <Spacer/>
-                        <Selector param={self.sat} labels={SATURATIONS} pill={true} w=74 h=22/>
-                        <Selector param={self.style} labels={STYLES} pill={true} w=72 h=22/>
-                    </Row>
-                    {stave_core::ui::grid(4, knobs)
-                        .gap_y(34.0)
-                        .margin_edges(Edges { t: 10.0, r: 12.0, b: 0.0, l: 12.0 })}
-                    <Text class={ty::PLOT_CAPTION} w={Dim::Px(CARD_W - 28.0)} h=12
-                          margin={Edges { t: 38.0, l: 14.0, ..Edges::ZERO }}>"TRANSFER"</Text>
-                    {plot.size(CARD_W - 28.0, 52.0).margin_edges(Edges { t: 2.0, l: 14.0, ..Edges::ZERO })}
-                    <Row gap=12 margin={Edges { t: 8.0, r: 12.0, b: 0.0, l: 12.0 }}>
-                        <Toggle param={self.solo} solo={true} band={Some(self.slot)} w={Dim::Px(toggle_w)} h=26/>
-                        <Toggle param={self.mute} solo={false} band={Some(self.slot)} w={Dim::Px(toggle_w)} h=26/>
-                    </Row>
-                </Column>
-            </Stack>
-        }
-    }
-}
+    let gr = Display::new(112.0, 118.0, views::reduction)
+        .probes(&["gr_lo", "gr_mid", "gr_hi"])
+        .node();
+    let crossover = Plate::titled("CROSSOVER").around(
+        row(vec![
+            Knob::new(p.xover_low.bind()).label("LOW / MID").node(),
+            Knob::new(p.xover_high.bind()).label("MID / HIGH").node(),
+        ])
+        .gap(gap)
+        .align(Align::Center),
+    );
+    let top = row(vec![spectrum, gr, crossover])
+        .gap(row_gap)
+        .align(Align::Center);
 
-/// The crossover footer: a captioned panel of split knobs.
-fn crossover(params: &[&dyn AnyParam]) -> UiNode {
-    let knobs = params
-        .iter()
-        .map(|p| {
-            Knob {
-                param: *p,
-                band: None,
-            }
-            .node()
-            .size(150.0, 40.0)
-        })
-        .collect::<alloc::vec::Vec<_>>();
-    let w = knobs.len() as f64 * 150.0 + 32.0;
-    let caption = TextStyle {
-        role: TypeRole::Caption,
-        size: 11.0,
-        kern: 1.4,
-        color: tokens::INK_MUTED,
-    };
-    ui! {
-        <Column w={Dim::Px(w)} h=100 gap=2 bg={tokens::BG_2} radius={tokens::RADIUS_MD}
-                border={(1.0, tokens::LINE)} pad={Edges { t: 8.0, r: 16.0, b: 0.0, l: 16.0 }}>
-            <Text class={caption} w=Fill h=12>"CROSSOVER"</Text>
-            {stave_core::ui::row(knobs)}
-        </Column>
-    }
+    let pages = stack(vec![
+        on_page(
+            band_page(low, views::transfer_lo, &["gr_lo"], theme.space(0)),
+            BANDS_KEY,
+            0,
+        ),
+        on_page(
+            band_page(mid, views::transfer_mid, &["gr_mid"], theme.space(0)),
+            BANDS_KEY,
+            1,
+        ),
+        on_page(
+            band_page(high, views::transfer_hi, &["gr_hi"], theme.space(0)),
+            BANDS_KEY,
+            2,
+        ),
+    ]);
+
+    let body = column(vec![header, top, pages])
+        .gap(row_gap)
+        .align(Align::Stretch);
+    let panel = Panel::rack(10).handles();
+    Face::new(theme, panel.around(body))
 }

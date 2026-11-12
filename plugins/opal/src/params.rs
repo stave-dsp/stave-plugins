@@ -23,7 +23,8 @@ param_enum! {
 }
 
 /// The operator page labels — pure editor chrome (the pager is a
-/// ViewTabs over a view key: no param, no automation, no state).
+/// face Pager over editor-local page state: no param, no automation,
+/// no state).
 pub const OPS: &[&str] = &["OP 1", "OP 2", "OP 3", "OP 4"];
 
 param_enum! {

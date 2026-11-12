@@ -1,67 +1,92 @@
-extern crate alloc;
-use alloc::vec::Vec;
+//! The halo face — the whole window, a pure function of params. A
+//! high-headroom clean head: cream tolex with dark piping, a silver
+//! grille band with the gold badge, and a brushed-silver faceplate with
+//! black skirted knobs. The top row is the preamp and the stack
+//! (large); the four headroom controls and the master sit beneath.
 
-use stave_core::editor_kit::{Knob, Power, PresetBar};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens::{self, text as typography};
-use stave_core::ui::{ui, Dim, TextStyle, TypeRole};
-use stave_core::UiNode;
+use stave_core::face::prelude::*;
+use stave_core::face::{CapStyle, Finish};
+use stave_core::params::BindParam;
+use stave_core::ui::photo::hex;
 
 use crate::params::HaloParameters;
 
-const CONTROL_CELL_WIDTH: f64 = 100.0;
-const CONTROL_CELL_HEIGHT: f64 = 92.0;
-
-const CAPTION: TextStyle = TextStyle {
-    role: TypeRole::Tick,
-    size: 9.0,
-    kern: 1.6,
-    color: tokens::INK_MUTED,
-};
-
-fn build_control_group(
-    caption: &'static str,
-    control_nodes: Vec<UiNode>,
-    column_count: u16,
-) -> UiNode {
-    let group_width = column_count as f64 * CONTROL_CELL_WIDTH + 24.0;
-    ui! {
-        <Column w={Dim::Px(group_width)} pad=12 gap=6 bg={tokens::BG_1} radius={tokens::RADIUS_MD}
-                border={(1.0, tokens::LINE)}>
-            <Text class={CAPTION}>{caption}</Text>
-            {stave_core::ui::grid(column_count, control_nodes)}
-        </Column>
+/// Brushed-silver faceplate, black print and knobs, cream tolex,
+/// silver grille cloth.
+fn theme() -> Theme {
+    let ink = Color::rgba(0.10, 0.10, 0.11, 1.0);
+    Theme {
+        name: "halo",
+        surface: hex(0xC6C8CA),
+        finish: Finish::Anodized,
+        plate: hex(0xB4B7BA),
+        desk: hex(0x24252A),
+        ink,
+        ink_soft: Color::rgba(0.10, 0.10, 0.11, 0.62),
+        accent: Color::rgba(0.70, 0.12, 0.10, 1.0),
+        lamp: [1.9, 0.2, 0.1],
+        caps: CapStyle::Dome,
+        cap: hex(0x101012),
+        pointer: Color::rgba(0.96, 0.96, 0.96, 1.0),
+        screen: Color::rgba(0.07, 0.06, 0.06, 1.0),
+        phosphor: Color::rgba(1.0, 0.62, 0.38, 1.0),
+        tolex: hex(0xD8C79E),
+        piping: hex(0x2A2018),
+        grille: hex(0x8E8C88),
+        badge: [0.95, 0.80, 0.48],
+        radius: 12.0,
+        ..Theme::graphite()
     }
 }
 
-fn build_knob(parameter: &dyn AnyParam) -> UiNode {
-    Knob {
-        param: parameter,
-        band: None,
-    }
-    .node()
-    .size(CONTROL_CELL_WIDTH, CONTROL_CELL_HEIGHT)
+/// A printed section of the faceplate: its name over its knobs.
+fn section(title: &'static str, knobs: Vec<FaceNode>, gap: f64) -> FaceNode {
+    column(vec![Caption::new(title).node(), row(knobs).gap(gap).align(Align::End)])
+        .gap(6.0)
+        .align(Align::Center)
 }
 
-pub fn build_editor(parameters: &HaloParameters) -> UiNode {
-    ui! {
-        <Column w=1030 bg={tokens::BG_0}>
-            <Row w={Dim::Fill(1.0)} h=42
-                 pad={stave_core::ui::Edges { t: 9.0, r: 12.0, b: 0.0, l: 14.0 }} gap=8>
-                <Text class={typography::WORDMARK} tag="bypass-dim">"STAVE"</Text>
-                <Text class={typography::SECTION}>"HALO"</Text>
-                <Spacer/>
-                {PresetBar { presets: crate::presets::build_presets(parameters) }
-                    .node().size(176.0, 26.0)}
-                <Power param={&parameters.bypass} w=24 h=24/>
-            </Row>
-            <Shape kind=Line w={Dim::Fill(1.0)} h=1 bg={tokens::LINE}/>
-            <Row w={Dim::Fill(1.0)} pad=18 gap=16 justify=Center>
-                {build_control_group("PREAMP", alloc::vec![build_knob(&parameters.preamp_gain)], 1)}
-                {build_control_group("TONE", alloc::vec![build_knob(&parameters.bass_tone), build_knob(&parameters.midrange_tone), build_knob(&parameters.treble_tone)], 3)}
-                {build_control_group("DYNAMICS", alloc::vec![build_knob(&parameters.headroom), build_knob(&parameters.bloom), build_knob(&parameters.reserve), build_knob(&parameters.response)], 2)}
-                {build_control_group("OUTPUT", alloc::vec![build_knob(&parameters.output_level)], 1)}
-            </Row>
-        </Column>
-    }
+pub fn face(p: &HaloParameters) -> Face {
+    let theme = theme();
+    let gap = theme.space(3);
+    let wide = theme.space(5);
+
+    let preamp = section("PREAMP", vec![Knob::new(p.preamp_gain.bind()).large().node()], gap);
+    let tone = section(
+        "TONE",
+        vec![
+            Knob::new(p.bass_tone.bind()).large().node(),
+            Knob::new(p.midrange_tone.bind()).large().node(),
+            Knob::new(p.treble_tone.bind()).large().node(),
+        ],
+        gap,
+    );
+    let top = row(vec![
+        column(vec![Lamp::pilot().label("POWER").node(), Presets::default().node()])
+            .gap(gap)
+            .align(Align::Start),
+        spacer(),
+        preamp,
+        tone,
+    ])
+    .gap(wide)
+    .align(Align::End);
+
+    let dynamics = section(
+        "DYNAMICS",
+        vec![
+            Knob::new(p.headroom.bind()).node(),
+            Knob::new(p.bloom.bind()).node(),
+            Knob::new(p.reserve.bind()).node(),
+            Knob::new(p.response.bind()).node(),
+        ],
+        gap,
+    );
+    let master = section("MASTER", vec![Knob::new(p.output_level.bind()).centered().node()], gap);
+    let bottom = row(vec![dynamics, spacer(), master, Footswitch::bypass(p.bypass.bind()).compact().node()])
+        .gap(wide)
+        .align(Align::End);
+
+    let body = column(vec![top, bottom]).gap(theme.space(4)).align(Align::Stretch);
+    Face::new(theme, Panel::amp_head().grille(Side::Top, 116.0, Some("Halo")).around(body))
 }

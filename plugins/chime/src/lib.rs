@@ -5,7 +5,7 @@
 //! lib.rs      ← you are here: identity, ports, params, editor —
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
-//! editor.rs   the UI tree, a pure function of params
+//! editor.rs   the face, a pure function of params
 //! engine/     the ENGINE half (split when the matrix arrived —
 //!               the growth rule):
 //!   mod.rs    ChimeVoice × 16 under a VoiceRack + the event bridge
@@ -55,8 +55,8 @@ impl Spec for ChimeEngine {
     fn params() -> Arc<ChimeParams> {
         ChimeParams::new()
     }
-    fn editor(params: &ChimeParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &ChimeParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
 }
 

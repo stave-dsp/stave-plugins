@@ -13,9 +13,7 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
-//! editor.rs   the face: one photoreal scene
-//! pedal/      the face's picture: the bake (render.rs) + the live
-//!               network, meter and controls (mod.rs)
+//! editor.rs   the face: parts on hammertone + the porthole and meter
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: decimate → think → interpolate → mix
 //!   brain.rs      Brain — the reservoir and its online readout
@@ -32,7 +30,6 @@ use stave_vst3::stave_vst3_export;
 mod editor;
 mod engine;
 mod params;
-mod pedal;
 mod presets;
 
 pub use engine::RevenantEngine;
@@ -55,8 +52,8 @@ impl Spec for RevenantEngine {
     fn params() -> Arc<RevenantParams> {
         RevenantParams::new()
     }
-    fn editor(params: &RevenantParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &RevenantParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &RevenantParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

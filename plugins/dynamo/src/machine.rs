@@ -6,54 +6,47 @@
 //! Nothing here is decoration: every moving part IS a probe the
 //! engine publishes as declared taps (never name-sniffed).
 //!
+//! Drawn into a face `Display` (see `draw`).
+//!
 //! Probe order: spin (rate/commanded 0..1), shaft (revolutions
 //! 0..1), glow (ensemble wire energy 0..1), boiler (pressure
 //! 0..1), rail (bridge |load| 0..1).
 
-use stave_core::editor_kit::SceneDisplay;
-use stave_core::ui::Dim;
-use stave_core::UiNode;
-use stave_ui::scene::{pt, Op, Path, Pt, Scene, SceneInputs, Stroke};
+use stave_core::face::Frame;
+use stave_ui::layout::Rect;
+use stave_ui::scene::{pt, Font, Op, Path, Pt, Scene, Stroke, TextAlign};
 use stave_ui::style::Color;
 
 extern crate alloc;
 use alloc::vec::Vec;
 
-/// The editor node: the diagram bound to the machine's taps.
-pub fn diagram() -> UiNode {
-    SceneDisplay {
-        params: &[],
-        probes: &["spin", "shaft", "glow", "boiler", "rail"],
-        build,
-        drag: None,
-    }
-    .node()
-    .width(Dim::Fill(1.0))
-    .height(Dim::Px(78.0))
-}
+/// The probes the picture reads, in [`MachineState`] order.
+pub const PROBES: &[&str] = &["spin", "shaft", "glow", "boiler", "rail"];
 
-fn build(inp: &SceneInputs<'_>) -> Scene {
-    let spin = inp.probes.first().copied().unwrap_or(1.0) as f32;
-    let shaft = inp.probes.get(1).copied().unwrap_or(0.0) as f32;
-    let glow = inp.probes.get(2).copied().unwrap_or(0.0) as f32;
-    let boiler = inp.probes.get(3).copied().unwrap_or(1.0) as f32;
-    let rail = inp.probes.get(4).copied().unwrap_or(0.0) as f32;
-    scene(
-        &MachineState {
-            spin,
-            shaft,
-            glow,
-            boiler,
-            rail,
-            w: inp.w,
-            h: inp.h,
-        },
-        &MachineStyle {
-            accent: inp.palette.accent,
-            ink: inp.palette.ink_muted,
-            line: inp.palette.axis,
-        },
-    )
+/// The display's draw fn: the machine in the theme's phosphor, live
+/// from the five taps.
+pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
+    let ph = f.theme.phosphor;
+    let st = MachineState {
+        spin: f.probe("spin") as f32,
+        shaft: f.probe("shaft") as f32,
+        glow: f.probe("glow") as f32,
+        boiler: f.probe("boiler") as f32,
+        rail: f.probe("rail") as f32,
+        x0: r.x,
+        y0: r.y,
+        w: r.w,
+        h: r.h,
+    };
+    stave_core::face::screens::grid(f, r, s, 12, 4);
+    let style = MachineStyle {
+        accent: ph,
+        ink: dim(ph, 0.7),
+        line: dim(ph, 0.35),
+        font: f.theme.type_.caption.align(TextAlign::Center),
+        label_size: f.theme.type_.caption_size,
+    };
+    s.ops.extend(scene(&st, &style).ops);
 }
 
 pub(crate) struct MachineState {
@@ -62,6 +55,9 @@ pub(crate) struct MachineState {
     pub glow: f32,
     pub boiler: f32,
     pub rail: f32,
+    /// The screen's top-left (face coordinates).
+    pub x0: f64,
+    pub y0: f64,
     pub w: f64,
     pub h: f64,
 }
@@ -70,6 +66,8 @@ pub(crate) struct MachineStyle {
     pub accent: Color,
     pub ink: Color,
     pub line: Color,
+    pub font: Font,
+    pub label_size: f64,
 }
 
 fn dim(c: Color, a: f64) -> Color {
@@ -79,24 +77,28 @@ fn dim(c: Color, a: f64) -> Color {
 /// The picture, pure (the laws read its ops).
 pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
     let mut sc = Scene::new();
-    let cy = st.h * 0.44;
-    let label_y = st.h - 6.0;
+    // Drawn on an 80-pt-tall design, scaled to the screen.
+    let k = (st.h / 80.0).max(0.5);
+    let cy = st.y0 + st.h * 0.44;
+    let label_y = st.y0 + st.h - 8.0;
+    let at = |frac: f64| st.x0 + st.w * frac;
     let label = |sc: &mut Scene, x: f64, text: &str| {
         sc.ops.push(Op::Text {
             at: pt(x, label_y),
             text: alloc::string::String::from(text),
-            size: 7.0,
+            size: style.label_size,
             color: style.ink,
+            font: style.font,
         });
     };
 
     // THE BOILER — a gauge whose needle IS the pressure: full
     // pressure points up-right, a drooping boiler swings left.
-    let bx = st.w * 0.08;
+    let bx = at(0.08);
     sc.stroke(
         Path::arc(
             pt(bx, cy),
-            15.0,
+            15.0 * k,
             core::f64::consts::PI * 0.8,
             core::f64::consts::PI * 2.2,
             false,
@@ -104,7 +106,7 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
         Stroke::round(style.line, 1.4),
     );
     let angle = core::f64::consts::PI * (0.8 + 1.4 * f64::from(st.boiler));
-    let needle = pt(bx + 12.0 * angle.cos(), cy + 12.0 * angle.sin());
+    let needle = pt(bx + 12.0 * k * angle.cos(), cy + 12.0 * k * angle.sin());
     sc.stroke(
         Path::polyline(&[pt(bx, cy), needle]),
         Stroke::round(style.accent, 1.6),
@@ -113,14 +115,14 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
 
     // THE ROTOR — the shaft's spoke strobes with rotation; the rim
     // brightens as it reaches commanded speed.
-    let rx = st.w * 0.26;
+    let rx = at(0.26);
     let rim = dim(style.accent, 0.25 + 0.6 * f64::from(st.spin));
-    sc.stroke(Path::circle(pt(rx, cy), 17.0), Stroke::round(rim, 1.6));
+    sc.stroke(Path::circle(pt(rx, cy), 17.0 * k), Stroke::round(rim, 1.6));
     let a = core::f64::consts::TAU * f64::from(st.shaft);
-    for k in 0..4 {
-        let ang = a + core::f64::consts::PI * 0.5 * k as f64;
+    for spoke in 0..4 {
+        let ang = a + core::f64::consts::PI * 0.5 * f64::from(spoke);
         sc.stroke(
-            Path::polyline(&[pt(rx, cy), pt(rx + 14.0 * ang.cos(), cy + 14.0 * ang.sin())]),
+            Path::polyline(&[pt(rx, cy), pt(rx + 14.0 * k * ang.cos(), cy + 14.0 * k * ang.sin())]),
             Stroke::round(dim(style.ink, 0.8), 1.2),
         );
     }
@@ -128,10 +130,10 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
 
     // THE WIRES — the pair waves with its energy: amplitude and
     // glow are the ensemble's ring.
-    let (wx0, wx1) = (st.w * 0.36, st.w * 0.70);
-    let amp = 7.0 * f64::from(st.glow);
+    let (wx0, wx1) = (at(0.36), at(0.70));
+    let amp = 7.0 * k * f64::from(st.glow);
     let wire_glow = dim(style.accent, 0.3 + 0.65 * f64::from(st.glow));
-    for (dy, phase) in [(-6.0, 0.0), (6.0, core::f64::consts::PI)] {
+    for (dy, phase) in [(-6.0 * k, 0.0), (6.0 * k, core::f64::consts::PI)] {
         let mut pts: Vec<Pt> = Vec::with_capacity(25);
         for i in 0..=24 {
             let t = i as f64 / 24.0;
@@ -144,27 +146,27 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
     label(&mut sc, (wx0 + wx1) * 0.5, "WIRES");
 
     // THE BRIDGE — one block, glowing with the rail's load.
-    let brx = st.w * 0.78;
+    let brx = at(0.78);
     sc.solid(
-        Path::rect(pt(brx - 4.0, cy - 16.0), 8.0, 32.0),
+        Path::rect(pt(brx - 4.0 * k, cy - 16.0 * k), 8.0 * k, 32.0 * k),
         dim(style.accent, 0.15 + 0.8 * f64::from(st.rail)),
     );
     sc.stroke(
-        Path::rect(pt(brx - 4.0, cy - 16.0), 8.0, 32.0),
+        Path::rect(pt(brx - 4.0 * k, cy - 16.0 * k), 8.0 * k, 32.0 * k),
         Stroke::new(style.line, 1.0),
     );
     label(&mut sc, brx, "BRIDGE");
 
     // OUT — the machine's voice leaves stage right.
     sc.stroke(
-        Path::polyline(&[pt(brx + 8.0, cy), pt(st.w * 0.93, cy)]),
+        Path::polyline(&[pt(brx + 8.0 * k, cy), pt(at(0.93), cy)]),
         Stroke::round(dim(style.ink, 0.7), 1.4),
     );
     sc.stroke(
         Path::polyline(&[
-            pt(st.w * 0.93 - 5.0, cy - 4.0),
-            pt(st.w * 0.93, cy),
-            pt(st.w * 0.93 - 5.0, cy + 4.0),
+            pt(at(0.93) - 5.0, cy - 4.0),
+            pt(at(0.93), cy),
+            pt(at(0.93) - 5.0, cy + 4.0),
         ]),
         Stroke::round(dim(style.ink, 0.7), 1.4),
     );
@@ -184,6 +186,8 @@ mod properties {
             glow,
             boiler,
             rail: 0.0,
+            x0: 0.0,
+            y0: 0.0,
             w: 600.0,
             h: 96.0,
         }
@@ -194,6 +198,8 @@ mod properties {
             accent: Color::rgba(0.5, 0.7, 0.9, 1.0),
             ink: Color::rgba(0.6, 0.6, 0.7, 1.0),
             line: Color::rgba(0.3, 0.3, 0.4, 1.0),
+            font: Font::default(),
+            label_size: 7.5,
         }
     }
 

@@ -48,8 +48,10 @@ if grep -rn 'plain() as f32' plugins/*/src --include="*.rs" >/dev/null 2>&1; the
   fail=1
 fi
 
-# 5. THE EDITOR STYLE is ui! markup, never builder calls.
+# 5. THE EDITOR STYLE: a legacy UiNode editor is ui! markup, never
+#    builder calls. (A face composes typed parts with row/column.)
 for f in plugins/*/src/editor.rs; do
+  grep -q 'UiNode' "$f" || continue
   if grep -qE 'row\(vec!|column\(vec!' "$f"; then
     echo "RULE: $f uses the builder editor style — the house style is ui! markup"; fail=1
   fi

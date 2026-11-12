@@ -1,126 +1,155 @@
-//! The saga editor as owned `ui!` markup — a pure function of
-//! params, on the canonical 1024 × 720 canvas under the shell's top
-//! bar. Laid out like the pedal: the PROGRAM card is the face (mode
-//! tabs, the per-program legend saying what FEEDBACK / REGEN / X do
-//! right now, the seven knobs + SYNC), TWEAK breaks the pedal's
-//! one-knob menu out into five, DIVE / RISE is the held footswitch
-//! with the live clock beside it, and the TAIL strip runs beneath.
+//! The saga face — a pure function of params, laid out like the pedal:
+//! the PROGRAM window says what this program is and what FEEDBACK /
+//! REGEN / X mean right now, the seven pedal knobs sit under it, TWEAK
+//! breaks the one-knob menu out, and two stomp switches (bypass, DIVE)
+//! frame the clock and the tail along the toe.
 
-extern crate alloc;
-use alloc::vec::Vec;
+use stave_core::face::prelude::*;
+use stave_core::face::{step_of, CapStyle, Finish};
+use stave_core::params::BindParam;
+use stave_core::ui::photo::hex;
+use stave_core::ui::scene::{Family, Font, TextAlign};
 
-use stave_core::editor_kit::{
-    card, wide_card, History, Knob, PluginTopBar, PluginTopBarPort, Selector, ShowWhen, Tabs,
-    CELL_H, CELL_W,
-};
-use stave_core::params::AnyParam;
-use stave_core::ui::tokens;
-use stave_core::ui::{ui, Dim, TextStyle, TypeRole};
-use stave_core::UiNode;
+use crate::params::{SagaParams, MODES};
 
-use crate::params::{SagaParams, MOD_SHAPES, MODES, SYNCS};
-
-const LEGEND: TextStyle =
-    TextStyle { role: TypeRole::Tick, size: 9.0, kern: 1.2, color: tokens::INK_MUTED };
-
-/// DIVE's two states, as the footswitch reads.
-const DIVE: &[&str] = &["OFF", "HELD"];
+/// The mode parameter's id (the program window reads it). Checked
+/// against the table in the tests below.
+const MODE_ID: u32 = 3;
 
 /// What each program does, and what its three changeable knobs mean.
 const LEGENDS: [(&str, &str); 5] = [
-    ("REVERSE DELAY  →  REVERSE REVERB", "FDBK repeats · REGEN reverse verb · X how reversed"),
-    ("REVERSE DELAY  →  OCTAVE-UP REVERB", "FDBK repeats · REGEN octave up · X decay"),
-    ("REVERSE DELAY  →  OCTAVE-DOWN REVERB", "FDBK repeats · REGEN octave down · X decay"),
-    ("REVERSE REVERB  →  FORWARD REVERB", "FDBK oct down · REGEN oct up · X decay · TIME stretch"),
-    ("PITCH DELAY  →  PITCH DELAY", "FDBK delay one · REGEN delay two · X interval order"),
+    ("REVERSE DELAY → REVERSE REVERB", "FDBK repeats · REGEN reverse verb · X how reversed"),
+    ("REVERSE DELAY → OCTAVE-UP REVERB", "FDBK repeats · REGEN octave up · X decay"),
+    ("REVERSE DELAY → OCTAVE-DOWN REVERB", "FDBK repeats · REGEN octave down · X decay"),
+    ("REVERSE REVERB → FORWARD REVERB", "FDBK oct down · REGEN oct up · X decay · TIME stretch"),
+    ("PITCH DELAY → PITCH DELAY", "FDBK delay one · REGEN delay two · X interval order"),
 ];
 
-fn knob(p: &dyn AnyParam) -> UiNode {
-    Knob { param: p, band: None }.node().size(CELL_W, CELL_H)
-}
-
-fn legend(sel: &dyn AnyParam, index: usize) -> UiNode {
-    let (title, keys) = LEGENDS[index];
-    ui! {
-        <Column w={Dim::Fill(1.0)} h=34 gap=4 show_when={(sel, index)}>
-            <Text class={tokens::text::CAPTION}>{title}</Text>
-            <Text class={LEGEND}>{keys}</Text>
-        </Column>
+/// Weathered copper hammertone, patina-green light, ivory caps.
+fn theme() -> Theme {
+    Theme {
+        name: "saga",
+        surface: hex(0x5A3322),
+        finish: Finish::Hammertone,
+        plate: hex(0x472818),
+        desk: hex(0x1C1B1A),
+        ink: Color::rgba(0.95, 0.90, 0.80, 1.0),
+        ink_soft: Color::rgba(0.95, 0.90, 0.80, 0.58),
+        accent: Color::rgba(0.50, 0.88, 0.76, 1.0),
+        lamp: [0.45, 1.6, 1.05],
+        caps: CapStyle::Soft,
+        cap: hex(0xEDE3CC),
+        pointer: Color::rgba(0.35, 0.18, 0.11, 1.0),
+        screen: Color::rgba(0.03, 0.06, 0.05, 1.0),
+        phosphor: Color::rgba(0.55, 0.95, 0.80, 1.0),
+        radius: 16.0,
+        ..Theme::graphite()
     }
 }
 
-pub fn editor(p: &SagaParams) -> UiNode {
-    let legends: Vec<UiNode> = (0..MODES.len()).map(|i| legend(&p.mode, i)).collect();
-    let program = wide_card(
-        "PROGRAM",
-        4.0 * CELL_W + 24.0,
-        alloc::vec![
-            Tabs { param: &p.mode, labels: MODES }
-                .node()
-                .width(Dim::Fill(1.0))
-                .height(Dim::Px(26.0)),
-            stave_core::ui::stack(legends).width(Dim::Fill(1.0)).height(Dim::Px(34.0)),
-            stave_core::ui::grid(4, alloc::vec![
-                knob(&p.feedback),
-                knob(&p.regen),
-                knob(&p.mod_depth),
-                knob(&p.mix),
-                knob(&p.x),
-                knob(&p.time),
-                knob(&p.tone),
-                Selector { param: &p.sync, labels: SYNCS, pill: false }
-                    .node()
-                    .size(CELL_W, CELL_H),
-            ]),
-        ],
+/// The program window: the program's numeral, what it chains, and
+/// what the changeable knobs do in it.
+fn program(f: &Frame<'_>, r: Rect, s: &mut Scene) {
+    let th = f.theme;
+    let ph = th.phosphor;
+    let soft = Color::rgba(ph.r, ph.g, ph.b, 0.55);
+    let i = step_of(f.host.normalized(MODE_ID), MODES.len() as u32) as usize;
+    let (title, keys) = LEGENDS[i.min(LEGENDS.len() - 1)];
+    let left = Font::new(Family::Sans, 650).tracking(0.1).align(TextAlign::Left);
+    let mono = Font::new(Family::Mono, 500).align(TextAlign::Left);
+    let x = r.x + 18.0;
+    s.text_in(pt(x, r.y + 22.0), "PROGRAM", 7.5, soft, left);
+    s.text_in(pt(x, r.y + 60.0), MODES[i], 34.0, ph, Font::new(Family::Serif, 600).align(TextAlign::Left));
+    let tx = r.x + 92.0;
+    s.text_in(pt(tx, r.y + 44.0), title, 11.0, ph, left);
+    s.text_in(pt(tx, r.y + 64.0), keys, 9.0, soft, mono);
+    let rule = Color::rgba(ph.r, ph.g, ph.b, 0.12);
+    s.stroke(Path::new().move_to(pt(tx - 14.0, r.y + 16.0)).line_to(pt(tx - 14.0, r.y + r.h - 16.0)), Stroke::new(rule, 1.0));
+}
+
+pub fn face(p: &SagaParams) -> Face {
+    let theme = theme();
+    let gap = theme.space(3);
+    let wide = theme.space(4);
+
+    let header = row(vec![
+        Title::new("SAGA").tagline("reverse delays and reverbs, on a clock you can pull").node(),
+        spacer(),
+        Presets::default().node(),
+    ])
+    .gap(wide)
+    .align(Align::Center);
+
+    let window = Display::new(430.0, 84.0, program).reads(&[p.mode.bind()]).node();
+    let programs = Plate::titled("PROGRAM").around(
+        row(vec![Selector::new(p.mode.bind()).node(), window, Selector::new(p.sync.bind()).node()])
+            .gap(wide)
+            .align(Align::Center),
     );
 
-    let tweak = card(
-        "TWEAK",
-        alloc::vec![
-            knob(&p.width),
-            knob(&p.mod_rate),
-            Selector { param: &p.mod_shape, labels: MOD_SHAPES, pill: false }
-                .node()
-                .size(CELL_W, CELL_H),
-            knob(&p.shift),
-            knob(&p.ramp),
-        ],
-        3,
+    let echo = Plate::titled("ECHO").around(
+        row(vec![
+            Knob::new(p.time.bind()).large().node(),
+            Knob::new(p.feedback.bind()).large().node(),
+            Knob::new(p.regen.bind()).large().node(),
+            Knob::new(p.x.bind()).large().node(),
+        ])
+        .gap(wide)
+        .align(Align::End),
+    );
+    let color = Plate::titled("COLOR").around(
+        row(vec![
+            Knob::new(p.mod_depth.bind()).large().node(),
+            Knob::new(p.tone.bind()).large().node(),
+            Knob::new(p.mix.bind()).large().node(),
+        ])
+        .gap(wide)
+        .align(Align::End),
     );
 
-    let dive = wide_card(
-        "DIVE / RISE",
-        3.0 * CELL_W + 24.0,
-        alloc::vec![ui! {
-            <Row w={Dim::Fill(1.0)} gap=12 align=Center>
-                {Selector { param: &p.dive, labels: DIVE, pill: false }.node().size(CELL_W, CELL_H)}
-                {History { probe: "clock" }.node().width(Dim::Fill(1.0)).height(Dim::Px(56.0))}
-            </Row>
-        }],
+    let tweak = Plate::titled("TWEAK").around(
+        row(vec![
+            Knob::new(p.width.bind()).node(),
+            Knob::new(p.mod_rate.bind()).node(),
+            Toggle::new(p.mod_shape.bind()).label("SHAPE").node(),
+            Knob::new(p.shift.bind()).node(),
+            Knob::new(p.ramp.bind()).node(),
+        ])
+        .gap(gap)
+        .align(Align::Center),
     );
+    let out = Plate::titled("OUT").around(Knob::new(p.output.bind()).centered().node());
 
-    ui! {
-        <Column w={Dim::Px(tokens::EDITOR_CANVAS_WIDTH)}
-                h={Dim::Px(tokens::EDITOR_CANVAS_HEIGHT)} bg={tokens::BG_0}>
-            {PluginTopBar {
-                presets: crate::presets::presets(p),
-                input: None,
-                output: Some(PluginTopBarPort::output(Some(&p.output))),
-                bypass: Some(&p.bypass),
-            }.node()}
-            <Row w={Dim::Fill(1.0)} pad=18 gap=16 justify=Center>
-                {program}
-                <Column gap=16>
-                    {tweak}
-                    {dive}
-                </Column>
-            </Row>
-            <Column w={Dim::Fill(1.0)} pad={stave_core::ui::Edges { t: 0.0, r: 18.0, b: 0.0, l: 18.0 }}>
-                {wide_card("TAIL", tokens::EDITOR_CANVAS_WIDTH - 36.0, alloc::vec![
-                    History { probe: "tail" }.node().width(Dim::Fill(1.0)).height(Dim::Px(150.0)),
-                ])}
-            </Column>
-        </Column>
+    let toe = row(vec![
+        Footswitch::bypass(p.bypass.bind()).node(),
+        spacer(),
+        Trace::new("clock", 250.0, 64.0, (0.4, 2.1)).label("CLOCK").node(),
+        Trace::new("tail", 250.0, 64.0, (0.0, 1.0)).label("TAIL").node(),
+        spacer(),
+        Footswitch::new(p.dive.bind()).label("DIVE / RISE").node(),
+    ])
+    .gap(wide)
+    .align(Align::End);
+
+    let body = column(vec![
+        header,
+        programs,
+        row(vec![echo, color]).gap(gap).align(Align::Stretch),
+        row(vec![tweak, out]).gap(gap).align(Align::Stretch),
+        toe,
+    ])
+    .gap(theme.space(3))
+    .align(Align::Stretch);
+    Face::new(theme, Panel { margin: 18.0, pad: 24.0, ..Panel::default() }.around(body))
+}
+
+#[cfg(test)]
+mod tests {
+    use stave_core::params::AnyParam;
+
+    #[test]
+    fn the_program_window_reads_the_mode_parameter() {
+        let p = crate::params::SagaParams::new();
+        assert_eq!(p.mode.meta().id.0, super::MODE_ID);
     }
 }

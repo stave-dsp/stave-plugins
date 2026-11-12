@@ -10,9 +10,7 @@
 //!               the DECLARATIONS half, no behavior
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
-//! editor.rs   the face: one photoreal pedal scene
-//! pedal/      the pedal's picture — a software-lit enclosure bake
-//!               (render.rs) + the live knobs/toggles/LEDs (face.rs)
+//! editor.rs   the face: parts on a cream pedal + the spinning record
 //! engine/     the ENGINE half:
 //!   mod.rs        the spine: bind → render → observe
 //!   motion.rs     Motion — the core clock: base, HOLD, MOD LFO
@@ -34,10 +32,10 @@ use alloc::sync::Arc;
 use stave_core::{PluginDescriptor, PluginFeature, PortConfig, Spec, StavePlugin};
 use stave_vst3::stave_vst3_export;
 
+mod clip;
 mod editor;
 mod engine;
 mod params;
-mod pedal;
 mod presets;
 
 pub use engine::HeirloomEngine;
@@ -65,8 +63,8 @@ impl Spec for HeirloomEngine {
     fn params() -> Arc<HeirloomParams> {
         HeirloomParams::new()
     }
-    fn editor(params: &HeirloomParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &HeirloomParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &HeirloomParams) -> alloc::vec::Vec<stave_core::Preset> {
         presets::presets(params)

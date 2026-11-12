@@ -8,10 +8,18 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use stave_core::editor_kit::preset;
+use stave_core::params::AnyParam;
 use stave_core::Preset;
 
 use crate::params::SagaParams;
+
+/// A preset from (parameter, plain value) pairs.
+fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
+    Preset {
+        name,
+        values: pairs.iter().map(|(p, v)| (p.meta().id, *v)).collect(),
+    }
+}
 
 /// One full surface, in pedal order. `mode` / `shape` are step indices.
 struct Face {

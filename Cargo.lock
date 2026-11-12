@@ -361,36 +361,37 @@ dependencies = [
 
 [[package]]
 name = "stave-clap"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "stave-core",
 ]
 
 [[package]]
 name = "stave-core"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "loom",
  "stave-debug",
  "stave-dsp",
+ "stave-face",
  "stave-macros",
  "stave-ui",
 ]
 
 [[package]]
 name = "stave-debug"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "loom",
 ]
 
 [[package]]
 name = "stave-dsp"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 
 [[package]]
 name = "stave-dynamo-vst3"
@@ -433,8 +434,16 @@ dependencies = [
  "stave-measure",
  "stave-test",
  "stave-ui",
- "stave-ui-cocoa",
  "stave-vst3",
+]
+
+[[package]]
+name = "stave-face"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
+dependencies = [
+ "stave-raster",
+ "stave-ui",
 ]
 
 [[package]]
@@ -483,8 +492,8 @@ dependencies = [
 
 [[package]]
 name = "stave-host"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "crossbeam-queue",
  "libc",
@@ -500,8 +509,8 @@ dependencies = [
 
 [[package]]
 name = "stave-macros"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -510,8 +519,8 @@ dependencies = [
 
 [[package]]
 name = "stave-measure"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "hound",
  "rustfft",
@@ -570,8 +579,8 @@ dependencies = [
 
 [[package]]
 name = "stave-raster"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "stave-ui",
 ]
@@ -638,8 +647,8 @@ dependencies = [
 
 [[package]]
 name = "stave-test"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "assert_no_alloc",
  "stave-core",
@@ -670,18 +679,19 @@ dependencies = [
 
 [[package]]
 name = "stave-ui"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "stave-macros",
 ]
 
 [[package]]
 name = "stave-ui-cocoa"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "stave-core",
+ "stave-face",
  "stave-raster",
  "stave-ui",
 ]
@@ -702,8 +712,8 @@ dependencies = [
 
 [[package]]
 name = "stave-vst3"
-version = "0.1.0"
-source = "git+https://github.com/stave-dsp/stave?tag=v0.1.0#abaf8c2184169647e1d6bd11ce2d5695132f46b9"
+version = "0.2.0"
+source = "git+https://github.com/stave-dsp/stave?tag=v0.2.0#e26775dc551677bb8f195673a4e326e4f2c2b84c"
 dependencies = [
  "stave-core",
  "stave-ui",

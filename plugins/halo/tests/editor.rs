@@ -1,11 +1,7 @@
-use stave_test::editor::{endpoints_agree, owned_tree_resolves};
+//! The face's bindings resolve against the table, each control on a
+//! parameter of the right kind.
 
 #[test]
-fn tree_resolves() {
-    owned_tree_resolves::<stave_halo_vst3::Halo>("halo");
-}
-
-#[test]
-fn widgets_agree_with_declared_endpoints() {
-    endpoints_agree::<stave_halo_vst3::Halo>("halo");
+fn face_binds_resolve() {
+    stave_test::face::binds_resolve::<stave_halo_vst3::Halo>("halo");
 }

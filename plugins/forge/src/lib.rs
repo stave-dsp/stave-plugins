@@ -5,7 +5,8 @@
 //! lib.rs        ← you are here: identity, ports, params, editor,
 //!                 presets — the DECLARATIONS half, no behavior
 //! params.rs     every knob, with its forever-stable id
-//! editor.rs     the UI tree, a pure function of params
+//! editor.rs     the face, a pure function of params
+//! views.rs      the face's own screens (transfer, harmonics, stages)
 //! presets.rs    factory presets, pure function of params
 //! engine/          the ENGINE half — the realtime processor
 //!   mod.rs         the component struct + `process`, the whole
@@ -61,6 +62,7 @@ mod editor;
 mod engine;
 mod params;
 mod presets;
+mod views;
 
 pub use engine::ForgeEngine;
 use params::ForgeParams;
@@ -87,8 +89,8 @@ impl Spec for ForgeEngine {
     fn params() -> Arc<ForgeParams> {
         ForgeParams::new()
     }
-    fn editor(params: &ForgeParams) -> Option<stave_core::UiNode> {
-        Some(editor::editor(params))
+    fn face(params: &ForgeParams) -> Option<stave_core::face::Face> {
+        Some(editor::face(params))
     }
     fn presets(params: &ForgeParams) -> Vec<stave_core::Preset> {
         presets::presets(params)

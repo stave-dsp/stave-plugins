@@ -1,14 +1,18 @@
-//! Owned-editor bindings: the tree resolves against the table; widgets
-//! agree with declared endpoints.
-
-use stave_test::editor::{endpoints_agree, owned_tree_resolves};
+//! The face's bindings resolve against the table.
 
 #[test]
-fn tree_resolves() {
-    owned_tree_resolves::<stave_tolex_vst3::Tolex>("tolex");
+fn face_binds_resolve() {
+    stave_test::face::binds_resolve::<stave_tolex_vst3::Tolex>("tolex");
 }
 
+/// The face fits a 1000 × 720 pt window.
 #[test]
-fn widgets_agree_with_declared_endpoints() {
-    endpoints_agree::<stave_tolex_vst3::Tolex>("tolex");
+fn face_fits_the_window() {
+    use stave_core::Plugin;
+    let face = <stave_tolex_vst3::Tolex as Plugin>::new()
+        .editor_face()
+        .expect("a face");
+    let (w, h) = stave_core::face::Runtime::new(face).size();
+    println!("face: {w} x {h}");
+    assert!(w <= 1000.0 && h <= 720.0, "face is {w} x {h}");
 }

@@ -1,6 +1,6 @@
 //! The algorithm diagram — OPAL'S OWN picture, a pure function of
-//! the wiring table, shipped through the OPEN scene kind
-//! (bespoke visuals live in the project). Operator/DX
+//! the wiring table, drawn into a face `Display` (bespoke visuals
+//! live in the project). Operator/DX
 //! players navigate by this picture — eight cramped tab labels were
 //! never going to say "(3,4)→2→1".
 //!
@@ -11,11 +11,9 @@
 //! polylines entering the consumer's top edge, and op 4's
 //! self-feedback as a small loop arc on its box.
 
-use stave_core::editor_kit::SceneDisplay;
-use stave_core::params::AnyParam;
-use stave_core::ui::Dim;
-use stave_core::UiNode;
-use stave_ui::scene::{pt, Op, Path, Pt, Scene, SceneInputs, Stroke};
+use stave_core::face::Frame;
+use stave_ui::layout::Rect;
+use stave_ui::scene::{pt, Font, Op, Path, Pt, Scene, Stroke};
 use stave_ui::style::Color;
 
 extern crate alloc;
@@ -23,16 +21,23 @@ use alloc::vec::Vec;
 
 use crate::engine::operators::{DIAGRAM_CARRIERS, DIAGRAM_MODS};
 
-/// The build fn the open kind calls: params[0] = the algo index;
-/// the wiring tables are the project's own consts (const-derived
-/// from WIRINGS — the picture cannot drift from the sound).
-fn build(inp: &SceneInputs<'_>) -> Scene {
-    let algo = (inp.params[0] as usize).min(DIAGRAM_CARRIERS.len() - 1);
+/// The display's draw fn: the algorithm (the one bind the display
+/// declares, `reads` in the face) drawn as its wiring, in the
+/// theme's phosphor. The wiring tables are the engine's own consts
+/// (const-derived from WIRINGS — the picture cannot drift from the
+/// sound).
+pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
+    let n = DIAGRAM_CARRIERS.len();
+    let algo = stave_core::face::step_of(f.bound(0), n as u32) as usize;
+    let algo = algo.min(n - 1);
     let mut mods = [0u8; 8];
     for (i, m) in mods.iter_mut().enumerate().take(4) {
         *m = DIAGRAM_MODS[algo * 4 + i];
     }
-    scene(
+    stave_core::face::screens::grid(f, r, s, 8, 4);
+    let ph = f.theme.phosphor;
+    let (pad_x, pad_y) = (r.w * 0.12, 14.0);
+    let sc = scene(
         &AlgoState {
             wiring: Wiring {
                 mods,
@@ -40,30 +45,19 @@ fn build(inp: &SceneInputs<'_>) -> Scene {
                 ops: 4,
                 feedback_op: Some(3),
             },
-            origin: pt(4.0, 4.0),
-            w: inp.w - 8.0,
-            h: inp.h - 8.0,
+            origin: pt(r.x + pad_x, r.y + pad_y),
+            w: r.w - 2.0 * pad_x,
+            h: r.h - 2.0 * pad_y,
         },
         &AlgoStyle {
-            accent: inp.palette.accent,
-            ink: inp.palette.ink_muted,
-            line: inp.palette.axis,
-            bg: inp.palette.bg,
+            accent: ph,
+            ink: Color::rgba(ph.r, ph.g, ph.b, 0.85),
+            line: Color::rgba(ph.r, ph.g, ph.b, 0.55),
+            bg: f.theme.screen,
+            font: f.theme.type_.value,
         },
-    )
-}
-
-/// The editor node: the diagram bound to the algo param.
-pub fn diagram_node(algo: &dyn AnyParam) -> UiNode {
-    SceneDisplay {
-        params: &[algo],
-        probes: &[],
-        build,
-        drag: None,
-    }
-    .node()
-    .width(Dim::Fill(1.0))
-    .height(Dim::Px(96.0))
+    );
+    s.ops.extend(sc.ops);
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -74,6 +68,8 @@ pub(crate) struct AlgoStyle {
     /// Number ink on FILLED (carrier) boxes — the panel background,
     /// so digits punch through the accent.
     pub bg: Color,
+    /// The op numbers' face.
+    pub font: Font,
 }
 
 /// One algorithm's wiring: `mods[i]` = bitmask of ops modulating op
@@ -173,6 +169,7 @@ pub(crate) fn scene(st: &AlgoState, style: &AlgoStyle) -> Scene {
             text: alloc::format!("{}", i + 1),
             size: 10.0,
             color: num_ink,
+            font: style.font,
         });
     }
     // The self-feedback loop.
@@ -200,6 +197,7 @@ mod tests {
             ink: Color::rgba(0.6, 0.65, 0.75, 1.0),
             line: Color::rgba(0.35, 0.38, 0.45, 1.0),
             bg: Color::rgba(0.06, 0.07, 0.08, 1.0),
+            font: Font::default(),
         }
     }
 

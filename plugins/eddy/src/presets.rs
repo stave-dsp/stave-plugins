@@ -7,10 +7,18 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use stave_core::editor_kit::preset;
+use stave_core::params::AnyParam;
 use stave_core::Preset;
 
 use crate::params::EddyParams;
+
+/// A preset from (parameter, plain value) pairs.
+fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
+    Preset {
+        name,
+        values: pairs.iter().map(|(p, v)| (p.meta().id, *v)).collect(),
+    }
+}
 
 pub fn presets(p: &EddyParams) -> Vec<Preset> {
     // (algo: CIRCUIT 0 / MOTOR 1 / SHIFT 2 / ORBIT 3;
