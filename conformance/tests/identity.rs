@@ -4,9 +4,6 @@
 //! they never change. A plugin whose identity moved here would load as
 //! a missing plugin in every saved session.
 
-use stave::__export::vst3::wrapper::Vst3Export;
-use stave::__export::Shell;
-use stave::Plugin;
 
 /// A VST3 class id as hosts print it: its sixteen bytes in hex.
 fn hex(tuid: &[u8]) -> String {
@@ -17,11 +14,10 @@ macro_rules! identities {
     ($($name:ident = $plugin:ty, $clap:literal, $component:literal, $controller:literal;)*) => {$(
         #[test]
         fn $name() {
-            assert_eq!(<$plugin as Plugin>::INFO.id, $clap, "CLAP id");
-            let component = <Shell<$plugin> as Vst3Export>::COMPONENT_CID;
-            let controller = <Shell<$plugin> as Vst3Export>::CONTROLLER_CID;
-            assert_eq!(hex(&component), $component, "VST3 component class id");
-            assert_eq!(hex(&controller), $controller, "VST3 controller class id");
+            let id = stave::identity::<$plugin>();
+            assert_eq!(id.clap, $clap, "CLAP id");
+            assert_eq!(hex(&id.vst3_component), $component, "VST3 component class id");
+            assert_eq!(hex(&id.vst3_controller), $controller, "VST3 controller class id");
         }
     )*};
 }
