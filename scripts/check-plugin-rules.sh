@@ -13,7 +13,7 @@ for proj in plugins/*/; do
   src="$proj/src"
   [ -d "$src" ] || continue
   for ty in $(grep -rhoE "^impl Plugin for [A-Za-z0-9_]+" "$src" --include="*.rs" | awk '{print $4}' | sort -u); do
-    files=$(grep -rlE "^impl (Plugin for )?${ty}( |\{)" "$src" --include="*.rs" | sort -u || true)
+    files=$(grep -rlE "^impl(<[^>]*>)? (Plugin for )?${ty}( |<|\{)" "$src" --include="*.rs" | sort -u || true)
     n=$(echo "$files" | grep -c . || true)
     if [ "$n" -gt 1 ]; then
       echo "RULE: $proj $ty impl blocks are distributed across files (one spine only):"
@@ -22,15 +22,19 @@ for proj in plugins/*/; do
     fi
   done
 done
+plugins=$(grep -rlE "^impl Plugin for " plugins/*/src --include="*.rs" | wc -l)
+if [ "$plugins" -eq 0 ]; then
+  echo "RULE: no \`impl Plugin for\` found under plugins/ — the spine check matched nothing"
+  fail=1
+fi
 
 # 2. GROWTH SIGNAL (advisory, never fails): a large single-file
 #    engine often means the second concept has arrived. Line count
 #    is a proxy, not a property — the decision is human.
-for f in plugins/*/src/engine.rs; do
-  [ -f "$f" ] || continue
+for f in $(grep -rlE "^impl Plugin for " plugins/*/src --include="*.rs"); do
   lines=$(wc -l < "$f")
   if [ "$lines" -gt 200 ]; then
-    echo "note: $f is $lines lines — worth asking if a second concept wants engine/ components"
+    echo "note: $f (the plugin spine) is $lines lines — worth asking if a second concept wants its own component"
   fi
 done
 

@@ -25,12 +25,3 @@ fail-fast = false
 # past 10 s has regressed: it is killed and fails the run, and slowness
 # cannot creep back.
 slow-timeout = { period = "10s", terminate-after = 1 }
-
-# The one exception, until the framework release that mounts validation
-# as a test per check (`passes_validation::*`, the per-param checks in
-# parts): before it, `plugin_checks!` runs the whole suite as this one
-# test, ~10–20 s for the heaviest plugins. Drop this once the framework
-# is bumped past it.
-[[profile.ci.overrides]]
-filter = 'test(=passes_validation)'
-slow-timeout = { period = "30s", terminate-after = 2 }
