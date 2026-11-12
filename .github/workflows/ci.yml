@@ -1,8 +1,9 @@
 # CI for the plugin suite. The framework is a cargo git dependency pinned
 # to a release tag of github.com/stave-dsp/stave (Cargo.lock records the
 # commit), so builds are --locked. While the framework repo is private,
-# jobs fetch it with a read-only deploy key (secret STAVE_DEPLOY_KEY);
-# once it is public that step skips itself.
+# jobs fetch it with a read-only deploy key (secret STAVE_DEPLOY_KEY, set
+# up by scripts/ci-framework-access.sh); once it is public, revoke it and
+# that step skips itself.
 name: ci
 
 on:

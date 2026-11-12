@@ -9,8 +9,8 @@
 #
 # Linking appends a marked [patch] block to Cargo.toml (and rewrites
 # Cargo.lock's framework entries to paths). Never commit it linked: CI
-# fails on the block. To ship framework changes, tag a stave release and
-# bump the tag in [workspace.dependencies].
+# fails on the block. To ship framework changes: stave's scripts/release.sh,
+# then scripts/bump-framework.sh here.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

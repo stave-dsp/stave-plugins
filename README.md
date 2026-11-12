@@ -68,8 +68,15 @@ scripts/link-framework.sh          # build against ../stave instead of the tag
 scripts/link-framework.sh --off    # back to the pinned tag before committing
 ```
 
-CI rejects a commit made while linked. To ship framework changes, tag a
-stave release and bump the tag in `Cargo.toml`.
+CI rejects a commit made while linked. To ship framework changes, cut a
+release in stave (`scripts/release.sh 0.2.0`), then here run
+`scripts/bump-framework.sh v0.2.0` and commit the result.
+
+### CI access to the framework
+
+While `stave-dsp/stave` is private, CI fetches it with a read-only
+deploy key: `scripts/ci-framework-access.sh` creates (or rotates) it,
+`--status` shows it, `--revoke` removes it once the framework is public.
 
 ## The gates
 
