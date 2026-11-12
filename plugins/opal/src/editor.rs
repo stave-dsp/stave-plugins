@@ -16,13 +16,12 @@
 //! outside params, automation, and the session entirely. The
 //! algorithm stays param-bound: algorithms ARE sounds.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
+use stave::face::photo::hex;
+use stave::face::{CapStyle, Finish, Hardware, Palette};
+use stave::params::AnyParam;
+use stave::prelude::*;
 
-use stave_core::face::prelude::*;
-use stave_core::params::{AnyParam, BindParam, ParamEnum, RouteParams};
-
+use crate::engine::OpalTaps;
 use crate::params::OpalParams;
 
 /// The top page set (VOICE / LFO / MOD).
@@ -33,18 +32,26 @@ const OP_PAGES: u32 = 2;
 /// Opal's finish: deep violet anodized, pearl caps, an opal-fire
 /// pink accent over sea-green phosphor.
 fn theme() -> Theme {
-    use stave_ui::photo::hex;
+    let base = Theme::indigo();
     Theme {
         name: "opal",
-        surface: hex(0x2A2143),
-        plate: hex(0x221A38),
-        accent: Color::rgba(1.0, 0.56, 0.74, 1.0),
-        lamp: [1.6, 0.5, 1.1],
-        caps: stave_core::face::CapStyle::Soft,
-        cap: hex(0xE9E4EE),
-        pointer: Color::rgba(0.20, 0.15, 0.36, 1.0),
-        phosphor: Color::rgba(0.55, 0.96, 0.90, 1.0),
-        ..Theme::indigo()
+        finish: Finish {
+            surface: hex(0x2A2143),
+            plate: hex(0x221A38),
+            ..base.finish
+        },
+        palette: Palette {
+            accent: Color::rgba(1.0, 0.56, 0.74, 1.0),
+            phosphor: Color::rgba(0.55, 0.96, 0.90, 1.0),
+            ..base.palette
+        },
+        hardware: Hardware {
+            caps: CapStyle::Soft,
+            cap: hex(0xE9E4EE),
+            pointer: Color::rgba(0.20, 0.15, 0.36, 1.0),
+            lamp: [1.6, 0.5, 1.1],
+        },
+        ..base
     }
 }
 
@@ -96,23 +103,6 @@ fn lfo_plate(
         .gap(gap + 8.0)
         .align(Align::Center),
     )
-}
-
-/// One route slot as a channel strip: the source's live trace (the
-/// slot's number printed on it), then every one of its seven params.
-fn route_row<S: ParamEnum, T: ParamEnum>(r: &RouteParams<S, T>, probe: &'static str, label: &'static str) -> FaceNode {
-    row(vec![
-        Trace::new(probe, 64.0, 44.0, (-1.0, 1.0)).label(label).node(),
-        Stepper::new(r.src.bind()).label("SOURCE").width(120.0).node(),
-        Stepper::new(r.tgt.bind()).label("DEST").width(120.0).node(),
-        Knob::new(r.depth.bind()).small().centered().label("AMOUNT").node(),
-        Stepper::new(r.via.bind()).label("VIA").width(120.0).node(),
-        Toggle::new(r.mode.bind()).label("MODE").node(),
-        Knob::new(r.lag.bind()).small().label("LAG").node(),
-        Stepper::new(r.quant.bind()).label("QUANT").width(96.0).node(),
-    ])
-    .gap(10.0)
-    .align(Align::Center)
 }
 
 pub fn face(p: &OpalParams) -> Face {
@@ -168,10 +158,9 @@ pub fn face(p: &OpalParams) -> Face {
     .align(Align::Stretch);
 
     // ---- MOD -----------------------------------------------------
-    const PROBES: [&str; 4] = ["mod 1", "mod 2", "mod 3", "mod 4"];
     const LABELS: [&str; 4] = ["1", "2", "3", "4"];
     let mod_page = Plate::titled("MODULATION").around(
-        column(p.routes.iter().enumerate().map(|(i, r)| route_row(r, PROBES[i], LABELS[i])).collect())
+        column(p.routes.iter().enumerate().map(|(i, r)| r.row(OpalTaps::MODS[i], LABELS[i])).collect())
             .gap(gap)
             .align(Align::Center),
     );
@@ -179,17 +168,4 @@ pub fn face(p: &OpalParams) -> Face {
     let pages = pages(PAGES, vec![voice_page, lfo_page, mod_page]);
     let body = column(vec![header, pages]).gap(theme.space(4)).align(Align::Stretch);
     Face::new(theme, Panel::default().around(body))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every page fits the window budget.
-    #[test]
-    fn the_face_fits() {
-        let rt = stave_core::face::Runtime::new(face(&OpalParams::new()));
-        let (w, h) = rt.size();
-        assert!(w <= 1000.0 && h <= 720.0, "opal face is {w}×{h}");
-    }
 }

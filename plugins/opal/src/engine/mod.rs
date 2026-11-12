@@ -6,25 +6,20 @@
 //! every stave engine: apply changed knobs to the voices, bridge
 //! host events to the rack at their sample offsets, tick.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::{ContinuousControl, Watch};
-use stave_core::{Environment, EventCursor, EventKind, ProcessCtx, Tail};
-use stave_dsp::{
-    hz_of_key, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, NoteSources, Steal, Voice,
-    VoiceEvent, VoiceRack,
+use stave::dsp::{
+    Source,
+    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig,
+    Ensemble, ModLfo, ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack,
 };
+use stave::params::Watch;
+use stave::prelude::*;
 
-use crate::params::OpalParams;
+use crate::params::{LfoTrig, OpalParams};
 
 mod matrix;
 pub(crate) mod operators;
 use matrix::{with_lfo2, Displacements, Routes};
 use operators::{FmCore, OpSettings};
-use stave_core::debug::Tap;
-use stave_core::DebugBus;
-use stave_dsp::{db_to_amp, mod_lfo_hz, rise, ModLfo, ModLfoShape};
 
 const MAX_VOICES: usize = 16;
 
@@ -55,7 +50,7 @@ pub struct OpalVoice {
     disp_target: Displacements,
     disp: Displacements,
     glide: f32,
-    sr: f32,
+    sample_rate: f32,
     lags: [f32; 4],
 }
 
@@ -73,7 +68,7 @@ impl OpalVoice {
             disp_target: Displacements::default(),
             disp: Displacements::default(),
             glide: 1.0,
-            sr: 48_000.0,
+            sample_rate: 48_000.0,
             lags: [0.0; 4],
         }
     }
@@ -108,14 +103,14 @@ impl OpalVoice {
         }
         self.voiced = true;
         for (env, config) in self.envs.iter_mut().zip(adsr) {
-            env.set(&config, self.sr);
+            env.set(&config);
         }
         self.retune();
     }
 
     fn retune(&mut self) {
         for i in 0..4 {
-            self.inc[i] = f64::from(self.hz * self.set.ratios[i]) / f64::from(self.sr);
+            self.inc[i] = f64::from(self.hz * self.set.ratios[i]) / f64::from(self.sample_rate);
         }
     }
 
@@ -134,8 +129,11 @@ impl OpalVoice {
 
 impl Voice for OpalVoice {
     fn prepare(&mut self, sample_rate: f32) {
-        self.sr = sample_rate;
-        self.glide = 1.0 - (-1.0 / (0.005 * sample_rate)).exp();
+        self.sample_rate = sample_rate;
+        self.glide = tau_coeff(0.005, sample_rate);
+        for env in &mut self.envs {
+            env.prepare(sample_rate);
+        }
         self.voiced = false;
         self.reset();
     }
@@ -223,13 +221,31 @@ impl Voice for OpalVoice {
     }
 }
 
-pub struct OpalEngine {
+/// What the face shows live: each route slot's source value.
+#[derive(Taps)]
+pub struct OpalTaps {
+    pub mod_1: Tap,
+    pub mod_2: Tap,
+    pub mod_3: Tap,
+    pub mod_4: Tap,
+}
+
+impl OpalTaps {
+    /// The route slots' taps, in slot order.
+    pub const MODS: [TapId; 4] = [Self::MOD_1, Self::MOD_2, Self::MOD_3, Self::MOD_4];
+
+    fn mods(&self) -> [&Tap; 4] {
+        [&self.mod_1, &self.mod_2, &self.mod_3, &self.mod_4]
+    }
+}
+
+pub struct Opal {
     params: Arc<OpalParams>,
-    output_control: ContinuousControl,
-    sr: f32,
+    output: Smoother,
+    sample_rate: f32,
     rack: VoiceRack<OpalVoice, MAX_VOICES>,
-    /// The whole voicing surface (27 knobs). Reset in activate — the
-    /// ACTIVATION LAW.
+    /// The whole voicing surface (27 knobs). Reset in prepare — the
+    /// PREPARE LAW.
     voicing: Watch<27>,
     /// The matrix clock.
     lfo: ModLfo,
@@ -241,18 +257,28 @@ pub struct OpalEngine {
     /// that pass live here, not in any voice.
     global_lags: [f32; 4],
     ensemble: Ensemble,
-    bus: Option<Arc<DebugBus>>,
-    mod_taps: [Tap; 4],
+    taps: OpalTaps,
 }
 
-impl stave_core::Processor for OpalEngine {
+impl Plugin for Opal {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.opal.vst3",
+        name: "Stave Opal",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "A 4-operator FM synth: eight algorithms, velocity into brightness.",
+        features: &[Feature::Instrument, Feature::Synthesizer, Feature::Stereo],
+        ..Info::INSTRUMENT
+    };
+    /// An instrument: no audio in, stereo out.
+    const LAYOUTS: &'static [Layout] = &[Layout::INSTRUMENT];
     type Params = OpalParams;
 
-    fn new(params: Arc<OpalParams>) -> Self {
+    fn new(params: &Arc<OpalParams>, telemetry: &Telemetry) -> Self {
         Self {
-            output_control: ContinuousControl::new(&params.output),
-            params,
-            sr: 48_000.0,
+            output: Smoother::new(&params.output),
+            params: params.clone(),
+            sample_rate: 48_000.0,
             rack: VoiceRack::new(Steal::Quietest, |i| {
                 OpalVoice::with_seed(0x0BA1_0BA1 ^ (i as u32).wrapping_mul(0x9E37_79B1))
             }),
@@ -261,29 +287,16 @@ impl stave_core::Processor for OpalEngine {
             lfo2: ModLfo::new(3_333.0, 0x0BA1_0002),
             global_lags: [0.0; 4],
             ensemble: Ensemble::default(),
-            bus: None,
-            mod_taps: [
-                Tap::new("mod 1"),
-                Tap::new("mod 2"),
-                Tap::new("mod 3"),
-                Tap::new("mod 4"),
-            ],
+            taps: OpalTaps::new(telemetry),
         }
     }
 
-    fn attach_telemetry(&mut self, bus: Arc<DebugBus>) {
-        self.bus = Some(bus);
-    }
-
-    fn activate(&mut self, env: Environment) {
-        let rate = f64::from(env.sample_rate);
-        self.output_control.prepare(rate, &self.params.output);
-        self.sr = env.sample_rate;
+    fn prepare(&mut self, env: &Environment) {
+        self.output.prepare(env);
+        self.sample_rate = env.sample_rate;
         self.rack.prepare(env.sample_rate);
-        self.lfo
-            .prepare(env.sample_rate, self.params.lfo_rate.value());
-        self.lfo2
-            .prepare(env.sample_rate, self.params.lfo2_rate.value());
+        self.lfo.prepare(env.sample_rate);
+        self.lfo2.prepare(env.sample_rate);
         self.global_lags = [0.0; 4];
         self.ensemble.reset();
         self.voicing.reset();
@@ -293,7 +306,7 @@ impl stave_core::Processor for OpalEngine {
         self.rack.reset();
     }
 
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
+    fn process(&mut self, block: &mut Block<'_>) {
         let p = self.params.clone();
         // 1. Param changes become structure.
         #[rustfmt::skip]
@@ -318,7 +331,7 @@ impl stave_core::Processor for OpalEngine {
                     p.level3.value(),
                     p.level4.value(),
                 ],
-                algo: p.algo.index(),
+                algo: p.algo.value().to_index() as usize,
                 feedback: p.feedback.value(),
                 vel_mod: p.vel_mod.value(),
             };
@@ -355,16 +368,16 @@ impl stave_core::Processor for OpalEngine {
 
         // 1b. The matrix (the chime pattern, per-op destinations,
         //     M-mod sources and shaping).
-        let block_s = ctx.frames as f32 / self.sr;
-        let tempo = ctx
-            .transport
-            .as_ref()
+        let frames = block.frames();
+        let block_s = frames as f32 / self.sample_rate;
+        let tempo = block
+            .transport()
             .and_then(|t| t.tempo_bpm)
             .unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.index(), tempo);
+        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo
-            .set(hz, ModLfoShape::from_index(p.lfo_shape.index()), self.sr);
-        let global_lfo = self.lfo.advance(ctx.frames);
+            .set(hz, ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize));
+        let global_lfo = self.lfo.tick_frames(frames);
         self.ensemble.leak(block_s);
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
@@ -378,25 +391,25 @@ impl stave_core::Processor for OpalEngine {
         // clock cannot follow sixteen voices; self-reference reads
         // the PREVIOUS block, the one-block lag every feedback
         // observes).
-        let hz2_base = mod_lfo_hz(p.lfo2_rate.value(), p.lfo2_sync.index(), tempo);
+        let hz2_base = mod_lfo_hz(p.lfo2_rate.value(), p.lfo2_sync.value().to_index() as usize, tempo);
         let global_sv = with_lfo2(
             self.ensemble.sources(global_lfo, total_level),
-            self.lfo2.value(),
+            self.lfo2.state(),
         );
         let mut glags = self.global_lags;
         let gdisp = matrix::evaluate(&routes, &global_sv, &mut glags);
         self.global_lags = glags;
         let hz2 = (hz2_base * gdisp.lfo2_oct.exp2()).clamp(0.01, 40.0);
         self.lfo2
-            .set(hz2, ModLfoShape::from_index(p.lfo2_shape.index()), self.sr);
-        let global_lfo2 = self.lfo2.advance(ctx.frames);
+            .set(hz2, ModLfoShape::from_index(p.lfo2_shape.value().to_index() as usize));
+        let global_lfo2 = self.lfo2.tick_frames(frames);
         if routes.any() {
             let rise_ms = p.lfo_rise.value();
             let rise2_ms = p.lfo2_rise.value();
-            let note_trig = p.lfo_trig.index() == 1;
-            let note_trig2 = p.lfo2_trig.index() == 1;
+            let note_trig = p.lfo_trig.value() == LfoTrig(1);
+            let note_trig2 = p.lfo2_trig.value() == LfoTrig(1);
             let ensemble = &self.ensemble;
-            let sr = self.sr;
+            let sample_rate = self.sample_rate;
             let (lfo, lfo2) = (&self.lfo, &self.lfo2);
             for v in self.rack.voices_mut() {
                 let raw_lfo = if note_trig {
@@ -415,33 +428,29 @@ impl stave_core::Processor for OpalEngine {
                 let age = v.sources.age;
                 let sv = with_lfo2(
                     standard_sources(
-                        raw_lfo * rise(age, rise_ms, sr),
+                        raw_lfo * rise(age, rise_ms, sample_rate),
                         &v.sources,
                         v.env_level(),
                         ensemble,
                         sympathy(total_level, v.level()),
                     ),
-                    raw_lfo2 * rise(age, rise2_ms, sr),
+                    raw_lfo2 * rise(age, rise2_ms, sample_rate),
                 );
                 v.apply_routes(&routes, &sv);
             }
         }
-        if let Some(bus) = &self.bus {
-            let shown = with_lfo2(self.ensemble.sources(global_lfo, total_level), global_lfo2);
-            for (i, slot) in routes.slots.iter().enumerate() {
-                let value = slot.source(&shown).unwrap_or(0.0);
-                self.mod_taps[i].set(bus, f64::from(value));
-            }
+        let shown = with_lfo2(self.ensemble.sources(global_lfo, total_level), global_lfo2);
+        for (tap, slot) in self.taps.mods().into_iter().zip(&routes.slots) {
+            tap.set(f64::from(slot.source(&shown).unwrap_or(0.0)));
         }
 
         // 2. The audio block: the host-event → VoiceEvent bridge at
         //    sample offsets, around the rack's tick.
-        let mut out_ramp = self.output_control.begin_block(ctx.params, &p.output);
+        let mut output = self.output.ramp(block, &p.output);
         let rack = &mut self.rack;
-        let mut notes = EventCursor::new(ctx.events);
+        let mut notes = EventCursor::new(block.events());
         let ensemble = &mut self.ensemble;
-        let lanes = ctx.lanes::<2>();
-        lanes.run(|fr| {
+        block.lanes::<2>().run(|fr| {
             for event in notes.due(fr.index()) {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
@@ -450,15 +459,19 @@ impl stave_core::Processor for OpalEngine {
                 }
                 rack.dispatch(voice);
             }
-            let g = db_to_amp(out_ramp.next()) * VOICE_GAIN;
+            let g = db_to_amp(output.next()) * VOICE_GAIN;
             let (l, r) = rack.tick();
             fr.write(0, l * g);
             fr.write(1, r * g);
         });
     }
 
-    fn latency_samples(&self) -> u32 {
-        0
+    fn face(params: &OpalParams) -> Option<Face> {
+        Some(crate::editor::face(params))
+    }
+
+    fn presets(params: &OpalParams) -> Vec<Preset> {
+        crate::presets::presets(params)
     }
 
     /// The longest a released note can ring: the slowest carrier
@@ -471,6 +484,6 @@ impl stave_core::Processor for OpalEngine {
             .max(self.params.release2.value())
             .max(self.params.release3.value())
             .max(self.params.release4.value());
-        Tail::Samples((r * 0.001 * 9.3 * self.sr) as u32)
+        Tail::Samples((r * 0.001 * 9.3 * self.sample_rate) as u32)
     }
 }

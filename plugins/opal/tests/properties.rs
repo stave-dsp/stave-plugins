@@ -9,13 +9,11 @@
 //!   when it is down;
 //! * pitch, bit-zero silence — the chime-class base.
 
-use std::sync::Arc;
+use stave::{Event, EventKind, NoteEvent, NoteKind};
+use stave_opal_vst3::Opal;
+use stave_test::PluginHarness;
 
-use stave_core::{
-    AudioBuffer, DebugBus, Event, EventKind, NoteEvent, NoteKind, Plugin, ProcessCtx,
-};
-
-const FS: f32 = 48_000.0;
+const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
 fn note_on(key: i16, vel: f64) -> Event {
@@ -31,46 +29,15 @@ fn note_on(key: i16, vel: f64) -> Event {
     }
 }
 
+/// `blocks` blocks of the left channel, the note (none for a negative
+/// key) arriving at the first frame.
 fn render(set: &[(&str, f64)], key: i16, vel: f64, blocks: usize) -> Vec<f32> {
-    let mut plugin = stave_opal_vst3::Opal::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let mut out = Vec::with_capacity(blocks * BLOCK);
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for b in 0..blocks {
-        let evs = if b == 0 && key >= 0 {
-            vec![note_on(key, vel)]
-        } else {
-            vec![]
-        };
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let mut in_ptrs: [*mut f32; 0] = [];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [] as [&mut [f32]; 0], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &evs,
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Opal>::builder().sample_rate(SAMPLE_RATE).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
+    let notes = if key >= 0 { vec![note_on(key, vel)] } else { vec![] };
+    h.run(blocks * BLOCK, &notes).swap_remove(0)
 }
 
 /// Single-bin correlation magnitude at `hz`.
@@ -78,7 +45,7 @@ fn mag_at(w: &[f32], hz: f64) -> f64 {
     let n = w.len() as f64;
     let (mut re, mut im) = (0.0f64, 0.0f64);
     for (i, &x) in w.iter().enumerate() {
-        let ph = core::f64::consts::TAU * hz * i as f64 / f64::from(FS);
+        let ph = core::f64::consts::TAU * hz * i as f64 / f64::from(SAMPLE_RATE);
         re += f64::from(x) * ph.cos();
         im += f64::from(x) * ph.sin();
     }

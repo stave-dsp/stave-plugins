@@ -3,13 +3,8 @@
 //! global surface. Per-operator ids are blocked in tens (op1 = 10s,
 //! op2 = 20s, …) so the table reads like the panel.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, RouteParams, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
+use stave::route::RouteParams;
 
 param_enum! {
     /// The eight algorithms — mod wiring as data (engine/operators.rs
@@ -131,92 +126,91 @@ pub struct OpalParams {
 }
 
 fn ratio(id: u32, name: &'static str) -> FloatParam {
-    FloatParam::new(id, name, 1.0, Range::new(0.25, 16.0, Taper::Log))
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::log(0.25, 16.0))
+        .default(1.0)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
 fn level(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(0.0, 1.0, Taper::Linear))
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::linear(0.0, 1.0))
+        .default(default)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
 fn a(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(0.5, 2_000.0, Taper::Log))
-        .with_unit(Unit::Ms)
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::log(0.5, 2_000.0))
+        .default(default)
+        .unit(Unit::Ms)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
 fn d(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(1.0, 4_000.0, Taper::Log))
-        .with_unit(Unit::Ms)
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::log(1.0, 4_000.0))
+        .default(default)
+        .unit(Unit::Ms)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
 fn sus(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(0.0, 1.0, Taper::Linear))
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::linear(0.0, 1.0))
+        .default(default)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
 fn r(id: u32, name: &'static str, default: f64) -> FloatParam {
-    FloatParam::new(id, name, default, Range::new(2.0, 8_000.0, Taper::Log))
-        .with_unit(Unit::Ms)
-        .with_group("Operators")
-        .with_smooth(Smooth::Off)
+    FloatParam::new(ParamId(id), name, Range::log(2.0, 8_000.0))
+        .default(default)
+        .unit(Unit::Ms)
+        .group("Operators")
+        .smooth(Smooth::Off)
 }
 
-impl OpalParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-            algo: EnumParam::new(3, "algo", Algo(0)).with_group("Global"),
-            feedback: FloatParam::new(4, "feedback", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Global")
-                .with_smooth(Smooth::Off),
-            vel_mod: FloatParam::new(5, "vel mod", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Global")
-                .with_smooth(Smooth::Off),
-            lfo_shape: EnumParam::new(47, "lfo shape", LfoShapeP(0)).with_group("Mod"),
-            lfo_sync: EnumParam::new(48, "lfo sync", LfoSync(0)).with_group("Mod"),
-            lfo_rise: FloatParam::new(49, "lfo rise", 0.0, Range::new(0.0, 2_000.0, Taper::Linear))
-                .with_unit(Unit::Ms)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo_trig: EnumParam::new(50, "lfo trig", LfoTrig(0)).with_group("Mod"),
-            lfo2_rate: FloatParam::new(88, "lfo2 rate", 0.3, Range::new(0.05, 12.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo2_shape: EnumParam::new(89, "lfo2 shape", LfoShapeP(0)).with_group("Mod"),
-            lfo2_sync: EnumParam::new(90, "lfo2 sync", LfoSync(0)).with_group("Mod"),
-            lfo2_rise: FloatParam::new(
-                91,
-                "lfo2 rise",
-                0.0,
-                Range::new(0.0, 2_000.0, Taper::Linear),
-            )
-            .with_unit(Unit::Ms)
-            .with_group("Mod")
-            .with_smooth(Smooth::Off),
-            lfo2_trig: EnumParam::new(92, "lfo2 trig", LfoTrig(0)).with_group("Mod"),
-            lfo_rate: FloatParam::new(7, "lfo rate", 1.2, Range::new(0.05, 12.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            routes: core::array::from_fn(|i| RouteParams::new(50 + 10 * i as u32, i + 1, "Mod")),
+impl Default for OpalParams {
+    fn default() -> Self {
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            algo: EnumParam::new(ParamId(3), "algo", Algo(0)).group("Global"),
+            feedback: FloatParam::new(ParamId(4), "feedback", Range::linear(0.0, 1.0))
+                .group("Global")
+                .smooth(Smooth::Off),
+            vel_mod: FloatParam::new(ParamId(5), "vel mod", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Global")
+                .smooth(Smooth::Off),
+            lfo_shape: EnumParam::new(ParamId(47), "lfo shape", LfoShapeP(0)).group("Mod"),
+            lfo_sync: EnumParam::new(ParamId(48), "lfo sync", LfoSync(0)).group("Mod"),
+            lfo_rise: FloatParam::new(ParamId(49), "lfo rise", Range::linear(0.0, 2_000.0))
+                .unit(Unit::Ms)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo_trig: EnumParam::new(ParamId(50), "lfo trig", LfoTrig(0)).group("Mod"),
+            lfo2_rate: FloatParam::new(ParamId(88), "lfo2 rate", Range::log(0.05, 12.0))
+                .default(0.3)
+                .unit(Unit::Hz)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo2_shape: EnumParam::new(ParamId(89), "lfo2 shape", LfoShapeP(0)).group("Mod"),
+            lfo2_sync: EnumParam::new(ParamId(90), "lfo2 sync", LfoSync(0)).group("Mod"),
+            lfo2_rise: FloatParam::new(ParamId(91), "lfo2 rise", Range::linear(0.0, 2_000.0))
+            .unit(Unit::Ms)
+            .group("Mod")
+            .smooth(Smooth::Off),
+            lfo2_trig: EnumParam::new(ParamId(92), "lfo2 trig", LfoTrig(0)).group("Mod"),
+            lfo_rate: FloatParam::new(ParamId(7), "lfo rate", Range::log(0.05, 12.0))
+                .default(1.2)
+                .unit(Unit::Hz)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            routes: core::array::from_fn(|i| RouteParams::new(ParamId(50 + 10 * i as u32), i + 1, "Mod")),
             ratio1: ratio(10, "ratio 1"),
             level1: level(11, "level 1", 1.0),
             attack1: a(12, "attack 1", 2.0),
@@ -244,6 +238,6 @@ impl OpalParams {
             decay4: d(43, "decay 4", 400.0),
             sustain4: sus(44, "sustain 4", 0.5),
             release4: r(45, "release 4", 300.0),
-        })
+        }
     }
 }

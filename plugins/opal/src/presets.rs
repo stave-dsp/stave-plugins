@@ -6,11 +6,8 @@
 //! place, not a diff — mod presets also ZERO the slots they don't
 //! use.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::params::AnyParam;
-use stave_core::Preset;
+use stave::params::AnyParam;
+use stave::prelude::*;
 
 use crate::params::OpalParams;
 
@@ -23,8 +20,8 @@ pub fn presets(p: &OpalParams) -> Vec<Preset> {
                 ops: [(f64, f64, f64, f64, f64, f64); 4]| {
         let [(r1, l1, a1, d1, s1, e1), (r2, l2, a2, d2, s2, e2), (r3, l3, a3, d3, s3, e3), (r4, l4, a4, d4, s4, e4)] =
             ops;
-        alloc::vec![
-            (&p.algo as &dyn stave_core::params::AnyParam, algo),
+        vec![
+            (&p.algo as &dyn AnyParam, algo),
             (&p.feedback, feedback),
             (&p.vel_mod, vel_mod),
             (&p.ratio1, r1),
@@ -63,7 +60,7 @@ pub fn presets(p: &OpalParams) -> Vec<Preset> {
             .zip(slots)
             .flat_map(|(r, (src, tgt, depth, via, mode, lag, quant))| {
                 [
-                    (&r.src as &dyn stave_core::params::AnyParam, src),
+                    (&r.src as &dyn AnyParam, src),
                     (&r.tgt, tgt),
                     (&r.depth, depth),
                     (&r.via, via),
@@ -72,7 +69,7 @@ pub fn presets(p: &OpalParams) -> Vec<Preset> {
                     (&r.quant, quant),
                 ]
             })
-            .collect::<alloc::vec::Vec<_>>()
+            .collect::<Vec<_>>()
     };
     let lfos = |r1: f64,
                 sh1: f64,
@@ -84,8 +81,8 @@ pub fn presets(p: &OpalParams) -> Vec<Preset> {
                 sy2: f64,
                 ri2: f64,
                 tr2: f64| {
-        alloc::vec![
-            (&p.lfo_rate as &dyn stave_core::params::AnyParam, r1),
+        vec![
+            (&p.lfo_rate as &dyn AnyParam, r1),
             (&p.lfo_shape, sh1),
             (&p.lfo_sync, sy1),
             (&p.lfo_rise, ri1),
@@ -203,7 +200,7 @@ pub fn presets(p: &OpalParams) -> Vec<Preset> {
         off,
     ]));
 
-    alloc::vec![
+    vec![
         preset(
             "INIT",
             &full(

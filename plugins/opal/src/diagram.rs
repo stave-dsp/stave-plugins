@@ -11,13 +11,8 @@
 //! polylines entering the consumer's top edge, and op 4's
 //! self-feedback as a small loop arc on its box.
 
-use stave_core::face::Frame;
-use stave_ui::layout::Rect;
-use stave_ui::scene::{pt, Font, Op, Path, Pt, Scene, Stroke};
-use stave_ui::style::Color;
-
-extern crate alloc;
-use alloc::vec::Vec;
+use stave::face::{step_of, Typography};
+use stave::prelude::*;
 
 use crate::engine::operators::{DIAGRAM_CARRIERS, DIAGRAM_MODS};
 
@@ -28,14 +23,14 @@ use crate::engine::operators::{DIAGRAM_CARRIERS, DIAGRAM_MODS};
 /// sound).
 pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let n = DIAGRAM_CARRIERS.len();
-    let algo = stave_core::face::step_of(f.bound(0), n as u32) as usize;
+    let algo = step_of(f.bound(0), n as u32) as usize;
     let algo = algo.min(n - 1);
     let mut mods = [0u8; 8];
     for (i, m) in mods.iter_mut().enumerate().take(4) {
         *m = DIAGRAM_MODS[algo * 4 + i];
     }
-    stave_core::face::screens::grid(f, r, s, 8, 4);
-    let ph = f.theme.phosphor;
+    screens::grid(f, r, s, 8, 4);
+    let ph = f.theme.palette.phosphor;
     let (pad_x, pad_y) = (r.w * 0.12, 14.0);
     let sc = scene(
         &AlgoState {
@@ -45,16 +40,19 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
                 ops: 4,
                 feedback_op: Some(3),
             },
-            origin: pt(r.x + pad_x, r.y + pad_y),
-            w: r.w - 2.0 * pad_x,
-            h: r.h - 2.0 * pad_y,
+            area: Rect {
+                x: r.x + pad_x,
+                y: r.y + pad_y,
+                w: r.w - 2.0 * pad_x,
+                h: r.h - 2.0 * pad_y,
+            },
         },
         &AlgoStyle {
             accent: ph,
             ink: Color::rgba(ph.r, ph.g, ph.b, 0.85),
             line: Color::rgba(ph.r, ph.g, ph.b, 0.55),
-            bg: f.theme.screen,
-            font: f.theme.type_.value,
+            bg: f.theme.palette.screen,
+            typography: f.theme.typography,
         },
     );
     s.ops.extend(sc.ops);
@@ -68,8 +66,8 @@ pub(crate) struct AlgoStyle {
     /// Number ink on FILLED (carrier) boxes — the panel background,
     /// so digits punch through the accent.
     pub bg: Color,
-    /// The op numbers' face.
-    pub font: Font,
+    /// The op numbers set in its value face.
+    pub typography: Typography,
 }
 
 /// One algorithm's wiring: `mods[i]` = bitmask of ops modulating op
@@ -87,9 +85,8 @@ pub(crate) struct Wiring {
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct AlgoState {
     pub wiring: Wiring,
-    pub origin: Pt,
-    pub w: f64,
-    pub h: f64,
+    /// Where the diagram draws.
+    pub area: Rect,
 }
 
 /// Each op's row = longest chain distance to a carrier (carriers =
@@ -113,20 +110,21 @@ pub(crate) fn depths(w: &Wiring) -> [u8; 8] {
 
 const BOX: f64 = 22.0;
 
-/// Where each op's box center sits. Exported for the laws.
-pub(crate) fn positions(st: &AlgoState) -> Vec<Pt> {
+/// Each op's box (center ± `BOX / 2`). Exported for the laws.
+pub(crate) fn positions(st: &AlgoState) -> Vec<Rect> {
     let n = st.wiring.ops.min(8) as usize;
     let depth = depths(&st.wiring);
     let max_depth = (0..n).map(|i| depth[i]).max().unwrap_or(0);
     let rows = f64::from(max_depth) + 1.0;
-    let row_h = (st.h - BOX) / rows.max(2.0);
+    let a = st.area;
+    let row_h = (a.h - BOX) / rows.max(2.0);
     (0..n)
         .map(|i| {
             // Column = op index, spread across the width; row by depth
             // (carriers at the bottom).
-            let x = st.origin.x + (i as f64 + 0.5) * st.w / n as f64;
-            let y = st.origin.y + st.h - BOX * 0.5 - f64::from(depth[i]) * row_h;
-            pt(x, y)
+            let x = a.x + (i as f64 + 0.5) * a.w / n as f64;
+            let y = a.y + a.h - BOX * 0.5 - f64::from(depth[i]) * row_h;
+            Rect { x: x - BOX * 0.5, y: y - BOX * 0.5, w: BOX, h: BOX }
         })
         .collect()
 }
@@ -140,8 +138,9 @@ pub(crate) fn scene(st: &AlgoState, style: &AlgoStyle) -> Scene {
     for i in 0..n {
         for j in (i + 1)..n {
             if st.wiring.mods[i] & (1 << j) != 0 {
-                let from = pt(pos[j].x, pos[j].y + BOX * 0.5);
-                let to = pt(pos[i].x, pos[i].y - BOX * 0.5);
+                let (m, c) = (pos[j], pos[i]);
+                let from = pt(m.x + m.w * 0.5, m.y + m.h);
+                let to = pt(c.x + c.w * 0.5, c.y);
                 let mid_y = (from.y + to.y) * 0.5;
                 sc.stroke(
                     Path::polyline(&[from, pt(from.x, mid_y), pt(to.x, mid_y), to]),
@@ -154,9 +153,9 @@ pub(crate) fn scene(st: &AlgoState, style: &AlgoStyle) -> Scene {
     // NUMBERED so the picture answers "which op is that?" (the
     // numbers match the OP 1–4 pages; the diagram was unreadable
     // anonymous).
-    for (i, &c) in pos.iter().enumerate() {
+    for (i, &b) in pos.iter().enumerate() {
         let is_carrier = st.wiring.carriers & (1 << i) != 0;
-        let boxp = Path::rect(pt(c.x - BOX * 0.5, c.y - BOX * 0.5), BOX, BOX);
+        let boxp = Path::rect(pt(b.x, b.y), b.w, b.h);
         let num_ink = if is_carrier {
             sc.solid(boxp, style.accent);
             style.bg
@@ -164,21 +163,16 @@ pub(crate) fn scene(st: &AlgoState, style: &AlgoStyle) -> Scene {
             sc.stroke(boxp, Stroke::new(style.ink, 1.2));
             style.ink
         };
-        sc.ops.push(Op::Text {
-            at: pt(c.x, c.y + 3.4),
-            text: alloc::format!("{}", i + 1),
-            size: 10.0,
-            color: num_ink,
-            font: style.font,
-        });
+        let at = pt(b.x + b.w * 0.5, b.y + b.h * 0.5 + 3.4);
+        sc.text_in(at, format!("{}", i + 1), 10.0, num_ink, style.typography.value);
     }
     // The self-feedback loop.
     if let Some(fb) = st.wiring.feedback_op {
         let i = fb.min(7) as usize;
         if i < n {
-            let c = pos[i];
+            let b = pos[i];
             sc.stroke(
-                Path::arc(pt(c.x + BOX * 0.5, c.y - BOX * 0.5), 5.0, 0.0, 4.7, false),
+                Path::arc(pt(b.x + b.w, b.y), 5.0, 0.0, 4.7, false),
                 Stroke::new(style.line, 1.2),
             );
         }
@@ -189,7 +183,6 @@ pub(crate) fn scene(st: &AlgoState, style: &AlgoStyle) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stave_ui::scene::Op;
 
     fn style() -> AlgoStyle {
         AlgoStyle {
@@ -197,8 +190,25 @@ mod tests {
             ink: Color::rgba(0.6, 0.65, 0.75, 1.0),
             line: Color::rgba(0.35, 0.38, 0.45, 1.0),
             bg: Color::rgba(0.06, 0.07, 0.08, 1.0),
-            font: Font::default(),
+            typography: Theme::default().typography,
         }
+    }
+
+    /// The scene's ops as their debug text: `Op` is not reachable from
+    /// `stave` (only `Scene` is), so the laws read the ops' shapes off
+    /// their `Debug` form.
+    fn ops(sc: &Scene) -> Vec<String> {
+        sc.ops.iter().map(|o| format!("{o:?}")).collect()
+    }
+
+    /// A stroke op's width and segment count.
+    fn stroke_of(op: &str) -> Option<(bool, usize)> {
+        let body = op.strip_prefix("Stroke {")?;
+        let segs = ["MoveTo(", "LineTo(", "QuadTo(", "CubicTo(", "Arc {", "Close"]
+            .iter()
+            .map(|s| body.matches(s).count())
+            .sum();
+        Some((body.contains("width: 1.2"), segs))
     }
 
     fn chain() -> Wiring {
@@ -223,9 +233,7 @@ mod tests {
     fn st(w: Wiring) -> AlgoState {
         AlgoState {
             wiring: w,
-            origin: pt(0.0, 0.0),
-            w: 200.0,
-            h: 120.0,
+            area: Rect { x: 0.0, y: 0.0, w: 200.0, h: 120.0 },
         }
     }
 
@@ -236,13 +244,9 @@ mod tests {
         for w in [chain(), organ()] {
             let expected: u32 = w.mods.iter().map(|m| m.count_ones()).sum();
             let sc = scene(&st(w), &style());
-            let routes = sc
-                .ops
+            let routes = ops(&sc)
                 .iter()
-                .filter(|op| {
-                    matches!(op, Op::Stroke { path, stroke }
-                        if stroke.width == 1.2 && path.segs.len() == 4)
-                })
+                .filter(|op| stroke_of(op) == Some((true, 4)))
                 .count() as u32;
             assert_eq!(routes, expected);
         }
@@ -268,18 +272,10 @@ mod tests {
     #[test]
     fn carriers_fill_modulators_outline() {
         let sc = scene(&st(chain()), &style());
-        let fills = sc
-            .ops
-            .iter()
-            .filter(|o| matches!(o, Op::Fill { .. }))
-            .count();
+        let fills = ops(&sc).iter().filter(|o| o.starts_with("Fill {")).count();
         assert_eq!(fills, 1, "CHAIN has exactly one carrier");
         let sc = scene(&st(organ()), &style());
-        let fills = sc
-            .ops
-            .iter()
-            .filter(|o| matches!(o, Op::Fill { .. }))
-            .count();
+        let fills = ops(&sc).iter().filter(|o| o.starts_with("Fill {")).count();
         assert_eq!(fills, 4, "ORGAN is all carriers");
     }
 
@@ -290,9 +286,10 @@ mod tests {
         let nums: Vec<_> = sc
             .ops
             .iter()
-            .filter_map(|o| match o {
-                Op::Text { text, .. } => Some(text.as_str()),
-                _ => None,
+            .filter_map(|o| {
+                let o = format!("{o:?}");
+                let rest = o.strip_prefix("Text {")?.split("text: \"").nth(1)?;
+                Some(rest.split('"').next()?.to_owned())
             })
             .collect();
         assert_eq!(nums, ["1", "2", "3", "4"]);

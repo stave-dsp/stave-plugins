@@ -5,7 +5,7 @@
 //! targets are the modulator LEVELS — a route into LEVEL 2 moves
 //! BRIGHTNESS, which is what modulating FM means.
 
-use stave_dsp::RouteSlot;
+use stave::dsp::RouteSlot;
 
 /// Declared displacement bounds.
 pub(super) const PITCH_RANGE_ST: f32 = 12.0;
