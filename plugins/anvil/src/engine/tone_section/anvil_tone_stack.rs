@@ -63,6 +63,7 @@ impl AnvilToneControlPositions {
     }
 }
 
+#[derive(Clone)]
 pub struct AnvilToneStack {
     mechanism: PassiveToneStack,
 }

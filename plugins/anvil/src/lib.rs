@@ -37,7 +37,6 @@ stave::export!(Anvil, vst3_class_ids: {
 
 #[cfg(test)]
 mod tests {
-    use stave::params::AnyParam;
     use stave::prelude::*;
     use stave::state::{load, save, StateStore};
 

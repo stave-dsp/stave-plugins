@@ -15,12 +15,14 @@ const HIGH_CROSSOVER_HZ: f32 = 650.0;
 const HIGH_BAND_OUTPUT_TRIM_DB: f32 = -2.5;
 const LOW_MID_BAND_OUTPUT_GAIN: f32 = 1.5;
 
+#[derive(Clone)]
 struct FrequencyBandSamples {
     low_band: f32,
     low_mid_band: f32,
     high_band: f32,
 }
 
+#[derive(Clone)]
 struct ThreeWayCrossover {
     low_crossover_lowpass: LinkwitzRiley4,
     low_crossover_highpass: LinkwitzRiley4,
@@ -86,6 +88,7 @@ impl ThreeWayCrossover {
 /// The input guard prevents out-of-band content from creating
 /// intermodulation products. The output guard confines generated harmonics so
 /// the high-band branch remains the owner of high-frequency identity.
+#[derive(Clone)]
 struct DeepBranchIsolationFilter {
     input_guard: Biquad,
     first_output_guard: Biquad,
@@ -156,6 +159,7 @@ pub(super) struct SplitBandMeasurements {
     pub(super) high_band_output_peak: f32,
 }
 
+#[derive(Clone)]
 pub(super) struct SplitBandAmplifier {
     crossover: ThreeWayCrossover,
     low_band_isolation_filter: DeepBranchIsolationFilter,

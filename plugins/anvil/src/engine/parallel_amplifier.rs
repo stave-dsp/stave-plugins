@@ -34,6 +34,7 @@ pub struct AmplifierMeasurements {
     pub full_band_power_pair_draw_sample_count: f32,
 }
 
+#[derive(Clone)]
 pub struct ParallelAmplifier {
     full_band_branch: AmplifierBranch,
     split_band_amplifier: SplitBandAmplifier,

@@ -9,6 +9,7 @@ use anvil_tone_stack::{AnvilToneControlPositions, AnvilToneStack};
 const LEVEL_COMPENSATION_REFERENCE_HZ: f64 = 700.0;
 const MINIMUM_REPORTED_MAGNITUDE: f64 = 0.031_622_776_601_683_79;
 
+#[derive(Clone)]
 pub(super) struct ToneSection {
     tone_stack: AnvilToneStack,
 }

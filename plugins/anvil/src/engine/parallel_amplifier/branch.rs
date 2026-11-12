@@ -92,6 +92,7 @@ impl BranchDesign {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct AmplifierBranch {
     design: BranchDesign,
     preamp: RcCoupledTriodeCascade,

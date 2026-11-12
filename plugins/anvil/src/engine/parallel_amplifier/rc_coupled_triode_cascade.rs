@@ -30,6 +30,7 @@ use stave::dsp::{
 /// Maximum cascade depth (fixed so there's no audio-thread allocation).
 pub const MAXIMUM_STAGE_COUNT: usize = 4;
 
+#[derive(Clone)]
 pub struct RcCoupledTriodeCascade {
     /// Table/calibration factory: holds the Koren solve + drive taper.
     triode_prototype: Triode,

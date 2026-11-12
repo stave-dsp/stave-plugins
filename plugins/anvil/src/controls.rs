@@ -4,7 +4,6 @@
 //! construction. [`resolve_engine_settings`] is the only place a player
 //! control may map to more than one engine quantity.
 
-use stave::params::{AnyParam, Ramp};
 use stave::prelude::*;
 
 use crate::params::AnvilParameters;
@@ -27,6 +26,8 @@ pub struct PanelControlValues {
 
 /// The panel as the processor renders it: each knob glides as its
 /// param declares (one [`Smoother`] per knob).
+#[derive(Smoothers)]
+#[smoothers(params = AnvilParameters, frame = PanelValues)]
 pub struct Panel {
     preamp_gain: Smoother,
     input_low_cut: Smoother,
@@ -39,21 +40,6 @@ pub struct Panel {
     power_pair_overdrive: Smoother,
     difference_tone: Smoother,
     high_frequency_emphasis: Smoother,
-}
-
-/// One block of the panel's glides.
-pub struct PanelRamps<'s> {
-    preamp_gain: Ramp<'s>,
-    input_low_cut: Ramp<'s>,
-    bass_tone: Ramp<'s>,
-    midrange_tone: Ramp<'s>,
-    treble_tone: Ramp<'s>,
-    presence_tone: Ramp<'s>,
-    depth_tone: Ramp<'s>,
-    topology_separation_amount: Ramp<'s>,
-    power_pair_overdrive: Ramp<'s>,
-    difference_tone: Ramp<'s>,
-    high_frequency_emphasis: Ramp<'s>,
 }
 
 /// The panel's values at one frame.
@@ -70,89 +56,6 @@ pub struct PanelValues {
     pub power_pair_overdrive: f32,
     pub difference_tone: f32,
     pub high_frequency_emphasis: f32,
-}
-
-impl Panel {
-    pub fn new(parameters: &AnvilParameters) -> Self {
-        Self {
-            preamp_gain: Smoother::new(&parameters.preamp_gain),
-            input_low_cut: Smoother::new(&parameters.input_low_cut),
-            bass_tone: Smoother::new(&parameters.bass_tone),
-            midrange_tone: Smoother::new(&parameters.midrange_tone),
-            treble_tone: Smoother::new(&parameters.treble_tone),
-            presence_tone: Smoother::new(&parameters.presence_tone),
-            depth_tone: Smoother::new(&parameters.depth_tone),
-            topology_separation_amount: Smoother::new(&parameters.topology_separation_amount),
-            power_pair_overdrive: Smoother::new(&parameters.power_pair_overdrive),
-            difference_tone: Smoother::new(&parameters.difference_tone),
-            high_frequency_emphasis: Smoother::new(&parameters.high_frequency_emphasis),
-        }
-    }
-
-    pub fn prepare(&mut self, environment: &Environment) {
-        self.preamp_gain.prepare(environment);
-        self.input_low_cut.prepare(environment);
-        self.bass_tone.prepare(environment);
-        self.midrange_tone.prepare(environment);
-        self.treble_tone.prepare(environment);
-        self.presence_tone.prepare(environment);
-        self.depth_tone.prepare(environment);
-        self.topology_separation_amount.prepare(environment);
-        self.power_pair_overdrive.prepare(environment);
-        self.difference_tone.prepare(environment);
-        self.high_frequency_emphasis.prepare(environment);
-    }
-
-    /// Jump every glide to its param's value.
-    pub fn snap(&mut self, parameters: &AnvilParameters) {
-        self.preamp_gain.snap(AnyParam::value(&parameters.preamp_gain));
-        self.input_low_cut.snap(AnyParam::value(&parameters.input_low_cut));
-        self.bass_tone.snap(AnyParam::value(&parameters.bass_tone));
-        self.midrange_tone.snap(AnyParam::value(&parameters.midrange_tone));
-        self.treble_tone.snap(AnyParam::value(&parameters.treble_tone));
-        self.presence_tone.snap(AnyParam::value(&parameters.presence_tone));
-        self.depth_tone.snap(AnyParam::value(&parameters.depth_tone));
-        self.topology_separation_amount.snap(AnyParam::value(&parameters.topology_separation_amount));
-        self.power_pair_overdrive.snap(AnyParam::value(&parameters.power_pair_overdrive));
-        self.difference_tone.snap(AnyParam::value(&parameters.difference_tone));
-        self.high_frequency_emphasis.snap(AnyParam::value(&parameters.high_frequency_emphasis));
-    }
-
-    pub fn ramp<'s>(&'s mut self, block: &Block<'s>, parameters: &AnvilParameters) -> PanelRamps<'s> {
-        PanelRamps {
-            preamp_gain: self.preamp_gain.ramp(block, &parameters.preamp_gain),
-            input_low_cut: self.input_low_cut.ramp(block, &parameters.input_low_cut),
-            bass_tone: self.bass_tone.ramp(block, &parameters.bass_tone),
-            midrange_tone: self.midrange_tone.ramp(block, &parameters.midrange_tone),
-            treble_tone: self.treble_tone.ramp(block, &parameters.treble_tone),
-            presence_tone: self.presence_tone.ramp(block, &parameters.presence_tone),
-            depth_tone: self.depth_tone.ramp(block, &parameters.depth_tone),
-            topology_separation_amount: self.topology_separation_amount.ramp(block, &parameters.topology_separation_amount),
-            power_pair_overdrive: self.power_pair_overdrive.ramp(block, &parameters.power_pair_overdrive),
-            difference_tone: self.difference_tone.ramp(block, &parameters.difference_tone),
-            high_frequency_emphasis: self.high_frequency_emphasis.ramp(block, &parameters.high_frequency_emphasis),
-        }
-    }
-}
-
-impl PanelRamps<'_> {
-    /// The next frame's values (an endless per-frame stream, like
-    /// [`Ramp::next`]).
-    pub fn next(&mut self) -> PanelValues {
-        PanelValues {
-            preamp_gain: self.preamp_gain.next(),
-            input_low_cut: self.input_low_cut.next(),
-            bass_tone: self.bass_tone.next(),
-            midrange_tone: self.midrange_tone.next(),
-            treble_tone: self.treble_tone.next(),
-            presence_tone: self.presence_tone.next(),
-            depth_tone: self.depth_tone.next(),
-            topology_separation_amount: self.topology_separation_amount.next(),
-            power_pair_overdrive: self.power_pair_overdrive.next(),
-            difference_tone: self.difference_tone.next(),
-            high_frequency_emphasis: self.high_frequency_emphasis.next(),
-        }
-    }
 }
 
 impl From<PanelValues> for PanelControlValues {

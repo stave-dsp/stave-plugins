@@ -12,7 +12,6 @@
 //! it is Anvil's product design.
 
 use stave::dsp::Slew;
-use stave::params::AnyParam;
 use stave::prelude::*;
 
 mod difference_tone;
@@ -34,6 +33,7 @@ use crate::controls::{
 };
 use crate::params::AnvilParameters;
 
+#[derive(Clone)]
 struct ProcessingLane {
     input_highpass_filter: Biquad,
     difference_tone_generator: DifferenceToneGenerator,
@@ -81,6 +81,9 @@ pub struct Anvil {
     taps: AnvilTaps,
     parameters: Arc<AnvilParameters>,
     amplifier: Amplifier,
+    /// The amplifier as `prepare` settled it: `reset` copies it back
+    /// rather than re-settling on the audio thread.
+    settled: Amplifier,
     panel: Panel,
     output_level: Smoother,
 }
@@ -90,6 +93,7 @@ pub struct Anvil {
 const CONTROL_INTERVAL: usize = 16;
 
 /// The lanes and the settings last applied to them.
+#[derive(Clone)]
 struct Amplifier {
     sample_rate: f32,
     lanes: PerChannel<ProcessingLane, 2>,
@@ -112,6 +116,15 @@ impl Amplifier {
     fn prepare(&mut self, sample_rate: f32, panel: PanelControlValues) {
         self.sample_rate = sample_rate;
         for lane in self.lanes.iter_mut() {
+            // Cleared first: the operating point must not depend on what
+            // the lane last played.
+            lane.input_highpass_filter.reset();
+            lane.difference_tone_generator.reset();
+            lane.slew_limiter.reset();
+            lane.parallel_amplifier.reset();
+            lane.high_band_limiter.reset();
+            lane.tone_section.reset();
+            lane.output_conditioner.reset();
             lane.input_highpass_filter.prepare(sample_rate);
             lane.difference_tone_generator.prepare(sample_rate);
             lane.slew_limiter.prepare(sample_rate);
@@ -120,22 +133,6 @@ impl Amplifier {
             lane.high_band_limiter.prepare(sample_rate);
             lane.tone_section.prepare(sample_rate);
             lane.output_conditioner.prepare(sample_rate);
-            lane.previous_amplifier_output = 0.0;
-        }
-        self.settle(panel);
-    }
-
-    /// Clear every lane's signal state (no allocation), then
-    /// [`settle`](Self::settle) it for `panel`: the prepared state again.
-    fn reset(&mut self, panel: PanelControlValues) {
-        for lane in self.lanes.iter_mut() {
-            lane.input_highpass_filter.reset();
-            lane.difference_tone_generator.reset();
-            lane.slew_limiter.reset();
-            lane.parallel_amplifier.reset();
-            lane.high_band_limiter.reset();
-            lane.tone_section.reset();
-            lane.output_conditioner.reset();
             lane.previous_amplifier_output = 0.0;
         }
         self.settle(panel);
@@ -269,9 +266,7 @@ impl Plugin for Anvil {
         // The render self-identifies: `build` = compile timestamp.
         taps.build
             .set(env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0));
-        Self {
-            taps,
-            amplifier: Amplifier {
+        let amplifier = Amplifier {
                 sample_rate: 48_000.0,
                 lanes: PerChannel::new(|_| ProcessingLane {
                     input_highpass_filter: Biquad::passthrough(),
@@ -290,7 +285,11 @@ impl Plugin for Anvil {
                 last_tone_settings: LastAppliedSettings::new(),
                 last_output_settings: LastAppliedSettings::new(),
                 makeup_gain: 1.0,
-            },
+            };
+        Self {
+            taps,
+            settled: amplifier.clone(),
+            amplifier,
             panel: Panel::new(parameters),
             output_level: Smoother::new(&parameters.output_level),
             parameters: parameters.clone(),
@@ -304,17 +303,18 @@ impl Plugin for Anvil {
             environment.sample_rate,
             PanelControlValues::read(&self.parameters),
         );
+        self.settled.clone_from(&self.amplifier);
     }
 
     /// Back to the state `prepare` left: the panel snaps to the params
-    /// and the amplifier re-settles at its idle operating point (bounded
-    /// compute, no allocation).
+    /// and the amplifier is the settled copy `prepare` kept (no
+    /// simulation, no allocation); the next block re-voices it for the
+    /// panel as it is now.
     fn reset(&mut self) {
         self.output_level
             .snap(AnyParam::value(&self.parameters.output_level));
         self.panel.snap(&self.parameters);
-        self.amplifier
-            .reset(PanelControlValues::read(&self.parameters));
+        self.amplifier.clone_from(&self.settled);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {

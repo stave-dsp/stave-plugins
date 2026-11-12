@@ -11,6 +11,7 @@ const OUTPUT_BAND_HZ: f32 = 175.0;
 const GENERATOR_DRIVE: f32 = 16.0;
 const DIFFERENCE_TONE_INJECTION_GAIN: f32 = 1.5;
 
+#[derive(Clone)]
 pub struct DifferenceToneGenerator {
     generation_band: Biquad,
     output_lowpass_1: Biquad,

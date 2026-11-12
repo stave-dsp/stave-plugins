@@ -5,6 +5,7 @@ use stave::prelude::*;
 
 use crate::controls::OutputSettings;
 
+#[derive(Clone)]
 pub struct OutputConditioner {
     fixed_low_mid_peak: Biquad,
     fixed_high_shelf: Biquad,

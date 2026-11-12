@@ -9,6 +9,7 @@ use stave::prelude::*;
 const HIGH_BAND_LIMITER_CROSSOVER_HZ: f32 = 2_500.0;
 const HIGH_BAND_DRIVE: f32 = 3.0;
 
+#[derive(Clone)]
 pub struct HighBandLimiter {
     lowpass: LinkwitzRiley4,
     highpass: LinkwitzRiley4,
