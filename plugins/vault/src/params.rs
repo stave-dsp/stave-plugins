@@ -121,7 +121,7 @@ impl Default for VaultParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             mix: FloatParam::new(ParamId(3), "mix", Range::linear(0.0, 1.0)).default(0.32)
                 .group("Field")
                 .smooth(Smooth::ms(20.0)),

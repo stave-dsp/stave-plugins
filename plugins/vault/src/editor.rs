@@ -87,17 +87,10 @@ fn machine(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let soft = Color::rgba(ph.r, ph.g, ph.b, 0.6);
     let i = step_of(f.bound(0), TOPOLOGIES.len() as u32) as usize;
     let i = i.min(LEGENDS.len() - 1);
-    // Left-set print, by its left edge: the mono legends padded to one
-    // width and centered share a left edge (`TextAlign` is not on the
-    // author surface); the name sits on that edge's estimate.
-    let width = LEGENDS[i].iter().map(|l| l.chars().count()).max().unwrap_or(0);
-    let mid = r.x + r.w / 2.0;
-    let left = mid - width as f64 * 9.0 * 0.6 / 2.0;
-    let name = TOPOLOGIES[i];
-    let name_w = name.chars().count() as f64 * 15.0 * (0.64 + 0.18);
-    s.text_in(pt(left + name_w / 2.0, r.y + 26.0), name, 15.0, ph, ty.legend.tracking(0.18));
+    let x = r.x + 16.0;
+    s.text_in(pt(x, r.y + 26.0), TOPOLOGIES[i], 15.0, ph, ty.legend.tracking(0.18).align(TextAlign::Left));
     for (k, line) in LEGENDS[i].iter().enumerate() {
-        s.text_in(pt(mid, r.y + 48.0 + 15.0 * k as f64), format!("{line:<width$}"), 9.0, soft, ty.value);
+        s.text_in(pt(x, r.y + 48.0 + 15.0 * k as f64), *line, 9.0, soft, ty.value.align(TextAlign::Left));
     }
 }
 
