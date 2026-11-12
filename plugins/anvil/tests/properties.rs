@@ -44,6 +44,16 @@ fn generate_sine(frequency_hz: f32, amplitude: f32, sample_count: usize) -> Vec<
         .collect()
 }
 
+/// `f` of each item, each on its own thread (every render is its own
+/// instance), in order.
+fn side_by_side<I: Sync, T: Send>(items: &[I], f: impl Fn(&I) -> T + Sync) -> Vec<T> {
+    std::thread::scope(|s| {
+        let f = &f;
+        let runs: Vec<_> = items.iter().map(|i| s.spawn(move || f(i))).collect();
+        runs.into_iter().map(|r| r.join().expect("a render panicked")).collect()
+    })
+}
+
 /// Bin-exact projection over the settled tail (23040 samples;
 /// frequencies must be multiples of 25/12 Hz).
 fn measure_magnitude(output: &[f32], frequency_hz: f64) -> f64 {
@@ -281,12 +291,14 @@ fn gain_buys_dirt_not_silence() {
             total_harmonic_distortion,
         )
     };
-    let (minimum_gain_output_db, minimum_gain_distortion) = measure_level_and_distortion(0.0);
+    // Every gain is its own instance: measured side by side.
+    let measured = side_by_side(&[0.0, 6.0, 12.0, 18.0, 24.0, 30.0], |&g| measure_level_and_distortion(g));
+    let (minimum_gain_output_db, minimum_gain_distortion) = measured[0];
     let mut previous_distortion = minimum_gain_distortion;
     let mut loudest_output_db = minimum_gain_output_db;
-    for preamp_gain_db in [6.0, 12.0, 18.0, 24.0, 30.0] {
-        let (output_level_db, total_harmonic_distortion) =
-            measure_level_and_distortion(preamp_gain_db);
+    for (preamp_gain_db, &(output_level_db, total_harmonic_distortion)) in
+        [6.0, 12.0, 18.0, 24.0, 30.0].into_iter().zip(&measured[1..])
+    {
         assert!(
             output_level_db >= minimum_gain_output_db - 0.75,
             "gain {preamp_gain_db}: quieter than knob 0 by {:.1} dB — inversion",
@@ -335,8 +347,8 @@ fn gain_buys_dirt_not_silence() {
             .sqrt()
             / fundamental_magnitude
     };
-    let minimum_gain_high_harmonics = measure_uncompressed_high_harmonics(0.0);
-    let maximum_gain_high_harmonics = measure_uncompressed_high_harmonics(30.0);
+    let [minimum_gain_high_harmonics, maximum_gain_high_harmonics]: [f64; 2] =
+        side_by_side(&[0.0, 30.0], |&g| measure_uncompressed_high_harmonics(g)).try_into().unwrap();
     // 1.5x: knob 0 is already an edgy amp under the R2 staging (the
     // drive floor); the RANGE of the claim shrank, edge still grows.
     assert!(
