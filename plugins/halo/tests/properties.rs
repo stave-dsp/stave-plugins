@@ -1,53 +1,30 @@
 //! Halo's product laws. These measure the audible promises rather than its
 //! implementation details.
 
-use stave_core::{AudioBuffer, Plugin, ProcessCtx};
+use stave_halo_vst3::Halo;
+use stave_test::PluginHarness;
 
 const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK_SIZE: usize = 256;
 
 fn render_plugin(parameter_values: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_halo_vst3::Halo::new();
-    let parameter_table = plugin.param_table();
-    for (parameter_name, parameter_value) in parameter_values {
-        parameter_table
-            .by_name(parameter_name)
-            .unwrap_or_else(|| panic!("parameter '{parameter_name}'"))
-            .set_plain(*parameter_value);
-    }
-    plugin.activate(SAMPLE_RATE, BLOCK_SIZE);
-
+    let mut plugin = parameter_values
+        .iter()
+        .fold(
+            PluginHarness::<Halo>::builder()
+                .sample_rate(SAMPLE_RATE)
+                .block_size(BLOCK_SIZE),
+            |builder, (name, value)| builder.set(name, *value),
+        )
+        .build();
     let mut rendered = Vec::with_capacity(input.len());
-    let (mut left_input, mut right_input) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
-    let (mut left_output, mut right_output) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
     for input_chunk in input.chunks(BLOCK_SIZE) {
-        left_input[..input_chunk.len()].copy_from_slice(input_chunk);
-        left_input[input_chunk.len()..].fill(0.0);
-        right_input.copy_from_slice(&left_input);
-        let mut input_channel_pointers = [core::ptr::null_mut(); 2];
-        let mut output_channel_pointers = [core::ptr::null_mut(); 2];
-        let input_buffer = AudioBuffer::from_slices(
-            &mut input_channel_pointers,
-            [&mut left_input, &mut right_input],
-            BLOCK_SIZE,
-        );
-        let output_buffer = AudioBuffer::from_slices(
-            &mut output_channel_pointers,
-            [&mut left_output, &mut right_output],
-            BLOCK_SIZE,
-        );
-        let mut process_context = ProcessCtx {
-            sample_rate: SAMPLE_RATE,
-            frames: BLOCK_SIZE,
-            transport: None,
-            input: input_buffer,
-            output: output_buffer,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut process_context);
-        rendered.extend_from_slice(&left_output[..input_chunk.len()]);
+        for channel in plugin.inputs_mut() {
+            channel[..input_chunk.len()].copy_from_slice(input_chunk);
+            channel[input_chunk.len()..].fill(0.0);
+        }
+        plugin.process(&[]);
+        rendered.extend_from_slice(&plugin.outputs()[0][..input_chunk.len()]);
     }
     rendered
 }

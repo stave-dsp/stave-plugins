@@ -1,6 +1,8 @@
 //! Halo's product-owned clean tone circuit.
 
-use stave_dsp::{PassiveToneControlPositions, PassiveToneStack, PassiveToneStackComponents};
+use stave::dsp::{
+    PassiveToneControlPositions, PassiveToneStack, PassiveToneStackComponents, Stage,
+};
 
 use crate::controls::ToneSettings;
 
@@ -48,11 +50,18 @@ impl ToneSection {
         }
     }
 
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
+        self.tone_stack.reset();
+    }
+
     pub fn prepare(&mut self, sample_rate: f32) {
         self.tone_stack.prepare(sample_rate);
+        // Voiced at the stack's resting controls, whatever it was last set to.
+        let mut resting = PassiveToneStack::new(HaloToneStackDesign::wide_clean().components);
+        resting.prepare(sample_rate);
         self.level_compensation_gain = (1.0
-            / self
-                .tone_stack
+            / resting
                 .magnitude_at(LEVEL_REFERENCE_FREQUENCY_HZ)
                 .max(MINIMUM_COMPENSATED_MAGNITUDE)) as f32;
         self.level_compensation_gain = self
@@ -71,7 +80,7 @@ impl ToneSection {
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        self.tone_stack.process(input) * self.level_compensation_gain
+        self.tone_stack.tick(input) * self.level_compensation_gain
     }
 
     #[cfg(test)]

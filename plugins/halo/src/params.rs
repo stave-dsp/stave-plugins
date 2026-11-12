@@ -1,9 +1,6 @@
-//! Halo's stable host parameter table.
+//! Halo's stable host parameter table. Ids are FOREVER.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::{BoolParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit};
+use stave::prelude::*;
 
 pub const DEFAULT_PREAMP_GAIN_DECIBELS: f64 = 6.0;
 
@@ -21,45 +18,37 @@ pub struct HaloParameters {
     pub bypass: BoolParam,
 }
 
-impl HaloParameters {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            output_level: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-            preamp_gain: FloatParam::new(
-                3,
-                "gain",
-                DEFAULT_PREAMP_GAIN_DECIBELS,
-                Range::new(0.0, 18.0, Taper::Linear),
-            )
-            .with_unit(Unit::Db { floor_db: None })
-            .with_group("Preamp")
-            .with_smooth(Smooth::Exp { ms: 8.0 }),
-            bass_tone: FloatParam::new(4, "bass", 5.5, Range::new(0.0, 10.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Tone"),
-            midrange_tone: FloatParam::new(5, "mid", 6.0, Range::new(0.0, 10.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Tone"),
-            treble_tone: FloatParam::new(6, "treble", 5.5, Range::new(0.0, 10.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Tone"),
-            headroom: FloatParam::new(7, "headroom", 0.7, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Dynamics"),
-            bloom: FloatParam::new(8, "bloom", 0.45, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Dynamics"),
-            reserve: FloatParam::new(9, "reserve", 0.7, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Dynamics"),
-            response: FloatParam::new(10, "response", 0.6, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Dynamics"),
-        })
+impl Default for HaloParameters {
+    fn default() -> Self {
+        let tone = |id, name, default| {
+            FloatParam::new(ParamId(id), name, Range::linear(0.0, 10.0))
+                .default(default)
+                .unit(Unit::Plain { decimals: 1 })
+                .group("Tone")
+        };
+        let dynamics = |id, name, default| {
+            FloatParam::new(ParamId(id), name, Range::linear(0.0, 1.0))
+                .default(default)
+                .group("Dynamics")
+        };
+        Self {
+            output_level: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            preamp_gain: FloatParam::new(ParamId(3), "gain", Range::linear(0.0, 18.0))
+                .default(DEFAULT_PREAMP_GAIN_DECIBELS)
+                .unit(Unit::Db)
+                .group("Preamp")
+                .smooth(Smooth::ms(8.0)),
+            bass_tone: tone(4, "bass", 5.5),
+            midrange_tone: tone(5, "mid", 6.0),
+            treble_tone: tone(6, "treble", 5.5),
+            headroom: dynamics(7, "headroom", 0.7),
+            bloom: dynamics(8, "bloom", 0.45),
+            reserve: dynamics(9, "reserve", 0.7),
+            response: dynamics(10, "response", 0.6),
+        }
     }
 }

@@ -3,6 +3,8 @@
 //! Part of halo's declared impossible supply (see `dynamic_headroom`),
 //! not a model of a circuit.
 
+use stave::dsp::tau_coeff;
+
 pub(super) struct Reservoir {
     voltage: f32,
     droop: f32,
@@ -34,6 +36,12 @@ impl Reservoir {
         }
     }
 
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
+        self.voltage = 1.0;
+        self.draw = 0.0;
+    }
+
     pub fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
         self.update();
@@ -49,7 +57,7 @@ impl Reservoir {
     }
 
     fn update(&mut self) {
-        let coefficient = |ms: f32| 1.0 - (-1.0 / (ms * 0.001 * self.sample_rate)).exp();
+        let coefficient = |ms: f32| tau_coeff(ms * 0.001, self.sample_rate);
         self.fall = coefficient(self.fall_ms);
         self.recovery = coefficient(self.recovery_ms);
         self.draw_smoothing = coefficient(DRAW_SMOOTHING_MS);

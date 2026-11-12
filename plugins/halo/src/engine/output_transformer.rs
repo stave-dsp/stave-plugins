@@ -1,7 +1,7 @@
 //! Halo's product-specific output-transformer assembly.
 
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, Hysteresis, Stage};
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, Hysteresis, Stage};
 
 pub struct OutputTransformer {
     low_frequency_bandwidth: Biquad,
@@ -12,31 +12,35 @@ pub struct OutputTransformer {
 impl OutputTransformer {
     pub fn new() -> Self {
         Self {
-            low_frequency_bandwidth: Biquad::new(),
+            low_frequency_bandwidth: Biquad::default(),
             magnetization: Hysteresis::new(0.2, 0.02),
-            high_frequency_bandwidth: Biquad::new(),
+            high_frequency_bandwidth: Biquad::default(),
         }
     }
 
-    pub fn prepare(&mut self, sample_rate: f32) {
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
         self.low_frequency_bandwidth.reset();
-        self.low_frequency_bandwidth
-            .set(FilterSpec::Highpass { hz: 11.0, q: 0.62 }, sample_rate);
-        self.magnetization.prepare(sample_rate);
+        self.magnetization.reset();
         self.high_frequency_bandwidth.reset();
-        self.high_frequency_bandwidth.set(
-            FilterSpec::Lowpass {
-                hz: 21_500.0,
-                q: 0.71,
-            },
-            sample_rate,
-        );
+    }
+
+    pub fn prepare(&mut self, sample_rate: f32) {
+        self.low_frequency_bandwidth.prepare(sample_rate);
+        self.low_frequency_bandwidth
+            .set(FilterSpec::Highpass { hz: 11.0, q: 0.62 });
+        self.magnetization.prepare(sample_rate);
+        self.high_frequency_bandwidth.prepare(sample_rate);
+        self.high_frequency_bandwidth.set(FilterSpec::Lowpass {
+            hz: 21_500.0,
+            q: 0.71,
+        });
     }
 
     #[inline]
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        let low_frequency_limited = self.low_frequency_bandwidth.process(input);
+        let low_frequency_limited = self.low_frequency_bandwidth.tick(input);
         let magnetized = self.magnetization.tick(low_frequency_limited);
-        self.high_frequency_bandwidth.process(magnetized)
+        self.high_frequency_bandwidth.tick(magnetized)
     }
 }

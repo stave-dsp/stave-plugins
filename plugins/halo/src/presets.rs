@@ -1,76 +1,31 @@
-extern crate alloc;
-use alloc::vec::Vec;
+//! Halo's factory presets.
 
-use stave_core::params::AnyParam;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::HaloParameters;
 
-/// A preset from (parameter, plain value) pairs.
-fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
-    Preset {
-        name,
-        values: pairs.iter().map(|(p, v)| (p.meta().id, *v)).collect(),
-    }
-}
-
-pub fn build_presets(parameters: &HaloParameters) -> Vec<Preset> {
-    alloc::vec![
-        preset(
-            "OPEN",
+pub fn build_presets(p: &HaloParameters) -> Vec<Preset> {
+    // (output, gain, bass, mid, treble, headroom, bloom, reserve, response)
+    let preset = |name, v: [f64; 9]| {
+        Preset::from_pairs(
+            name,
             &[
-                (&parameters.output_level, 0.0),
-                (&parameters.preamp_gain, 6.0),
-                (&parameters.bass_tone, 5.5),
-                (&parameters.midrange_tone, 6.0),
-                (&parameters.treble_tone, 5.5),
-                (&parameters.headroom, 0.7),
-                (&parameters.bloom, 0.45),
-                (&parameters.reserve, 0.7),
-                (&parameters.response, 0.6),
+                (p.output_level.id(), v[0]),
+                (p.preamp_gain.id(), v[1]),
+                (p.bass_tone.id(), v[2]),
+                (p.midrange_tone.id(), v[3]),
+                (p.treble_tone.id(), v[4]),
+                (p.headroom.id(), v[5]),
+                (p.bloom.id(), v[6]),
+                (p.reserve.id(), v[7]),
+                (p.response.id(), v[8]),
             ],
-        ),
-        preset(
-            "GLASS",
-            &[
-                (&parameters.output_level, 0.0),
-                (&parameters.preamp_gain, 3.5),
-                (&parameters.bass_tone, 4.5),
-                (&parameters.midrange_tone, 4.0),
-                (&parameters.treble_tone, 7.5),
-                (&parameters.headroom, 0.95),
-                (&parameters.bloom, 0.2),
-                (&parameters.reserve, 0.9),
-                (&parameters.response, 0.9),
-            ],
-        ),
-        preset(
-            "BLOOM",
-            &[
-                (&parameters.output_level, 0.0),
-                (&parameters.preamp_gain, 9.0),
-                (&parameters.bass_tone, 6.0),
-                (&parameters.midrange_tone, 7.0),
-                (&parameters.treble_tone, 5.0),
-                (&parameters.headroom, 0.55),
-                (&parameters.bloom, 0.9),
-                (&parameters.reserve, 0.65),
-                (&parameters.response, 0.25),
-            ],
-        ),
-        preset(
-            "PIANO",
-            &[
-                (&parameters.output_level, 0.0),
-                (&parameters.preamp_gain, 5.0),
-                (&parameters.bass_tone, 6.5),
-                (&parameters.midrange_tone, 6.5),
-                (&parameters.treble_tone, 5.0),
-                (&parameters.headroom, 0.85),
-                (&parameters.bloom, 0.35),
-                (&parameters.reserve, 1.0),
-                (&parameters.response, 0.75),
-            ],
-        ),
+        )
+    };
+    vec![
+        preset("OPEN", [0.0, 6.0, 5.5, 6.0, 5.5, 0.7, 0.45, 0.7, 0.6]),
+        preset("GLASS", [0.0, 3.5, 4.5, 4.0, 7.5, 0.95, 0.2, 0.9, 0.9]),
+        preset("BLOOM", [0.0, 9.0, 6.0, 7.0, 5.0, 0.55, 0.9, 0.65, 0.25]),
+        preset("PIANO", [0.0, 5.0, 6.5, 6.5, 5.0, 0.85, 0.35, 1.0, 0.75]),
     ]
 }

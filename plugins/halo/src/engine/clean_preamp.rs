@@ -4,9 +4,9 @@
 //! product's passive tone circuit sits between them. This is a concrete
 //! topology, not a configurable cascade.
 
-use stave_dsp::db_to_amp;
-use stave_dsp::FilterSpec;
-use stave_dsp::{Bias, Biquad, Coupler, Koren, LevelPolicy, Stage, Triode};
+use stave::dsp::db_to_amp;
+use stave::dsp::FilterSpec;
+use stave::dsp::{Bias, Biquad, Coupler, Koren, LevelPolicy, Stage, Triode};
 
 use crate::controls::PreampSettings;
 use crate::params::DEFAULT_PREAMP_GAIN_DECIBELS;
@@ -41,7 +41,7 @@ impl CleanPreamp {
         recovery_stage.set_level_policy(UNITY_AT_CLEAN);
 
         Self {
-            bright_capacitor_highpass: Biquad::new(),
+            bright_capacitor_highpass: Biquad::default(),
             input_stage,
             input_stage_coupler: Coupler::new(7.0),
             recovery_stage,
@@ -53,15 +53,21 @@ impl CleanPreamp {
         }
     }
 
-    pub fn prepare(&mut self, sample_rate: f32) {
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
         self.bright_capacitor_highpass.reset();
-        self.bright_capacitor_highpass.set(
-            FilterSpec::Highpass {
-                hz: 2_800.0,
-                q: 0.5,
-            },
-            sample_rate,
-        );
+        self.input_stage.reset();
+        self.input_stage_coupler.reset();
+        self.recovery_stage.reset();
+        self.output_coupler.reset();
+    }
+
+    pub fn prepare(&mut self, sample_rate: f32) {
+        self.bright_capacitor_highpass.prepare(sample_rate);
+        self.bright_capacitor_highpass.set(FilterSpec::Highpass {
+            hz: 2_800.0,
+            q: 0.5,
+        });
         self.input_stage.prepare(sample_rate);
         self.input_stage_coupler.prepare(sample_rate);
         self.recovery_stage.prepare(sample_rate);
@@ -88,13 +94,13 @@ impl CleanPreamp {
         // high settings become naturally fuller.
         let gain_position = (preamp_gain_decibels / 18.0).clamp(0.0, 1.0);
         let bright_feed_forward = MAXIMUM_BRIGHT_CAPACITOR_FEED_FORWARD * (1.0 - gain_position);
-        let bright_signal = self.bright_capacitor_highpass.process(input);
+        let bright_signal = self.bright_capacitor_highpass.tick(input);
         let frequency_shaped_input = input + bright_signal * bright_feed_forward;
         let input_level_gain =
             db_to_amp(preamp_gain_decibels - DEFAULT_PREAMP_GAIN_DECIBELS as f32);
         let amplified = self
             .input_stage
-            .process_sample(frequency_shaped_input * input_level_gain)
+            .tick(frequency_shaped_input * input_level_gain)
             * self.input_stage_output_trim;
         bloom(&mut self.input_stage, self.input_stage_bloom);
         self.input_stage_coupler.tick(amplified)
@@ -102,7 +108,7 @@ impl CleanPreamp {
 
     #[inline]
     pub fn process_recovery_stage(&mut self, input: f32) -> f32 {
-        let amplified = self.recovery_stage.process_sample(input) * self.recovery_stage_output_trim;
+        let amplified = self.recovery_stage.tick(input) * self.recovery_stage_output_trim;
         bloom(&mut self.recovery_stage, self.recovery_stage_bloom);
         self.output_coupler.tick(amplified)
     }

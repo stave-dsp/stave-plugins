@@ -1,5 +1,8 @@
 //! The explicit boundary between Halo's panel and its engine.
 
+use stave::params::Ramp;
+use stave::prelude::*;
+
 use crate::params::HaloParameters;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -13,24 +16,80 @@ pub struct PanelControlValues {
     pub response_amount: f32,
 }
 
-stave_core::continuous_controls! {
-    /// The panel as the processor renders it: each knob glides as its
-    /// param declares.
-    pub struct Panel<HaloParameters> => PanelRamps, PanelValues {
-        bass_tone, midrange_tone, treble_tone, headroom, bloom, reserve, response,
+/// The panel as the processor renders it: each knob glides as its
+/// param declares, one [`Smoother`] per knob.
+pub struct Panel {
+    bass_tone: Smoother,
+    midrange_tone: Smoother,
+    treble_tone: Smoother,
+    headroom: Smoother,
+    bloom: Smoother,
+    reserve: Smoother,
+    response: Smoother,
+}
+
+/// One block of the panel's glides.
+pub struct PanelRamps<'s> {
+    bass_tone: Ramp<'s>,
+    midrange_tone: Ramp<'s>,
+    treble_tone: Ramp<'s>,
+    headroom: Ramp<'s>,
+    bloom: Ramp<'s>,
+    reserve: Ramp<'s>,
+    response: Ramp<'s>,
+}
+
+impl Panel {
+    pub fn new(p: &HaloParameters) -> Self {
+        Self {
+            bass_tone: Smoother::new(&p.bass_tone),
+            midrange_tone: Smoother::new(&p.midrange_tone),
+            treble_tone: Smoother::new(&p.treble_tone),
+            headroom: Smoother::new(&p.headroom),
+            bloom: Smoother::new(&p.bloom),
+            reserve: Smoother::new(&p.reserve),
+            response: Smoother::new(&p.response),
+        }
+    }
+
+    pub fn prepare(&mut self, env: &Environment) {
+        for s in [
+            &mut self.bass_tone,
+            &mut self.midrange_tone,
+            &mut self.treble_tone,
+            &mut self.headroom,
+            &mut self.bloom,
+            &mut self.reserve,
+            &mut self.response,
+        ] {
+            s.prepare(env);
+        }
+    }
+
+    pub fn ramp<'s>(&'s mut self, block: &Block<'s>, p: &HaloParameters) -> PanelRamps<'s> {
+        PanelRamps {
+            bass_tone: self.bass_tone.ramp(block, &p.bass_tone),
+            midrange_tone: self.midrange_tone.ramp(block, &p.midrange_tone),
+            treble_tone: self.treble_tone.ramp(block, &p.treble_tone),
+            headroom: self.headroom.ramp(block, &p.headroom),
+            bloom: self.bloom.ramp(block, &p.bloom),
+            reserve: self.reserve.ramp(block, &p.reserve),
+            response: self.response.ramp(block, &p.response),
+        }
     }
 }
 
-impl From<PanelValues> for PanelControlValues {
-    fn from(v: PanelValues) -> Self {
-        Self {
-            bass_tone_position: v.bass_tone,
-            midrange_tone_position: v.midrange_tone,
-            treble_tone_position: v.treble_tone,
-            headroom_amount: v.headroom,
-            bloom_amount: v.bloom,
-            reserve_amount: v.reserve,
-            response_amount: v.response,
+impl PanelRamps<'_> {
+    /// The panel at the next frame.
+    pub fn next(&mut self) -> PanelControlValues {
+        PanelControlValues {
+            bass_tone_position: self.bass_tone.next(),
+            midrange_tone_position: self.midrange_tone.next(),
+            treble_tone_position: self.treble_tone.next(),
+            headroom_amount: self.headroom.next(),
+            bloom_amount: self.bloom.next(),
+            reserve_amount: self.reserve.next(),
+            response_amount: self.response.next(),
         }
     }
 }

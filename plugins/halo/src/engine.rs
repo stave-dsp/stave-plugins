@@ -1,12 +1,6 @@
 //! Halo's product-specific clean amplifier composition.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::ContinuousControl;
-use stave_core::{Environment, ProcessCtx, Tail, Tap};
-use stave_dsp::db_to_amp;
-use stave_dsp::PerChannel;
+use stave::prelude::*;
 
 mod clean_power_amplifier;
 mod clean_preamp;
@@ -29,6 +23,7 @@ use crate::controls::{
     Panel, PanelControlValues, PreampSettings, ToneSettings,
 };
 use crate::params::{HaloParameters, DEFAULT_PREAMP_GAIN_DECIBELS};
+use crate::{editor, presets};
 
 struct ProcessingLane {
     input_conditioner: InputConditioner,
@@ -61,6 +56,15 @@ impl ProcessingLane {
         self.output_conditioner.prepare(sample_rate);
     }
 
+    fn reset(&mut self) {
+        self.input_conditioner.reset();
+        self.clean_preamp.reset();
+        self.tone_section.reset();
+        self.clean_power_amplifier.reset();
+        self.output_transformer.reset();
+        self.output_conditioner.reset();
+    }
+
     #[inline]
     fn process_sample(&mut self, input: f32, preamp_gain_decibels: f32) -> f32 {
         let conditioned_input = self.input_conditioner.process_sample(input);
@@ -77,19 +81,25 @@ impl ProcessingLane {
     }
 }
 
-pub struct HaloEngine {
-    telemetry_bus: Option<Arc<stave_core::DebugBus>>,
+/// What Halo reports to its face: the build stamp, the power stage's
+/// transient and plate draw, and its three reservoirs.
+#[derive(Taps)]
+pub struct HaloTaps {
+    pub build: Tap,
+    pub transient: Tap,
+    pub plate_draw: Tap,
+    pub low_reservoir: Tap,
+    pub mid_reservoir: Tap,
+    pub high_reservoir: Tap,
+}
+
+pub struct Halo {
     parameters: Arc<HaloParameters>,
+    taps: HaloTaps,
     amplifier: Amplifier,
     panel: Panel,
-    preamp_gain_control: ContinuousControl,
-    output_level_control: ContinuousControl,
-    build_tap: Tap,
-    transient_tap: Tap,
-    plate_draw_tap: Tap,
-    low_reservoir_tap: Tap,
-    middle_reservoir_tap: Tap,
-    high_reservoir_tap: Tap,
+    preamp_gain: Smoother,
+    output_level: Smoother,
 }
 
 /// The panel re-resolves into the amplifier this often while it moves:
@@ -110,11 +120,13 @@ struct Amplifier {
 
 impl Amplifier {
     /// Prepare every lane, voice it for `panel`, and settle it at its
-    /// operating point: run until the output stays under 1e-6 for 256
-    /// samples, at most one second.
+    /// operating point.
     fn prepare(&mut self, sample_rate: f32, panel: PanelControlValues) {
         self.sample_rate = sample_rate;
         for lane in self.lanes.iter_mut() {
+            // Cleared first: a stage's operating point must not depend on
+            // what it last played.
+            lane.reset();
             lane.prepare(sample_rate, &self.design);
         }
         self.last_input_settings.reset();
@@ -122,9 +134,16 @@ impl Amplifier {
         self.last_tone_settings.reset();
         self.last_dynamic_settings.reset();
         self.apply(panel);
+        self.reset();
+    }
+
+    /// Clear every lane and settle it at its operating point: run until
+    /// the output stays under 1e-6 for 256 samples, at most one second.
+    fn reset(&mut self) {
         for lane in self.lanes.iter_mut() {
+            lane.reset();
             let mut quiet = 0u32;
-            for _ in 0..sample_rate as usize {
+            for _ in 0..self.sample_rate as usize {
                 let y = lane.process_sample(0.0, DEFAULT_PREAMP_GAIN_DECIBELS as f32);
                 quiet = if y.abs() < 1e-6 { quiet + 1 } else { 0 };
                 if quiet >= 256 {
@@ -157,14 +176,14 @@ impl Amplifier {
         }
 
         if dynamics_changed {
-            let representative_lane = &self.lanes[0];
+            let representative_lane = &mut self.lanes[0];
             let expected_small_signal_output_db = self.design.reference_input_level_db
                 + representative_lane
                     .clean_preamp
                     .fixed_stage_small_signal_gain_db()
                 + representative_lane
                     .clean_power_amplifier
-                    .small_signal_gain_db();
+                    .idle_small_signal_gain_db();
             self.makeup_gain = db_to_amp(
                 (self.design.target_output_level_db - expected_small_signal_output_db)
                     .clamp(-30.0, 30.0),
@@ -173,115 +192,106 @@ impl Amplifier {
     }
 }
 
-impl stave_core::Processor for HaloEngine {
+impl Plugin for Halo {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.halo.vst3",
+        name: "Stave Halo",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "The impossible high-headroom clean amplifier.",
+        features: &[Feature::AudioEffect, Feature::Stereo],
+        ..Info::EFFECT
+    };
     type Params = HaloParameters;
 
-    fn new(parameters: Arc<HaloParameters>) -> Self {
+    fn new(parameters: &Arc<HaloParameters>, telemetry: &Telemetry) -> Self {
+        let taps = HaloTaps::new(telemetry);
+        taps.build
+            .set(env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0));
+        taps.transient.set(0.0);
+        taps.plate_draw.set(1.0);
+        taps.low_reservoir.set(1.0);
+        taps.mid_reservoir.set(1.0);
+        taps.high_reservoir.set(1.0);
+        let amplifier = Amplifier {
+            sample_rate: 48_000.0,
+            lanes: PerChannel::new(|_| ProcessingLane::new()),
+            design: HaloDesign::default(),
+            last_input_settings: LastAppliedSettings::new(),
+            last_preamp_settings: LastAppliedSettings::new(),
+            last_tone_settings: LastAppliedSettings::new(),
+            last_dynamic_settings: LastAppliedSettings::new(),
+            makeup_gain: 1.0,
+        };
         Self {
-            telemetry_bus: None,
-            amplifier: Amplifier {
-                sample_rate: 48_000.0,
-                lanes: PerChannel::new(|_| ProcessingLane::new()),
-                design: HaloDesign::default(),
-                last_input_settings: LastAppliedSettings::new(),
-                last_preamp_settings: LastAppliedSettings::new(),
-                last_tone_settings: LastAppliedSettings::new(),
-                last_dynamic_settings: LastAppliedSettings::new(),
-                makeup_gain: 1.0,
-            },
-            panel: Panel::new(&parameters),
-            preamp_gain_control: ContinuousControl::new(&parameters.preamp_gain),
-            output_level_control: ContinuousControl::new(&parameters.output_level),
-            parameters,
-            build_tap: Tap::new("build"),
-            transient_tap: Tap::new("transient"),
-            plate_draw_tap: Tap::new("plate_draw"),
-            low_reservoir_tap: Tap::new("low_reservoir"),
-            middle_reservoir_tap: Tap::new("mid_reservoir"),
-            high_reservoir_tap: Tap::new("high_reservoir"),
+            amplifier,
+            panel: Panel::new(parameters),
+            preamp_gain: Smoother::new(&parameters.preamp_gain),
+            output_level: Smoother::new(&parameters.output_level),
+            parameters: parameters.clone(),
+            taps,
         }
     }
 
-    fn activate(&mut self, environment: Environment) {
-        let rate = f64::from(environment.sample_rate);
-        self.preamp_gain_control
-            .prepare(rate, &self.parameters.preamp_gain);
-        self.output_level_control
-            .prepare(rate, &self.parameters.output_level);
-        self.panel.prepare(rate, &self.parameters);
-        self.amplifier.prepare(
-            environment.sample_rate,
-            PanelControlValues::read(&self.parameters),
-        );
+    fn prepare(&mut self, env: &Environment) {
+        self.preamp_gain.prepare(env);
+        self.output_level.prepare(env);
+        self.panel.prepare(env);
+        self.amplifier
+            .prepare(env.sample_rate, PanelControlValues::read(&self.parameters));
     }
 
-    fn process(&mut self, context: &mut ProcessCtx<'_>) {
-        let parameters = self.parameters.clone();
-        let mut panel = self.panel.begin_block(context.params, &parameters);
-        let mut preamp_gain_values = self
-            .preamp_gain_control
-            .begin_block(context.params, &parameters.preamp_gain);
-        let mut output_level_values = self
-            .output_level_control
-            .begin_block(context.params, &parameters.output_level);
+    /// Back to the settled operating point `prepare` reaches: every
+    /// stage cleared and re-settled (at most a second of silence per lane).
+    fn reset(&mut self) {
+        self.amplifier.reset();
+    }
+
+    fn process(&mut self, block: &mut Block<'_>) {
+        let parameters = &self.parameters;
+        let mut panel = self.panel.ramp(block, parameters);
+        let mut preamp_gain = self.preamp_gain.ramp(block, &parameters.preamp_gain);
+        let mut output_level = self.output_level.ramp(block, &parameters.output_level);
         let amplifier = &mut self.amplifier;
-        let audio_lanes = context.lanes::<2>();
-        let active_channel_count = audio_lanes.active().min(2);
-        audio_lanes.run(|audio_frame| {
+        let lanes = block.lanes::<2>();
+        let active_channel_count = lanes.active().min(2);
+        lanes.run(|frame| {
             let panel_values = panel.next();
-            if audio_frame.index() % CONTROL_INTERVAL == 0 {
-                amplifier.apply(panel_values.into());
+            if frame.index() % CONTROL_INTERVAL == 0 {
+                amplifier.apply(panel_values);
             }
-            let preamp_gain_decibels = preamp_gain_values.next();
-            let output_gain = amplifier.makeup_gain * db_to_amp(output_level_values.next());
+            let preamp_gain_decibels = preamp_gain.next();
+            let output_gain = amplifier.makeup_gain * db_to_amp(output_level.next());
             for channel_index in 0..active_channel_count {
                 let output = amplifier.lanes[channel_index]
-                    .process_sample(audio_frame.input(channel_index), preamp_gain_decibels)
+                    .process_sample(frame.input(channel_index), preamp_gain_decibels)
                     * output_gain;
-                audio_frame.write(channel_index, output);
+                frame.write(channel_index, output);
             }
         });
 
-        if let Some(telemetry_bus) = self.telemetry_bus.clone() {
-            let measurements = self.amplifier.lanes[0].clean_power_amplifier.measurements();
-            self.transient_tap
-                .set(&telemetry_bus, f64::from(measurements.transient_amount));
-            self.plate_draw_tap
-                .set(&telemetry_bus, f64::from(measurements.plate_draw));
-            self.low_reservoir_tap.set(
-                &telemetry_bus,
-                f64::from(measurements.low_frequency_reservoir_voltage),
-            );
-            self.middle_reservoir_tap.set(
-                &telemetry_bus,
-                f64::from(measurements.middle_frequency_reservoir_voltage),
-            );
-            self.high_reservoir_tap.set(
-                &telemetry_bus,
-                f64::from(measurements.high_frequency_reservoir_voltage),
-            );
-        }
+        let measurements = self.amplifier.lanes[0].clean_power_amplifier.measurements();
+        self.taps
+            .transient
+            .set(f64::from(measurements.transient_amount));
+        self.taps.plate_draw.set(f64::from(measurements.plate_draw));
+        self.taps
+            .low_reservoir
+            .set(f64::from(measurements.low_frequency_reservoir_voltage));
+        self.taps
+            .mid_reservoir
+            .set(f64::from(measurements.middle_frequency_reservoir_voltage));
+        self.taps
+            .high_reservoir
+            .set(f64::from(measurements.high_frequency_reservoir_voltage));
     }
 
-    fn attach_telemetry(&mut self, telemetry_bus: Arc<stave_core::DebugBus>) {
-        self.build_tap.set(
-            &telemetry_bus,
-            env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0),
-        );
-        self.transient_tap.set(&telemetry_bus, 0.0);
-        self.plate_draw_tap.set(&telemetry_bus, 1.0);
-        self.low_reservoir_tap.set(&telemetry_bus, 1.0);
-        self.middle_reservoir_tap.set(&telemetry_bus, 1.0);
-        self.high_reservoir_tap.set(&telemetry_bus, 1.0);
-        self.telemetry_bus = Some(telemetry_bus);
+    fn face(parameters: &HaloParameters) -> Option<Face> {
+        Some(editor::face(parameters))
     }
 
-    fn latency_samples(&self) -> u32 {
-        0
-    }
-
-    fn tail(&self) -> Tail {
-        Tail::None
+    fn presets(parameters: &HaloParameters) -> Vec<Preset> {
+        presets::build_presets(parameters)
     }
 }
 

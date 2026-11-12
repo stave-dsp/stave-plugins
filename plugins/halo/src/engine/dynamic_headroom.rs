@@ -5,8 +5,8 @@
 //! reservoirs. Consequently this system can change dynamic interaction without
 //! imposing a multiband crossover on the audio path.
 
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, EnvelopeFollower, EnvelopeTimes};
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, Stage};
 
 use super::reservoir::Reservoir;
 
@@ -35,8 +35,8 @@ pub struct FrequencySelectivePowerSupply {
 impl FrequencySelectivePowerSupply {
     pub fn new() -> Self {
         Self {
-            low_frequency_detector: Biquad::new(),
-            high_frequency_detector: Biquad::new(),
+            low_frequency_detector: Biquad::default(),
+            high_frequency_detector: Biquad::default(),
             low_frequency_envelope: EnvelopeFollower::new(EnvelopeTimes {
                 attack_ms: 3.0,
                 release_ms: 100.0,
@@ -62,18 +62,32 @@ impl FrequencySelectivePowerSupply {
         }
     }
 
-    pub fn prepare(&mut self, sample_rate: f32) {
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
         self.low_frequency_detector.reset();
-        self.low_frequency_detector
-            .set(FilterSpec::Lowpass { hz: 220.0, q: 0.71 }, sample_rate);
         self.high_frequency_detector.reset();
-        self.high_frequency_detector.set(
-            FilterSpec::Highpass {
-                hz: 1_600.0,
-                q: 0.71,
-            },
-            sample_rate,
-        );
+        self.low_frequency_envelope.reset();
+        self.middle_frequency_envelope.reset();
+        self.high_frequency_envelope.reset();
+        self.low_frequency_reservoir.reset();
+        self.middle_frequency_reservoir.reset();
+        self.high_frequency_reservoir.reset();
+        (
+            self.low_frequency_voltage,
+            self.middle_frequency_voltage,
+            self.high_frequency_voltage,
+        ) = (1.0, 1.0, 1.0);
+    }
+
+    pub fn prepare(&mut self, sample_rate: f32) {
+        self.low_frequency_detector.prepare(sample_rate);
+        self.low_frequency_detector
+            .set(FilterSpec::Lowpass { hz: 220.0, q: 0.71 });
+        self.high_frequency_detector.prepare(sample_rate);
+        self.high_frequency_detector.set(FilterSpec::Highpass {
+            hz: 1_600.0,
+            q: 0.71,
+        });
         self.low_frequency_envelope.prepare(sample_rate);
         self.middle_frequency_envelope.prepare(sample_rate);
         self.high_frequency_envelope.prepare(sample_rate);
@@ -101,8 +115,8 @@ impl FrequencySelectivePowerSupply {
     /// spectral energy distribution.
     #[inline]
     pub fn process_sample(&mut self, signal: f32, normalized_plate_draw: f32) -> f32 {
-        let low_frequency_signal = self.low_frequency_detector.process(signal);
-        let high_frequency_signal = self.high_frequency_detector.process(signal);
+        let low_frequency_signal = self.low_frequency_detector.tick(signal);
+        let high_frequency_signal = self.high_frequency_detector.tick(signal);
         let middle_frequency_signal = signal - low_frequency_signal - high_frequency_signal;
 
         let low_energy = self.low_frequency_envelope.tick(low_frequency_signal.abs());
@@ -175,6 +189,12 @@ impl TransientHeadroomController {
         }
     }
 
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
+        self.fast_envelope.reset();
+        self.body_envelope.reset();
+    }
+
     pub fn prepare(&mut self, sample_rate: f32) {
         self.fast_envelope.prepare(sample_rate);
         self.body_envelope.prepare(sample_rate);
@@ -198,16 +218,22 @@ pub struct AdaptiveHarmonicController {
 impl AdaptiveHarmonicController {
     pub fn new() -> Self {
         Self {
-            even_harmonic_direct_current_blocker: Biquad::new(),
+            even_harmonic_direct_current_blocker: Biquad::default(),
             bloom_amount: 0.0,
             headroom_amount: 0.0,
         }
     }
 
-    pub fn prepare(&mut self, sample_rate: f32) {
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
         self.even_harmonic_direct_current_blocker.reset();
+    }
+
+    pub fn prepare(&mut self, sample_rate: f32) {
         self.even_harmonic_direct_current_blocker
-            .set(FilterSpec::Highpass { hz: 8.0, q: 0.71 }, sample_rate);
+            .prepare(sample_rate);
+        self.even_harmonic_direct_current_blocker
+            .set(FilterSpec::Highpass { hz: 8.0, q: 0.71 });
     }
 
     pub fn apply_settings(&mut self, settings: DynamicSettings) {
@@ -231,7 +257,7 @@ impl AdaptiveHarmonicController {
             .clamp(0.15, 1.0);
         let even_harmonic = self
             .even_harmonic_direct_current_blocker
-            .process(linear_reference * linear_reference)
+            .tick(linear_reference * linear_reference)
             * (0.8 * self.bloom_amount * sustain_amount);
         linear_reference + nonlinear_residual * physical_residual_amount + even_harmonic
     }

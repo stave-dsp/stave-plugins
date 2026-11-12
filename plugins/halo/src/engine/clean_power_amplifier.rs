@@ -1,5 +1,5 @@
-use stave_dsp::db_to_amp;
-use stave_dsp::{Koren, PushPull};
+use stave::dsp::db_to_amp;
+use stave::dsp::{tau_coeff64, Koren, PushPull, Stage};
 
 use crate::controls::DynamicSettings;
 
@@ -41,8 +41,13 @@ impl BiasWalk {
         }
     }
 
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
+        self.position = 0.0;
+    }
+
     fn prepare(&mut self, sample_rate: f32) {
-        self.coeff = 1.0 - (-1.0 / (Self::SECONDS * f64::from(sample_rate))).exp();
+        self.coeff = tau_coeff64(Self::SECONDS, f64::from(sample_rate));
         self.position = 0.0;
     }
 
@@ -78,6 +83,19 @@ impl CleanPowerAmplifier {
         }
     }
 
+    /// Clear every stage's running state, settings kept.
+    pub fn reset(&mut self) {
+        self.power_pair.reset();
+        // The pair's per-sample inputs (bias walk, supply) back to idle.
+        self.power_pair.set_bias_offset(0.0);
+        self.power_pair.set_supply_scale(1.0);
+        self.bias_walk.reset();
+        self.power_supply.reset();
+        self.transient_headroom_controller.reset();
+        self.harmonic_controller.reset();
+        self.measurements = PowerAmplifierMeasurements::default();
+    }
+
     pub fn prepare(&mut self, sample_rate: f32, power_pair_cold_bias_volts: f64) {
         self.power_pair.prepare(sample_rate);
         self.power_pair.set_tube(Koren::T6SN7);
@@ -105,7 +123,7 @@ impl CleanPowerAmplifier {
         let transient_amount = self
             .transient_headroom_controller
             .process_sample(power_pair_input);
-        let physical_output = self.power_pair.process_sample(power_pair_input);
+        let physical_output = self.power_pair.tick(power_pair_input);
         let plate_draw = self.power_pair.draw();
         self.power_pair
             .set_bias_offset(self.bias_walk.tick(plate_draw));
@@ -131,8 +149,15 @@ impl CleanPowerAmplifier {
         output
     }
 
-    pub fn small_signal_gain_db(&self) -> f32 {
-        POWER_PAIR_INPUT_GAIN_DB + self.power_pair.small_signal_gain_db()
+    /// Small-signal gain at the IDLE supply: the calibration point. The
+    /// live gain follows the sagging supply; calibrating makeup against
+    /// that would step the level whenever a dynamics knob moved mid-note.
+    pub fn idle_small_signal_gain_db(&mut self) -> f32 {
+        let supply_scale = 10f32.powf(self.power_pair.ceiling_db() / 20.0);
+        self.power_pair.set_supply_scale(1.0);
+        let gain_db = self.power_pair.small_signal_gain_db();
+        self.power_pair.set_supply_scale(supply_scale);
+        POWER_PAIR_INPUT_GAIN_DB + gain_db
     }
 
     pub fn measurements(&self) -> PowerAmplifierMeasurements {
