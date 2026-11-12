@@ -2,7 +2,6 @@
 //! control-rate updates that keep the field drifting. The garden
 //! itself (the resonator lattice) is `garden.rs`.
 
-use stave::params::Ramp;
 use stave::prelude::*;
 
 mod garden;
@@ -20,6 +19,8 @@ pub struct SmearTaps {
 
 /// One [`Smoother`] per knob: every control glides (the garden's at
 /// 50 ms, the excitation and tone at 20 ms, the gains at 5 ms).
+#[derive(Smoothers)]
+#[smoothers(params = SmearParams, frame = Values)]
 struct Controls {
     seed: Smoother,
     smear: Smoother,
@@ -49,94 +50,6 @@ struct Values {
     tone: f32,
     mix: f32,
     output: f32,
-}
-
-impl Controls {
-    fn new(p: &SmearParams) -> Self {
-        Self {
-            seed: Smoother::new(&p.seed),
-            smear: Smoother::new(&p.smear),
-            bloom: Smoother::new(&p.bloom),
-            decay: Smoother::new(&p.decay),
-            flux: Smoother::new(&p.flux),
-            shimmer: Smoother::new(&p.shimmer),
-            drive: Smoother::new(&p.drive),
-            motion: Smoother::new(&p.motion),
-            depth: Smoother::new(&p.depth),
-            tone: Smoother::new(&p.tone),
-            mix: Smoother::new(&p.mix),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        self.seed.prepare(env);
-        self.smear.prepare(env);
-        self.bloom.prepare(env);
-        self.decay.prepare(env);
-        self.flux.prepare(env);
-        self.shimmer.prepare(env);
-        self.drive.prepare(env);
-        self.motion.prepare(env);
-        self.depth.prepare(env);
-        self.tone.prepare(env);
-        self.mix.prepare(env);
-        self.output.prepare(env);
-    }
-}
-
-/// One block's ramps, one per knob.
-struct Ramps<'s> {
-    seed: Ramp<'s>,
-    smear: Ramp<'s>,
-    bloom: Ramp<'s>,
-    decay: Ramp<'s>,
-    flux: Ramp<'s>,
-    shimmer: Ramp<'s>,
-    drive: Ramp<'s>,
-    motion: Ramp<'s>,
-    depth: Ramp<'s>,
-    tone: Ramp<'s>,
-    mix: Ramp<'s>,
-    output: Ramp<'s>,
-}
-
-impl Controls {
-    fn ramps<'s>(&'s mut self, block: &Block<'s>, p: &SmearParams) -> Ramps<'s> {
-        Ramps {
-            seed: self.seed.ramp(block, &p.seed),
-            smear: self.smear.ramp(block, &p.smear),
-            bloom: self.bloom.ramp(block, &p.bloom),
-            decay: self.decay.ramp(block, &p.decay),
-            flux: self.flux.ramp(block, &p.flux),
-            shimmer: self.shimmer.ramp(block, &p.shimmer),
-            drive: self.drive.ramp(block, &p.drive),
-            motion: self.motion.ramp(block, &p.motion),
-            depth: self.depth.ramp(block, &p.depth),
-            tone: self.tone.ramp(block, &p.tone),
-            mix: self.mix.ramp(block, &p.mix),
-            output: self.output.ramp(block, &p.output),
-        }
-    }
-}
-
-impl Ramps<'_> {
-    fn next(&mut self) -> Values {
-        Values {
-            seed: self.seed.next(),
-            smear: self.smear.next(),
-            bloom: self.bloom.next(),
-            decay: self.decay.next(),
-            flux: self.flux.next(),
-            shimmer: self.shimmer.next(),
-            drive: self.drive.next(),
-            motion: self.motion.next(),
-            depth: self.depth.next(),
-            tone: self.tone.next(),
-            mix: self.mix.next(),
-            output: self.output.next(),
-        }
-    }
 }
 
 pub struct Smear {
@@ -225,7 +138,7 @@ impl Plugin for Smear {
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
-        let mut ramps = self.controls.ramps(block, &self.params);
+        let mut ramps = self.controls.ramp(block, &self.params);
         let sample_rate = self.sample_rate;
         let (gardens, ctrl_phase) = (&mut self.chans, &mut self.ctrl_phase);
         // Makeup gain: only a handful of resonators ring at once and each is
