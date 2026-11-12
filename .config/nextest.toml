@@ -14,6 +14,13 @@ filter = '''
 '''
 threads-required = "num-test-threads"
 
+# The real-time deadline check times every block against the audio
+# budget: it gets the cores to itself, so it measures the plugin, not
+# the tests around it.
+[[profile.default.overrides]]
+filter = 'test(/passes_validation::deadline_headroom$/)'
+threads-required = "num-test-threads"
+
 # Engram's memory properties render with and without the memory side by side.
 [[profile.default.overrides]]
 filter = 'package(stave-engram-vst3) & binary(properties)'

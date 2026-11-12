@@ -24,28 +24,43 @@ defaults:
     shell: bash
 
 jobs:
+  # Each OS's packages are split into shards (scripts/ci-shard.py) that
+  # build and test only their own, so the build divides with the tests;
+  # together an OS's shards cover every package. Windows' slower builds
+  # get a fourth shard.
   test:
-    name: build + clippy + test (${{ matrix.os }})
+    name: build + clippy + test (${{ matrix.os }} ${{ matrix.shard }}/${{ matrix.of }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, shard: 1, of: 3 }
+          - { os: ubuntu-latest, shard: 2, of: 3 }
+          - { os: ubuntu-latest, shard: 3, of: 3 }
+          - { os: windows-latest, shard: 1, of: 4 }
+          - { os: windows-latest, shard: 2, of: 4 }
+          - { os: windows-latest, shard: 3, of: 4 }
+          - { os: windows-latest, shard: 4, of: 4 }
     steps:
       - uses: actions/checkout@v4
       - if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libasound2-dev xvfb
       - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
-        with: { cache-on-failure: true }
+        with: { key: "shard-${{ matrix.shard }}-of-${{ matrix.of }}", cache-on-failure: true }
       - uses: taiki-e/install-action@v2.90.3
         with: { tool: nextest@0.9.148 }
-      - run: cargo build --workspace --all-targets --locked
-      - run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
+      - name: This shard's packages
+        run: |
+          py=python3; command -v python3 >/dev/null && python3 -c '' 2>/dev/null || py=python
+          echo "PACKAGES=$($py scripts/ci-shard.py ${{ matrix.shard }}/${{ matrix.of }})" | tee -a "$GITHUB_ENV"
+      # One build serves the tests; clippy reuses its dependencies.
       - name: cargo nextest run
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
-            xvfb-run -a -s "-screen 0 1280x1024x24" cargo nextest run --workspace --locked --profile ci
+            xvfb-run -a -s "-screen 0 1280x1024x24" cargo nextest run $PACKAGES --locked --profile ci
           else
-            cargo nextest run --workspace --locked --profile ci
+            cargo nextest run $PACKAGES --locked --profile ci
           fi
+      - run: cargo clippy $PACKAGES --all-targets --no-deps --locked -- -D warnings

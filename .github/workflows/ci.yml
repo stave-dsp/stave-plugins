@@ -24,32 +24,30 @@ env:
   HAS_FRAMEWORK_KEY: ${{ secrets.STAVE_DEPLOY_KEY != '' }}
 
 jobs:
-  test:
-    name: build + test
-    runs-on: macos-latest
+  # The tree's own rules: shell only, no build.
+  rules:
+    name: tree rules
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Framework access (private repo only)
-        if: env.HAS_FRAMEWORK_KEY == 'true'
-        uses: webfactory/ssh-agent@v0.9.0
-        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
-      - name: Fetch the framework over SSH (private repo only)
-        if: env.HAS_FRAMEWORK_KEY == 'true'
-        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@nextest
       - name: Framework is pinned, not linked
         run: "! grep -q '>>> link-framework' Cargo.toml || { echo 'Cargo.toml has a local link-framework block: run scripts/link-framework.sh --off'; exit 1; }"
       - run: scripts/check-file-sizes.sh
       - run: scripts/check-view-bindings.sh
       - run: scripts/check-plugin-rules.sh
-      - run: cargo nextest run --workspace --locked --profile ci
-      - run: cargo test --workspace --doc --locked
 
-  lint:
-    name: zero warnings (rustc + clippy)
+  # macOS (the plugins' first platform, and the only arm64 one) runs
+  # every test, lint and doctest. The packages are split three ways
+  # (scripts/ci-shard.py): each shard builds and tests only its own, so
+  # the build divides along with the tests. One nextest build serves the
+  # tests; clippy and the doctests reuse its dependencies.
+  test:
+    name: build + clippy + test (macOS ${{ matrix.shard }}/3)
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
       - name: Framework access (private repo only)
@@ -61,13 +59,19 @@ jobs:
         run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
       - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-targets --locked
-        env:
-          RUSTFLAGS: -D warnings
-      - run: cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
+        with: { key: "shard-${{ matrix.shard }}-of-3", cache-on-failure: true }
+      - uses: taiki-e/install-action@v2.90.3
+        with: { tool: nextest@0.9.148 }
+      - name: This shard's packages
+        run: echo "PACKAGES=$(python3 scripts/ci-shard.py ${{ matrix.shard }}/3)" | tee -a "$GITHUB_ENV"
+      - run: cargo nextest run $PACKAGES --locked --profile ci
+      - run: cargo clippy $PACKAGES --all-targets --no-deps --locked -- -D warnings
+      - run: cargo test $PACKAGES --doc --locked
 
-  clap-validator:
-    name: clap-validator (every plugin)
+  # The formats' own validators over every plugin's bundle, from one
+  # release build: Steinberg's validator (the SDK is MIT) and clap-validator.
+  validators:
+    name: VST3 + CLAP validators (every plugin)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -81,24 +85,7 @@ jobs:
       - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
       - uses: Swatinem/rust-cache@v2
       - name: Install clap-validator
-        run: cargo install --locked --git https://github.com/free-audio/clap-validator.git --tag 0.4.1 clap-validator
-      - run: scripts/validate-formats.sh clap
-
-  vst3-validator:
-    # Steinberg's own validator (the SDK is MIT) against every plugin.
-    name: Steinberg VST3 validator (every plugin)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Framework access (private repo only)
-        if: env.HAS_FRAMEWORK_KEY == 'true'
-        uses: webfactory/ssh-agent@v0.9.0
-        with: { ssh-private-key: "${{ secrets.STAVE_DEPLOY_KEY }}" }
-      - name: Fetch the framework over SSH (private repo only)
-        if: env.HAS_FRAMEWORK_KEY == 'true'
-        run: git config --global url."git@github.com:stave-dsp/stave".insteadOf "https://github.com/stave-dsp/stave"
-      - run: rustup toolchain install   # the pinned toolchain from rust-toolchain.toml
-      - uses: Swatinem/rust-cache@v2
+        run: command -v clap-validator || cargo install --locked --git https://github.com/free-audio/clap-validator.git --tag 0.4.1 clap-validator
       - name: Cache VST3 SDK build
         id: sdk-cache
         uses: actions/cache@v4
@@ -115,6 +102,6 @@ jobs:
             -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
             -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF
           cmake --build vst3sdk/build --target validator -j3
-      - run: scripts/validate-formats.sh vst3
+      - run: scripts/validate-formats.sh all
         env:
           VALIDATOR: vst3sdk/build/bin/Release/validator
