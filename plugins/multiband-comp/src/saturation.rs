@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use stave::dsp::{
     db_to_amp, Biquad, Compensator, EnvelopeFollower, EnvelopeTimes, FilterSpec, Oversampled2x,
-    SmoothedParam, Stage, Triode,
+    Generator, SmoothedParam, Stage, Triode,
 };
 
 /// Cross-channel link for the tube makeup AGC: both
@@ -431,8 +431,8 @@ impl BandSaturator {
             input
         };
         // Smoothed control values — the audible path never steps.
-        let drive_now = self.s_drive_db.tick(0.0);
-        let mix_now = self.s_mix.tick(0.0);
+        let drive_now = self.s_drive_db.next();
+        let mix_now = self.s_mix.next();
         if (drive_now - self.drive_now_cache).abs() > 1e-3 {
             self.drive_now_cache = drive_now;
             self.drive_gain = db_to_amp(drive_now);

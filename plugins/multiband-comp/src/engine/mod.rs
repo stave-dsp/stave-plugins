@@ -42,9 +42,6 @@ pub struct MultibandComp {
     /// The external sidechain's own split: same cutoffs, own state.
     sidechain_split: Splitter,
     sidechain_was_live: bool,
-    /// The sidechain's block, copied out of the aux bus (sized in
-    /// `prepare`) so the lane loop can read it while it writes.
-    sidechain: [Vec<f32>; 2],
     crossovers: [Smoother; 2],
     crossover_hz: [f32; 2],
     controls: [BandControls; BANDS],
@@ -104,7 +101,6 @@ impl Plugin for MultibandComp {
             split: Splitter::new(params.xover_low.value(), params.xover_high.value()),
             sidechain_split: Splitter::new(params.xover_low.value(), params.xover_high.value()),
             sidechain_was_live: false,
-            sidechain: [Vec::new(), Vec::new()],
             crossovers: [Smoother::new(&params.xover_low), Smoother::new(&params.xover_high)],
             crossover_hz: [f32::NAN; 2],
             controls: std::array::from_fn(|i| BandControls::new(&params.bands[i])),
@@ -120,9 +116,6 @@ impl Plugin for MultibandComp {
         let p = &*self.params;
         self.sample_rate = env.sample_rate;
         self.scope.prepare(env.max_block);
-        for lane in &mut self.sidechain {
-            lane.resize(env.max_block, 0.0);
-        }
         self.split.prepare(env.sample_rate);
         self.sidechain_split.prepare(env.sample_rate);
         self.sidechain_was_live = false;
@@ -158,15 +151,13 @@ impl Plugin for MultibandComp {
         });
 
         let frames = block.frames();
-        let aux = block
+        // The external sidechain, read in the lane loop straight off its
+        // aux bus.
+        let sidechain = block
             .aux(0)
-            .filter(|aux| p.external_sidechain.value() && aux.channel_count() > 0);
-        let live = aux.is_some() && frames <= self.sidechain[0].len();
-        if let Some(aux) = aux.filter(|_| live) {
-            let right = if aux.channel_count() > 1 { 1 } else { 0 };
-            self.sidechain[0][..frames].copy_from_slice(&aux.channel(0)[..frames]);
-            self.sidechain[1][..frames].copy_from_slice(&aux.channel(right)[..frames]);
-        }
+            .filter(|aux| p.external_sidechain.value() && aux.channel_count() > 0)
+            .map(|aux| (aux.channel(0), aux.channel(if aux.channel_count() > 1 { 1 } else { 0 })));
+        let live = sidechain.is_some();
         if live && !self.sidechain_was_live {
             self.sidechain_split.reset();
         }
@@ -175,7 +166,6 @@ impl Plugin for MultibandComp {
         let Self {
             split,
             sidechain_split,
-            sidechain,
             crossovers,
             crossover_hz,
             controls,
@@ -206,9 +196,9 @@ impl Plugin for MultibandComp {
             let left = fr.input(0);
             let right = if stereo { fr.input(1) } else { left };
             let signal = split.split(left, right, stereo);
-            let detect = if live {
+            let detect = if let Some((key_l, key_r)) = sidechain {
                 let i = fr.index();
-                sidechain_split.split(sidechain[0][i], sidechain[1][i], true)
+                sidechain_split.split(key_l[i], key_r[i], true)
             } else {
                 signal
             };

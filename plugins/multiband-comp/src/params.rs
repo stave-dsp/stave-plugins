@@ -169,7 +169,7 @@ impl Default for MbParams {
                 .unit(Unit::Hz)
                 .smooth(GLIDE),
             bands: std::array::from_fn(BandParams::new),
-            bypass: BoolParam::bypass(ParamId(50)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(50), "bypass").group("Output"),
             external_sidechain: BoolParam::new(ParamId(58), "ext sc", false).group("Sidechain"),
         }
     }

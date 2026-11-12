@@ -40,14 +40,6 @@ fn plain(f: &Frame<'_>, i: usize) -> f64 {
     f.param(i).map_or(0.0, |p| p.denormalize(f.bound(i)))
 }
 
-/// Where to centre a line of `text` at `size` that should START at `x`.
-/// The face's fonts centre on their anchor and the author API has no
-/// way to left-align them (`TextAlign` is stave-ui's), so the anchor
-/// sits half an estimated width to the right.
-fn starting_at(x: f64, text: &str, size: f64) -> f64 {
-    x + text.chars().count() as f64 * size * 0.3
-}
-
 /// Reads the crossovers, then each band's threshold.
 pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let sample_rate = f.tap(MultibandTaps::SAMPLE_RATE);
@@ -110,11 +102,11 @@ pub fn spectrum(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             format!("{hz:.0}")
         };
         s.text_in(
-            pt(starting_at(*x + 4.0, &label, ty.caption_size), r.y + 12.0),
+            pt(*x + 4.0, r.y + 12.0),
             label,
             ty.caption_size,
             alpha(f.theme.palette.ink, 0.7),
-            ty.value,
+            ty.value.align(TextAlign::Left),
         );
     }
 }
@@ -227,10 +219,10 @@ fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene, band: usize) {
     let ty = &f.theme.typography;
     let legend = format!("{} · {:.1}:1", NAMES[band], ratio);
     s.text_in(
-        pt(starting_at(r.x + 6.0, &legend, ty.caption_size), r.y + 12.0),
+        pt(r.x + 6.0, r.y + 12.0),
         legend,
         ty.caption_size,
         alpha(tint, 0.8),
-        ty.caption,
+        ty.caption.align(TextAlign::Left),
     );
 }

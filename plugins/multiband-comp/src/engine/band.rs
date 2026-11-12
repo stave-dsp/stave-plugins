@@ -1,7 +1,6 @@
 //! One band: its controls, its detector, its gain computer and
 //! saturation, and the parallel blend against the dry band.
 
-use stave::params::Ramp;
 use stave::prelude::*;
 
 use super::dynamics::band_reduction_db;
@@ -10,50 +9,39 @@ use crate::params::BandParams;
 use crate::saturation::{BandSaturator, SaturationCharacter, StereoMakeupLink};
 use crate::style::Style;
 
-/// Declares a band's smoothed knobs once: the [`Smoother`]s, their
-/// per-block [`Ramp`]s and the per-frame values, field for field.
-macro_rules! band_controls {
-    ($($field:ident),+ $(,)?) => {
-        /// One [`Smoother`] per smoothed knob of a band.
-        pub(super) struct BandControls {
-            $($field: Smoother,)+
-        }
-
-        /// This block's ramps of a band's knobs.
-        pub(super) struct BandRamps<'s> {
-            $($field: Ramp<'s>,)+
-        }
-
-        /// One frame's values of a band's knobs, in the params' units.
-        pub(super) struct BandSettings {
-            $(pub $field: f32,)+
-        }
-
-        impl BandControls {
-            pub fn new(p: &BandParams) -> Self {
-                Self { $($field: Smoother::new(&p.$field),)+ }
-            }
-
-            pub fn prepare(&mut self, env: &Environment) {
-                $(self.$field.prepare(env);)+
-            }
-
-            pub fn ramp<'s>(&'s mut self, block: &Block<'s>, p: &BandParams) -> BandRamps<'s> {
-                BandRamps { $($field: self.$field.ramp(block, &p.$field),)+ }
-            }
-        }
-
-        impl BandRamps<'_> {
-            /// The next frame's values.
-            #[inline]
-            pub fn next(&mut self) -> BandSettings {
-                BandSettings { $($field: self.$field.next(),)+ }
-            }
-        }
-    };
+/// One frame's values of a band's knobs, in the params' units.
+pub(super) struct BandSettings {
+    pub threshold: f32,
+    pub ratio: f32,
+    pub knee: f32,
+    pub makeup: f32,
+    pub attack: f32,
+    pub release: f32,
+    pub transient: f32,
+    pub rms: f32,
+    pub sidechain_hpf: f32,
+    pub drive: f32,
+    pub saturation_mix: f32,
+    pub mix: f32,
 }
 
-band_controls!(threshold, ratio, knee, makeup, attack, release, transient, rms, sidechain_hpf, drive, saturation_mix, mix);
+/// One [`Smoother`] per smoothed knob of a band.
+#[derive(Smoothers)]
+#[smoothers(params = BandParams, frame = BandSettings)]
+pub(super) struct BandControls {
+    threshold: Smoother,
+    ratio: Smoother,
+    knee: Smoother,
+    makeup: Smoother,
+    attack: Smoother,
+    release: Smoother,
+    transient: Smoother,
+    rms: Smoother,
+    sidechain_hpf: Smoother,
+    drive: Smoother,
+    saturation_mix: Smoother,
+    mix: Smoother,
+}
 
 pub(super) struct Band {
     style: Style,
