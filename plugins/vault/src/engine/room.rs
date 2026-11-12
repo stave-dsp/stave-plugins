@@ -23,8 +23,8 @@
 //!   bend the room like tape); a fresh room SNAPS (the first tune
 //!   after prepare — an onset must not crawl outward).
 
-use stave_dsp::primitives::random::{unit_f32, wang_hash};
-use stave_dsp::DelayLine;
+use stave::dsp::primitives::random::{unit_f32, wang_hash};
+use stave::dsp::DelayLine;
 
 use super::scene::{Scene, SPEED_M_S};
 /// Order ≤ 2 shoebox images (6 first-order + 18 second-order).
@@ -189,12 +189,12 @@ impl Room {
     /// order-3+ window (+3 mean free paths).
     pub fn prepare(&mut self, sr: f32) {
         self.sr = sr;
-        self.input[0].prepare((0.52 * sr) as usize + 64);
-        self.input[1].prepare((0.52 * sr) as usize + 64);
+        self.input[0].allocate((0.52 * sr) as usize + 64);
+        self.input[1].allocate((0.52 * sr) as usize + 64);
         for (i, sm) in self.smear.iter_mut().enumerate() {
             // Integer lengths: fixed allpasses skip interp math.
             sm.len = (SMEAR_MS[i % 2] * 0.001 * sr).round();
-            sm.delay.prepare(sm.len as usize + 8);
+            sm.delay.allocate(sm.len as usize + 8);
         }
         self.k_elev = 1.0 - (-core::f32::consts::TAU * ELEV_XOVER_HZ / sr).exp();
         self.reset();

@@ -11,7 +11,7 @@
 //! tank feeds FROM this densified field, so its bloom arrives
 //! smoothly instead of as a second lump.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 const STAGES: usize = 2;
 /// Stage ratios: mean free path and its golden fraction (mutually
@@ -74,7 +74,7 @@ impl Midfield {
         // Mean free path at size 3 ≈ 37 ms; headroom for detune.
         let cap = (0.045 * sr) as usize + 16;
         for st in self.stages.iter_mut() {
-            st.delay.prepare(cap);
+            st.delay.allocate(cap);
         }
         self.reset();
         self.cold = true;

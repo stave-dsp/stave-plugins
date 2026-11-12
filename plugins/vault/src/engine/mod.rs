@@ -22,12 +22,8 @@
 //! targets) is block-rate; every read head glides per sample toward
 //! its target under one slew cap — knob jumps bend like tape.
 
-extern crate alloc;
-use alloc::sync::Arc;
-use stave_core::params::ContinuousControl;
-
-use stave_core::{Environment, ProcessCtx, Tail};
-use stave_dsp::{db_to_amp, ms_decode, ms_encode, DelayLine};
+use stave::dsp::{ms_decode, ms_encode};
+use stave::prelude::*;
 
 mod detonate;
 mod diffuser;
@@ -51,7 +47,9 @@ use room::Room;
 use tank::Tank;
 use void_field::Void;
 
+use crate::editor;
 use crate::params::VaultParams;
+use crate::presets;
 
 /// Dial-glide slots: size, t60, damp, tone, bass-dial, stand,
 /// distance, diffuse, stiff, wall-gain, wall-cutoff, bass-mult,
@@ -85,12 +83,12 @@ const WET_MAKEUP: f32 = 2.7;
 /// Chorus ceiling in samples at 48k (scaled by rate).
 const MOTION_SPAN: f32 = 26.0;
 
-pub struct VaultEngine {
+pub struct Vault {
     params: Arc<VaultParams>,
-    output_control: ContinuousControl,
-    early_control: ContinuousControl,
-    mix_control: ContinuousControl,
-    predelay_control: ContinuousControl,
+    output_control: Smoother,
+    early_control: Smoother,
+    mix_control: Smoother,
+    predelay_control: Smoother,
     sr: f32,
     predelay: [DelayLine; 2],
     /// The fidelity half: the image-source geometry.
@@ -183,16 +181,25 @@ pub struct VaultEngine {
     wet_g: f32,
 }
 
-impl stave_core::Processor for VaultEngine {
+impl Plugin for Vault {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.vault.vst3",
+        name: "Stave Vault",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "Stave Vault — a place, not an algorithm.",
+        features: &[Feature::AudioEffect, Feature::Stereo],
+        ..Info::EFFECT
+    };
     type Params = VaultParams;
 
-    fn new(params: Arc<VaultParams>) -> Self {
+    fn new(params: &Arc<VaultParams>, _telemetry: &Telemetry) -> Self {
         Self {
-            output_control: ContinuousControl::new(&params.output),
-            early_control: ContinuousControl::new(&params.early),
-            mix_control: ContinuousControl::new(&params.mix),
-            predelay_control: ContinuousControl::new(&params.predelay),
-            params,
+            output_control: Smoother::new(&params.output),
+            early_control: Smoother::new(&params.early),
+            mix_control: Smoother::new(&params.mix),
+            predelay_control: Smoother::new(&params.predelay),
+            params: params.clone(),
             sr: 48_000.0,
             predelay: [DelayLine::new(), DelayLine::new()],
             room: Room::new(),
@@ -244,16 +251,15 @@ impl stave_core::Processor for VaultEngine {
         }
     }
 
-    fn activate(&mut self, env: Environment) {
-        let rate = f64::from(env.sample_rate);
-        self.output_control.prepare(rate, &self.params.output);
-        self.early_control.prepare(rate, &self.params.early);
-        self.mix_control.prepare(rate, &self.params.mix);
-        self.predelay_control.prepare(rate, &self.params.predelay);
+    fn prepare(&mut self, env: &Environment) {
+        self.output_control.prepare(env);
+        self.early_control.prepare(env);
+        self.mix_control.prepare(env);
+        self.predelay_control.prepare(env);
         self.sr = env.sample_rate;
         let cap = (0.25 * self.sr) as usize + 16;
-        self.predelay[0].prepare(cap);
-        self.predelay[1].prepare(cap);
+        self.predelay[0].allocate(cap);
+        self.predelay[1].allocate(cap);
         self.room.prepare(self.sr);
         self.plate.prepare(self.sr);
         self.memory.prepare(self.sr);
@@ -278,12 +284,12 @@ impl stave_core::Processor for VaultEngine {
         // the gain settles before the peak arrives; no pumping
         // (release 120 ms) and no waveshaping, ever.
         self.la_samples = (0.003 * self.sr) as usize;
-        self.wet_la[0].prepare(self.la_samples + 8);
-        self.wet_la[1].prepare(self.la_samples + 8);
+        self.wet_la[0].allocate(self.la_samples + 8);
+        self.wet_la[1].allocate(self.la_samples + 8);
         self.k_lim_r = 1.0 - (-1.0 / (0.120 * self.sr)).exp();
         self.lim_env = 0.0;
         // A cold start is NOT a machine swap (see reset).
-        self.topo = self.params.topology.index();
+        self.topo = self.params.topology.value().0 as usize;
         self.topo_fade = 1.0;
     }
 
@@ -299,7 +305,7 @@ impl stave_core::Processor for VaultEngine {
         // topology open (the swap fade is for LIVE switches only —
         // the scoreboard's sample-0 impulse measured 25 ms "slow"
         // density that was just the fade).
-        self.topo = self.params.topology.index();
+        self.topo = self.params.topology.value().0 as usize;
         self.topo_fade = 1.0;
         self.rerad.reset();
         self.diffusers[0].reset();
@@ -325,15 +331,15 @@ impl stave_core::Processor for VaultEngine {
         self.wet_la[1].reset();
     }
 
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
+    fn process(&mut self, block: &mut Block<'_>) {
         let p = self.params.clone();
-        let frames = ctx.frames;
+        let frames = block.frames();
         let sr = self.sr;
 
         // Block-rate voicing: aim the machine, then run it —
         // through the DIAL GLIDE (~40 ms): targets from the
         // params, walked values into every consumer.
-        let mat_t = scene::material(p.material.index());
+        let mat_t = scene::material(p.material.value().0 as usize);
         let targets: [f32; NGLIDE] = [
             p.size.value(),
             p.decay.value() * 0.001,
@@ -386,7 +392,7 @@ impl stave_core::Processor for VaultEngine {
         let chorus_samples = motion * motion * MOTION_SPAN * rate_scale;
         // THE TOPOLOGY: which machine. A switch fades the wet in
         // from silence (~30 ms) — a machine swap, not a dial.
-        let topo = p.topology.index();
+        let topo = p.topology.value().0 as usize;
         if topo != self.topo {
             self.topo = topo;
             self.topo_fade = 0.0;
@@ -549,17 +555,17 @@ impl stave_core::Processor for VaultEngine {
             self.tank
                 .tune(size, t60_s, bass, hi_mult, diffuse, chorus_samples, frames);
 
-            self.rerad.tune(p.material.index());
+            self.rerad.tune(p.material.value().0 as usize);
             self.diffusers[0].tune(size, diffuse, frames);
             self.diffusers[1].tune(size, diffuse, frames);
             self.modes
                 .tune(size, stand, distance, t60_s, bass, frames as f32 / sr);
         }
 
-        let mut out_ramp = self.output_control.begin_block(ctx.params, &p.output);
-        let mut early_ramp = self.early_control.begin_block(ctx.params, &p.early);
-        let mut mix_ramp = self.mix_control.begin_block(ctx.params, &p.mix);
-        let mut pre_ramp = self.predelay_control.begin_block(ctx.params, &p.predelay);
+        let mut out_ramp = self.output_control.ramp(block, &p.output);
+        let mut early_ramp = self.early_control.ramp(block, &p.early);
+        let mut mix_ramp = self.mix_control.ramp(block, &p.mix);
+        let mut pre_ramp = self.predelay_control.ramp(block, &p.predelay);
 
         let k_side_v = &mut self.k_side_v;
         let k_side2_v = &mut self.k_side2_v;
@@ -596,8 +602,7 @@ impl stave_core::Processor for VaultEngine {
         let modes = &mut self.modes;
         let last_mix = &mut self.last_mix;
         let (dry_gc, wet_gc) = (&mut self.dry_g, &mut self.wet_g);
-        let lanes = ctx.lanes::<2>();
-        lanes.run(|fr| {
+        block.lanes::<2>().run(|fr| {
             let dry_l = fr.input(0);
             let dry_r = fr.input(1);
             // The wet onset: glided predelay (read before write).
@@ -833,10 +838,6 @@ impl stave_core::Processor for VaultEngine {
         });
     }
 
-    fn latency_samples(&self) -> u32 {
-        0
-    }
-
     /// Honest from the knobs: the LONGEST band's T60 — the low
     /// shelf reaches decay x bass x 1.45 (review catch: the
     /// broadband-only figure under-reported the 30 s x 4 corner
@@ -847,5 +848,13 @@ impl stave_core::Processor for VaultEngine {
         let longest = base * (self.params.bass.value() * 1.45).max(1.0);
         let secs = longest * 1.4 + 0.35;
         Tail::Samples((secs * self.sr) as u32)
+    }
+
+    fn face(params: &VaultParams) -> Option<Face> {
+        Some(editor::face(params))
+    }
+
+    fn presets(params: &VaultParams) -> Vec<Preset> {
+        presets::presets(params)
     }
 }

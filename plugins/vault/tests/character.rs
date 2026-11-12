@@ -11,56 +11,11 @@
 //! * DISPERSION (stiff) separates the bands' arrivals — the
 //!   plate's chirp, measured as band onset spread.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+mod common;
+use common::{harness, render, run};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
-
-fn render(set: &[(&str, f64)], input: &[f32], extra_blocks: usize) -> Vec<f32> {
-    let mut plugin = stave_vault_vst3::Vault::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let blocks = input.len().div_ceil(BLOCK) + extra_blocks;
-    let mut out = Vec::with_capacity(blocks * BLOCK);
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for b in 0..blocks {
-        for i in 0..BLOCK {
-            in_l[i] = input.get(b * BLOCK + i).copied().unwrap_or(0.0);
-        }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
-}
 
 fn impulse() -> Vec<f32> {
     let mut v = vec![0.0f32; 256];
@@ -611,42 +566,12 @@ fn envelopes_rise_on_time() {
 #[test]
 fn other_sample_rates_behave() {
     for fs in [44_100.0f32, 96_000.0] {
-        let mut plugin = stave_vault_vst3::Vault::new();
-        let bus = DebugBus::new();
-        plugin.debug_attach(bus.clone());
-        let table = plugin.param_table();
-        for (n, v) in [("mix", 1.0), ("predelay", 0.0), ("decay", 1_000.0)] {
-            table.by_name(n).unwrap().set_plain(v);
-        }
-        plugin.activate(fs, BLOCK);
+        let set = [("mix", 1.0), ("predelay", 0.0), ("decay", 1_000.0)];
         let total = (4.5 * fs) as usize / BLOCK;
-        let mut out = Vec::new();
-        let mut in_l = vec![0.0f32; BLOCK];
-        let mut in_r = vec![0.0f32; BLOCK];
-        let mut out_l = vec![0.0f32; BLOCK];
-        let mut out_r = vec![0.0f32; BLOCK];
-        for b in 0..total {
-            for i in 0..BLOCK {
-                in_l[i] = if b == 0 && i == 0 { 0.8 } else { 0.0 };
-            }
-            in_r.copy_from_slice(&in_l);
-            let mut in_ptrs = [core::ptr::null_mut(); 2];
-            let mut out_ptrs = [core::ptr::null_mut(); 2];
-            let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-            let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-            let mut ctx = ProcessCtx {
-                sample_rate: fs,
-                frames: BLOCK,
-                transport: None,
-                input: inb,
-                output: outb,
-                aux: &[],
-                params: stave_core::ParamBlock::empty(),
-                events: &[],
-            };
-            plugin.process(&mut ctx);
-            out.extend_from_slice(&out_l);
-        }
+        let mut h = harness(&set, fs, BLOCK);
+        let mut impulse = vec![0.0f32; BLOCK];
+        impulse[0] = 0.8;
+        let (out, _) = run(&mut h, &impulse, &impulse, total - 1, None);
         let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
         assert!(peak < 1.05 && peak > 1e-4, "{fs}: peak {peak}");
         let early = rms(&out[(0.3 * fs) as usize..(0.5 * fs) as usize]);
@@ -659,7 +584,6 @@ fn other_sample_rates_behave() {
         );
         let tail = rms(&out[(4.0 * fs) as usize..]);
         assert!(tail < 1e-4, "{fs}: never dies: {tail:.2e}");
-        let _ = Arc::strong_count(&bus);
     }
 }
 
@@ -807,44 +731,7 @@ fn hyper_width_grows_the_head() {
             ("width", width),
             ("stand", 0.0),
         ];
-        let mut plugin = stave_vault_vst3::Vault::new();
-        let bus = DebugBus::new();
-        plugin.debug_attach(bus.clone());
-        let table = plugin.param_table();
-        for (n, v) in set {
-            table.by_name(n).unwrap().set_plain(v);
-        }
-        plugin.activate(FS, BLOCK);
-        let blocks = x.len().div_ceil(BLOCK) + 20;
-        let (mut l, mut r) = (Vec::new(), Vec::new());
-        let mut in_l = vec![0.0f32; BLOCK];
-        let mut in_r = vec![0.0f32; BLOCK];
-        let mut out_l = vec![0.0f32; BLOCK];
-        let mut out_r = vec![0.0f32; BLOCK];
-        for b in 0..blocks {
-            for i in 0..BLOCK {
-                in_l[i] = x.get(b * BLOCK + i).copied().unwrap_or(0.0);
-            }
-            in_r.copy_from_slice(&in_l);
-            let mut in_ptrs = [core::ptr::null_mut(); 2];
-            let mut out_ptrs = [core::ptr::null_mut(); 2];
-            let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-            let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-            let mut ctx = ProcessCtx {
-                sample_rate: FS,
-                frames: BLOCK,
-                transport: None,
-                input: inb,
-                output: outb,
-                aux: &[],
-                params: stave_core::ParamBlock::empty(),
-                events: &[],
-            };
-            plugin.process(&mut ctx);
-            l.extend_from_slice(&out_l);
-            r.extend_from_slice(&out_r);
-        }
-        let _ = Arc::strong_count(&bus);
+        let (l, r) = run(&mut harness(&set, FS, BLOCK), &x, &x, 20, None);
         let win = 0..(0.035 * FS) as usize;
         let diff: f64 = l[win.clone()]
             .iter()

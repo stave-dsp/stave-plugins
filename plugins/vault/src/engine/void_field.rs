@@ -11,8 +11,8 @@
 //! DIFFUSE the wash density, SIZE the field's vastness, WIDTH the
 //! pickup spread (0 = mono).
 
-use stave_dsp::primitives::random::{unit_f32, wang_hash};
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::primitives::random::{unit_f32, wang_hash};
+use stave::dsp::{t60_gain, DelayLine};
 
 use super::tank::hadamard16;
 
@@ -145,12 +145,12 @@ impl Void {
         self.k_dawn_r = 1.0 - (-1.0 / (0.25 * sr)).exp();
         for (i, line) in self.lines.iter_mut().enumerate() {
             let cap = (BASE_MS[i] * 0.001 * sr * 1.8) as usize + 16;
-            line.delay.prepare(cap);
+            line.delay.allocate(cap);
             line.len = BASE_MS[i] * 0.001 * sr;
             line.ap_len = (LOOP_AP_MS[i] * 0.001 * sr).round() as usize;
-            line.ap.prepare(line.ap_len + 8);
+            line.ap.allocate(line.ap_len + 8);
             line.ap2_len = (LOOP_AP_MS[(i + 7) % LINES] * 1.7 * 0.001 * sr).round() as usize;
-            line.ap2.prepare(line.ap2_len + 8);
+            line.ap2.allocate(line.ap2_len + 8);
             line.sheen_ph = (i as f32) * 2.399_963;
             line.sheen_rate = 0.3 * (0.55 + 0.9 * ((i as f32 * 0.618_034) % 1.0));
         }
@@ -158,7 +158,7 @@ impl Void {
             for (k, d) in chain.iter_mut().enumerate() {
                 let det = if ch == 0 { 1.0 } else { 1.07 };
                 self.in_len[k] = (IN_DIFF_MS[k] * det * 0.001 * sr).round() as usize;
-                d.prepare(self.in_len[k] + 8);
+                d.allocate(self.in_len[k] + 8);
             }
         }
         self.reset();

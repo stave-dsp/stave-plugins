@@ -13,13 +13,7 @@
 //! the pristine hall; dialed together they walk the machine down
 //! to lofi without ever leaving the same physical tank.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// THE TOPOLOGY — which MACHINE this is, not a flavor of one
@@ -120,71 +114,66 @@ pub struct VaultParams {
     pub distance: FloatParam,
 }
 
-impl VaultParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-            mix: FloatParam::new(3, "mix", 0.32, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Field")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            size: FloatParam::new(4, "size", 1.0, Range::new(0.3, 3.0, Taper::Log))
-                .with_group("Space")
-                .with_smooth(Smooth::Off),
-            decay: FloatParam::new(5, "decay", 2_400.0, Range::new(100.0, 30_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Space")
-                .with_smooth(Smooth::Off),
-            predelay: FloatParam::new(6, "predelay", 12.0, Range::new(0.0, 250.0, Taper::Linear))
-                .with_unit(Unit::Ms)
-                .with_group("Space")
-                .with_smooth(Smooth::Exp { ms: 80.0 }),
-            damp: FloatParam::new(7, "high energy", 0.35, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Color")
-                .with_smooth(Smooth::Off),
-            width: FloatParam::new(19, "width", 1.0, Range::new(0.0, 2.0, Taper::Linear))
-                .with_group("Field")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            stand: FloatParam::new(18, "stand", 0.2, Range::new(-1.0, 1.0, Taper::Linear))
-                .with_group("Field")
-                .with_smooth(Smooth::Off),
-            early: FloatParam::new(12, "early", 0.55, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Space")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            bass: FloatParam::new(13, "low energy", 1.0, Range::new(0.25, 4.0, Taper::Log))
-                .with_group("Color")
-                .with_smooth(Smooth::Off),
-            tone: FloatParam::new(14, "tone", 0.0, Range::new(-1.0, 1.0, Taper::Linear))
-                .with_group("Color")
-                .with_smooth(Smooth::Off),
-            diffuse: FloatParam::new(15, "diffuse", 0.7, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Color")
-                .with_smooth(Smooth::Off),
-            stiff: FloatParam::new(16, "whip", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Color")
-                .with_smooth(Smooth::Off),
-            duck: FloatParam::new(17, "duck", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Field")
-                .with_smooth(Smooth::Off),
-            material: EnumParam::new(20, "material", WallMaterial(1)).with_group("Color"),
-            topology: EnumParam::new(22, "topology", Topology(0)).with_group("Space"),
-            ascend: FloatParam::new(26, "ascend", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Space"),
-            fuse: FloatParam::new(27, "fuse", 0.25, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Space"),
-            dawn: FloatParam::new(28, "dawn", 0.4, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Space"),
-            distance: FloatParam::new(21, "distance", 0.7, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Space")
-                .with_smooth(Smooth::Off),
-        })
+impl Default for VaultParams {
+    fn default() -> Self {
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0)).default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            mix: FloatParam::new(ParamId(3), "mix", Range::linear(0.0, 1.0)).default(0.32)
+                .group("Field")
+                .smooth(Smooth::ms(20.0)),
+            size: FloatParam::new(ParamId(4), "size", Range::log(0.3, 3.0)).default(1.0)
+                .group("Space")
+                .smooth(Smooth::Off),
+            decay: FloatParam::new(ParamId(5), "decay", Range::log(100.0, 30_000.0)).default(2_400.0)
+                .unit(Unit::Ms)
+                .group("Space")
+                .smooth(Smooth::Off),
+            predelay: FloatParam::new(ParamId(6), "predelay", Range::linear(0.0, 250.0)).default(12.0)
+                .unit(Unit::Ms)
+                .group("Space")
+                .smooth(Smooth::ms(80.0)),
+            damp: FloatParam::new(ParamId(7), "high energy", Range::linear(0.0, 1.0)).default(0.35)
+                .group("Color")
+                .smooth(Smooth::Off),
+            width: FloatParam::new(ParamId(19), "width", Range::linear(0.0, 2.0)).default(1.0)
+                .group("Field")
+                .smooth(Smooth::ms(20.0)),
+            stand: FloatParam::new(ParamId(18), "stand", Range::linear(-1.0, 1.0)).default(0.2)
+                .group("Field")
+                .smooth(Smooth::Off),
+            early: FloatParam::new(ParamId(12), "early", Range::linear(0.0, 1.0)).default(0.55)
+                .group("Space")
+                .smooth(Smooth::ms(20.0)),
+            bass: FloatParam::new(ParamId(13), "low energy", Range::log(0.25, 4.0)).default(1.0)
+                .group("Color")
+                .smooth(Smooth::Off),
+            tone: FloatParam::new(ParamId(14), "tone", Range::linear(-1.0, 1.0)).default(0.0)
+                .group("Color")
+                .smooth(Smooth::Off),
+            diffuse: FloatParam::new(ParamId(15), "diffuse", Range::linear(0.0, 1.0)).default(0.7)
+                .group("Color")
+                .smooth(Smooth::Off),
+            stiff: FloatParam::new(ParamId(16), "whip", Range::linear(0.0, 1.0)).default(0.0)
+                .group("Color")
+                .smooth(Smooth::Off),
+            duck: FloatParam::new(ParamId(17), "duck", Range::linear(0.0, 1.0)).default(0.0)
+                .group("Field")
+                .smooth(Smooth::Off),
+            material: EnumParam::new(ParamId(20), "material", WallMaterial(1)).group("Color"),
+            topology: EnumParam::new(ParamId(22), "topology", Topology(0)).group("Space"),
+            ascend: FloatParam::new(ParamId(26), "ascend", Range::linear(0.0, 1.0)).default(0.0)
+                .group("Space"),
+            fuse: FloatParam::new(ParamId(27), "fuse", Range::linear(0.0, 1.0)).default(0.25)
+                .group("Space"),
+            dawn: FloatParam::new(ParamId(28), "dawn", Range::linear(0.0, 1.0)).default(0.4)
+                .group("Space"),
+            distance: FloatParam::new(ParamId(21), "distance", Range::linear(0.0, 1.0)).default(0.7)
+                .group("Space")
+                .smooth(Smooth::Off),
+        }
     }
 }

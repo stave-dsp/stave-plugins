@@ -9,9 +9,8 @@
 //!   sustained program and hunt for a discontinuity spike in the
 //!   high-passed output around the switch instant.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+mod common;
+use common::{harness, run};
 
 const FS: f32 = 48_000.0;
 
@@ -24,55 +23,7 @@ fn render_blocks(
     extra_blocks: usize,
     automate: Option<(usize, &str, f64)>,
 ) -> Vec<f32> {
-    let mut plugin = stave_vault_vst3::Vault::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    let set_param = |n: &str, v: f64| {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(v);
-    };
-    for (n, v) in set {
-        set_param(n, *v);
-    }
-    plugin.activate(FS, block);
-    let blocks = input.len().div_ceil(block) + extra_blocks;
-    let mut out = Vec::new();
-    let mut in_l = vec![0.0f32; block];
-    let mut in_r = vec![0.0f32; block];
-    let mut out_l = vec![0.0f32; block];
-    let mut out_r = vec![0.0f32; block];
-    for b in 0..blocks {
-        if let Some((at, name, v)) = automate {
-            if b == at {
-                set_param(name, v);
-            }
-        }
-        for i in 0..block {
-            in_l[i] = input.get(b * block + i).copied().unwrap_or(0.0);
-        }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], block);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], block);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: block,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
+    run(&mut harness(set, FS, block), input, input, extra_blocks, automate).0
 }
 
 fn rms(w: &[f32]) -> f64 {

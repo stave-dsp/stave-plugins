@@ -15,7 +15,7 @@
 //!   tape instead of clicking, and the chorus rides the same
 //!   mechanism (block-rate targets, per-sample linear steps).
 
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::{t60_gain, DcBlocker, DelayLine, Stage};
 
 /// SIXTEEN lines — the published floor for high-quality FDNs, and
 /// the cure for the tail's slow envelope beating (finite mode
@@ -101,8 +101,7 @@ struct Line {
     g: f32,
     /// Damping one-pole + the loop DC blocker.
     lp: f32,
-    dc_x1: f32,
-    dc_y1: f32,
+    dc: DcBlocker,
     /// The in-loop diffusers (two nested stages).
     ap: DelayLine,
     ap_len: f32,
@@ -147,8 +146,7 @@ impl Line {
             step: 0.0,
             g: 0.5,
             lp: 0.0,
-            dc_x1: 0.0,
-            dc_y1: 0.0,
+            dc: DcBlocker::new(20.0),
             ap: DelayLine::new(),
             ap_len: 100.0,
             ap2: DelayLine::new(),
@@ -171,8 +169,6 @@ impl Line {
 
 pub(super) struct Tank {
     lines: [Line; LINES],
-    /// DC blocker pole (~20 Hz at the prepared rate).
-    dc_r: f32,
     /// Bass crossover one-pole coefficient.
     k_bass: f32,
     k_hi: f32,
@@ -194,7 +190,6 @@ impl Tank {
                 l.chorus_rate = 0.9 * (0.55 + 0.9 * ((i as f32 * 0.618_034) % 1.0));
                 l
             }),
-            dc_r: 0.9974,
             k_bass: 0.05,
             k_hi: 0.25,
             k_sub: 0.01,
@@ -207,21 +202,21 @@ impl Tank {
     /// headroom (the audio path never allocates).
     pub fn prepare(&mut self, sr: f32) {
         self.sr = sr;
-        self.dc_r = 1.0 - core::f32::consts::TAU * 20.0 / sr;
         self.k_bass = 1.0 - (-core::f32::consts::TAU * BASS_XOVER_HZ / sr).exp();
         self.k_hi = 1.0 - (-core::f32::consts::TAU * HI_XOVER_HZ / sr).exp();
         for (i, line) in self.lines.iter_mut().enumerate() {
+            line.dc.prepare(sr);
             let cap = (BASE_MS[i] * 0.001 * sr * 3.0) as usize + 96;
-            line.delay.prepare(cap);
+            line.delay.allocate(cap);
             line.len = BASE_MS[i] * 0.001 * sr;
             // INTEGER lengths: a linear read at a FIXED fractional
             // position inside a feedback loop is hidden compounding
             // HF loss (review catch) — these lengths never glide,
             // so they round.
             line.ap_len = (AP_MS[i] * 0.001 * sr).round();
-            line.ap.prepare(line.ap_len as usize + 8);
+            line.ap.allocate(line.ap_len as usize + 8);
             line.ap2_len = (AP2_MS[i] * 0.001 * sr).round();
-            line.ap2.prepare(line.ap2_len as usize + 8);
+            line.ap2.allocate(line.ap2_len as usize + 8);
         }
         self.reset();
     }
@@ -232,8 +227,7 @@ impl Tank {
             line.ap.reset();
             line.ap2.reset();
             line.lp = 0.0;
-            line.dc_x1 = 0.0;
-            line.dc_y1 = 0.0;
+            line.dc.reset();
             line.step = 0.0;
             line.low = 0.0;
             line.sub = 0.0;
@@ -343,9 +337,7 @@ impl Tank {
             // Absorption, then the bridge terminates displacement
             // (DC out of the loop), then the T60 loss.
             line.lp += damp_k * (y - line.lp);
-            let dc = line.lp - line.dc_x1 + self.dc_r * line.dc_y1;
-            line.dc_x1 = line.lp;
-            line.dc_y1 = dc;
+            let dc = line.dc.tick(line.lp);
             // The bass + sub SHELVES in cascade (first-order,
             // minimum-phase: loop magnitude provably between the
             // band gains at every dial — the passivity-at-every-

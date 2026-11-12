@@ -5,23 +5,10 @@
 //! static color (tone), and scattering density (diffuse — low is
 //! discrete vintage echoes AS a character, not a defect).
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::params::AnyParam;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::VaultParams;
 
-/// A preset from (parameter, plain value) pairs.
-fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
-    Preset {
-        name,
-        values: pairs.iter().map(|(p, v)| (p.meta().id, *v)).collect(),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
 pub fn presets(p: &VaultParams) -> Vec<Preset> {
     // (mix, size, decay_ms, predelay, early, damp, bass, tone,
     //  diffuse, motion, wow, drive, width)
@@ -43,24 +30,24 @@ pub fn presets(p: &VaultParams) -> Vec<Preset> {
                 material: f64,
                 topology: f64,
                 ascend: f64| {
-        alloc::vec![
-            (&p.mix as &dyn stave_core::params::AnyParam, mix),
-            (&p.size, size),
-            (&p.decay, decay),
-            (&p.predelay, predelay),
-            (&p.early, early),
-            (&p.damp, damp),
-            (&p.bass, bass),
-            (&p.tone, tone),
-            (&p.diffuse, diffuse),
-            (&p.width, width),
-            (&p.stiff, stiff),
-            (&p.duck, duck),
-            (&p.stand, stand),
-            (&p.material, material),
-            (&p.topology, topology),
-            (&p.ascend, ascend),
-            (&p.output, 0.0),
+        vec![
+            (p.mix.id(), mix),
+            (p.size.id(), size),
+            (p.decay.id(), decay),
+            (p.predelay.id(), predelay),
+            (p.early.id(), early),
+            (p.damp.id(), damp),
+            (p.bass.id(), bass),
+            (p.tone.id(), tone),
+            (p.diffuse.id(), diffuse),
+            (p.width.id(), width),
+            (p.stiff.id(), stiff),
+            (p.duck.id(), duck),
+            (p.stand.id(), stand),
+            (p.material.id(), material),
+            (p.topology.id(), topology),
+            (p.ascend.id(), ascend),
+            (p.output.id(), 0.0),
         ]
     };
     let cathedral = full(
@@ -99,18 +86,18 @@ pub fn presets(p: &VaultParams) -> Vec<Preset> {
     let airlock = full(
         0.42, 3.0, 14_000.0, 70.0, 0.15, 0.25, 1.6, 0.2, 0.9, 1.35, 0.0, 0.25, 0.15, 3.0, 0.0, 0.0,
     );
-    alloc::vec![
-        preset("STONE CATHEDRAL", &cathedral),
-        preset("WOOD ROOM", &wood_room),
-        preset("BRIGHT PLATE", &bright_plate),
-        preset("DARK PLATE", &dark_plate),
-        preset("FROZEN CHOIR", &frozen_choir),
-        preset("THE MEMORY", &the_memory),
-        preset("GATED SNARE", &gated_snare),
-        preset("OPEN VOID", &open_void),
-        preset("CHAMBER", &chamber),
-        preset("WAREHOUSE", &warehouse),
-        preset("ECHO CANYON", &canyon),
-        preset("AIRLOCK", &airlock),
+    vec![
+        Preset::from_pairs("STONE CATHEDRAL", &cathedral),
+        Preset::from_pairs("WOOD ROOM", &wood_room),
+        Preset::from_pairs("BRIGHT PLATE", &bright_plate),
+        Preset::from_pairs("DARK PLATE", &dark_plate),
+        Preset::from_pairs("FROZEN CHOIR", &frozen_choir),
+        Preset::from_pairs("THE MEMORY", &the_memory),
+        Preset::from_pairs("GATED SNARE", &gated_snare),
+        Preset::from_pairs("OPEN VOID", &open_void),
+        Preset::from_pairs("CHAMBER", &chamber),
+        Preset::from_pairs("WAREHOUSE", &warehouse),
+        Preset::from_pairs("ECHO CANYON", &canyon),
+        Preset::from_pairs("AIRLOCK", &airlock),
     ]
 }

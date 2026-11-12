@@ -13,74 +13,14 @@
 //!   isolation — deterministic renders make the claim exact);
 //! * DRIVE thickens without ever regenerating.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+mod common;
+use common::{render, render_stereo, render_stereo_lr};
+use stave::{ParamId, Plugin};
+use stave_test::PluginHarness;
+use stave_vault_vst3::{Vault, VaultParams};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
-
-fn render_stereo(set: &[(&str, f64)], input: &[f32], extra_blocks: usize) -> (Vec<f32>, Vec<f32>) {
-    render_stereo_lr(set, input, input, extra_blocks)
-}
-
-/// Independent L/R inputs — the review caught every acoustic test
-/// copying L into R, leaving true-stereo behavior untestable.
-fn render_stereo_lr(
-    set: &[(&str, f64)],
-    input_l: &[f32],
-    input_r: &[f32],
-    extra_blocks: usize,
-) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_vault_vst3::Vault::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let blocks = input_l.len().max(input_r.len()).div_ceil(BLOCK) + extra_blocks;
-    let mut left = Vec::with_capacity(blocks * BLOCK);
-    let mut right = Vec::with_capacity(blocks * BLOCK);
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for b in 0..blocks {
-        for i in 0..BLOCK {
-            let n = b * BLOCK + i;
-            in_l[i] = input_l.get(n).copied().unwrap_or(0.0);
-            in_r[i] = input_r.get(n).copied().unwrap_or(0.0);
-        }
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        left.extend_from_slice(&out_l);
-        right.extend_from_slice(&out_r);
-    }
-    let _ = Arc::strong_count(&bus);
-    (left, right)
-}
-
-fn render(set: &[(&str, f64)], input: &[f32], extra_blocks: usize) -> Vec<f32> {
-    render_stereo(set, input, extra_blocks).0
-}
 
 fn impulse() -> Vec<f32> {
     let mut v = vec![0.0f32; 256];
@@ -696,13 +636,12 @@ fn diffuse_zero_is_echoes() {
 /// nonzero, and dead silent again after its own tail.
 #[test]
 fn the_presets_are_places() {
-    let plugin = stave_vault_vst3::Vault::new();
-    let presets = plugin.presets();
+    let presets = <Vault as Plugin>::presets(&VaultParams::default());
     assert!(presets.len() >= 8, "expected the character corners");
     // Preset values carry ParamIds; the render harness speaks
     // names — translate through the table.
-    let table = plugin.param_table();
-    let name_of = |id: stave_core::params::ParamId| {
+    let table = PluginHarness::<Vault>::new(FS, BLOCK).table();
+    let name_of = |id: ParamId| {
         (0..table.count())
             .filter_map(|i| table.by_index(i))
             .find(|p| p.meta().id == id)

@@ -15,8 +15,8 @@
 //! TONE tilts the pickups, DIFFUSE is the density, SIZE the
 //! chamber's grain, WIDTH the pickup spread (0 = mono).
 
-use stave_dsp::primitives::random::{unit_f32, wang_hash};
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::primitives::random::{unit_f32, wang_hash};
+use stave::dsp::{t60_gain, DelayLine};
 
 use super::tank::hadamard16;
 
@@ -149,16 +149,16 @@ impl Detonate {
         self.k_env = 1.0 - (-1.0 / (0.002 * sr)).exp();
         for (i, line) in self.lines.iter_mut().enumerate() {
             let cap = (BASE_MS[i] * 0.001 * sr * 1.8) as usize + 16;
-            line.delay.prepare(cap);
+            line.delay.allocate(cap);
             line.len = BASE_MS[i] * 0.001 * sr;
             line.ap_len = (LOOP_AP_MS[i] * 0.001 * sr).round() as usize;
-            line.ap.prepare(line.ap_len + 8);
+            line.ap.allocate(line.ap_len + 8);
         }
         for (ch, chain) in self.in_diff.iter_mut().enumerate() {
             for (k, d) in chain.iter_mut().enumerate() {
                 let det = if ch == 0 { 1.0 } else { 1.07 };
                 self.in_len[k] = (IN_DIFF_MS[k] * det * 0.001 * sr).round() as usize;
-                d.prepare(self.in_len[k] + 8);
+                d.allocate(self.in_len[k] + 8);
             }
         }
         self.reset();

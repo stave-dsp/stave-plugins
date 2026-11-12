@@ -15,7 +15,7 @@
 //! it wears the same early gain, coherence fold and lean as the
 //! reflections that excited it.
 
-use stave_dsp::t60_gain;
+use stave::dsp::t60_gain;
 
 /// One ringing body per entry: (Hz, T60 s, level). Frequencies
 /// deliberately inharmonic (a plate's modes are not a harmonic

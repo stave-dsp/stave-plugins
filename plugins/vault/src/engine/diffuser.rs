@@ -8,7 +8,7 @@
 //! the tank does). Lengths scale with √size and ride the same
 //! slew-capped glide as the tank's read heads.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 const STAGES: usize = 4;
 /// Stage lengths at size 1.0, ms — mutually non-integer-ratio.
@@ -69,7 +69,7 @@ impl Diffuser {
         for (i, st) in self.stages.iter_mut().enumerate() {
             // √3 ≈ 1.74 covers size 3.0; headroom for the glide.
             let cap = (BASE_MS[i] * 0.001 * sr * self.scale * 1.8) as usize + 32;
-            st.delay.prepare(cap);
+            st.delay.allocate(cap);
             st.len = BASE_MS[i] * 0.001 * sr * self.scale;
         }
         self.reset();

@@ -22,8 +22,8 @@
 //! memory remembers deeper); WIDTH spreads the per-resonator
 //! pickups (0 = mono, by geometry).
 
-use stave_dsp::primitives::random::{unit_f32, wang_hash};
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::primitives::random::{unit_f32, wang_hash};
+use stave::dsp::{t60_gain, DelayLine};
 
 /// Eighteen per octave x seven octaves, 55 Hz up.
 const PER_OCT: usize = 18;
@@ -118,11 +118,11 @@ impl Memory {
             for (k, d) in chain.iter_mut().enumerate() {
                 let det = if ch == 0 { 1.0 } else { 1.07 };
                 self.in_len[k] = (IN_DIFF_MS[k] * det * 0.001 * sr).round() as usize;
-                d.prepare(self.in_len[k] + 8);
+                d.allocate(self.in_len[k] + 8);
             }
         }
         for c in self.cloud.iter_mut() {
-            c.prepare((0.05 * sr) as usize + 16);
+            c.allocate((0.05 * sr) as usize + 16);
         }
         self.reset();
         self.cold = true;

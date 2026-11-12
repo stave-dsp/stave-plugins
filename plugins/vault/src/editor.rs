@@ -5,21 +5,15 @@
 //! Valhalla lesson). The machine window says what the shared dials
 //! MEAN on the machine that runs. SPACE is where you are, ENERGY is
 //! how the place holds sound, OUTPUT is the plumbing. Along the
-//! bottom, each machine's own dial on its own small plate — what
-//! exists on one machine and not the others, named for it, never
-//! hidden by switching.
+//! bottom, the running machine's own plate — what exists on one
+//! machine and not the others, named for it: the plate follows the
+//! topology selector (`on_step`), one machine's plate at a time.
 
-use stave_core::face::prelude::*;
-use stave_core::face::{step_of, CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_core::ui::photo::hex;
-use stave_core::ui::scene::{Family, Font, TextAlign};
+use stave::face::photo::hex;
+use stave::face::{step_of, CapStyle, Coat, Finish, Hardware, Palette};
+use stave::prelude::*;
 
 use crate::params::{VaultParams, TOPOLOGIES};
-
-/// The topology parameter's id (the machine window reads it). Checked
-/// against the table in the tests below.
-const TOPOLOGY_ID: u32 = 22;
 
 /// What the shared dials mean on each machine, one line per dial.
 const LEGENDS: [[&str; 4]; 5] = [
@@ -58,39 +52,52 @@ const LEGENDS: [[&str; 4]; 5] = [
 /// Deep aubergine enamel, gilt print, black dome knobs, a violet glow.
 fn theme() -> Theme {
     let gilt = Color::rgba(0.91, 0.82, 0.62, 1.0);
+    let base = Theme::graphite();
     Theme {
         name: "vault",
-        surface: hex(0x2B1E3A),
-        finish: Finish::Enamel,
-        plate: hex(0x22172F),
-        desk: hex(0x141218),
-        ink: gilt,
-        ink_soft: Color::rgba(0.91, 0.82, 0.62, 0.55),
-        accent: Color::rgba(0.86, 0.72, 1.0, 1.0),
-        lamp: [1.1, 0.55, 1.8],
-        caps: CapStyle::Dome,
-        cap: hex(0x0D0B10),
-        pointer: gilt,
-        screen: Color::rgba(0.03, 0.02, 0.05, 1.0),
-        phosphor: Color::rgba(0.84, 0.74, 1.0, 1.0),
-        radius: 14.0,
-        ..Theme::graphite()
+        finish: Finish {
+            coat: Coat::Enamel,
+            surface: hex(0x2B1E3A),
+            plate: hex(0x22172F),
+            desk: hex(0x141218),
+            radius: 14.0,
+        },
+        palette: Palette {
+            ink: gilt,
+            ink_soft: Color::rgba(0.91, 0.82, 0.62, 0.55),
+            accent: Color::rgba(0.86, 0.72, 1.0, 1.0),
+            screen: Color::rgba(0.03, 0.02, 0.05, 1.0),
+            phosphor: Color::rgba(0.84, 0.74, 1.0, 1.0),
+        },
+        hardware: Hardware {
+            caps: CapStyle::Dome,
+            cap: hex(0x0D0B10),
+            pointer: gilt,
+            lamp: [1.1, 0.55, 1.8],
+        },
+        ..base
     }
 }
 
 /// The machine window: the running machine's name and what the
 /// shared dials mean on it.
 fn machine(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let ph = f.theme.phosphor;
+    let ty = &f.theme.typography;
+    let ph = f.theme.palette.phosphor;
     let soft = Color::rgba(ph.r, ph.g, ph.b, 0.6);
-    let i = step_of(f.host.normalized(TOPOLOGY_ID), TOPOLOGIES.len() as u32) as usize;
+    let i = step_of(f.bound(0), TOPOLOGIES.len() as u32) as usize;
     let i = i.min(LEGENDS.len() - 1);
-    let left = Font::new(Family::Sans, 650).tracking(0.18).align(TextAlign::Left);
-    let mono = Font::new(Family::Mono, 500).align(TextAlign::Left);
-    let x = r.x + 16.0;
-    s.text_in(pt(x, r.y + 26.0), TOPOLOGIES[i], 15.0, ph, left);
+    // Left-set print, by its left edge: the mono legends padded to one
+    // width and centered share a left edge (`TextAlign` is not on the
+    // author surface); the name sits on that edge's estimate.
+    let width = LEGENDS[i].iter().map(|l| l.chars().count()).max().unwrap_or(0);
+    let mid = r.x + r.w / 2.0;
+    let left = mid - width as f64 * 9.0 * 0.6 / 2.0;
+    let name = TOPOLOGIES[i];
+    let name_w = name.chars().count() as f64 * 15.0 * (0.64 + 0.18);
+    s.text_in(pt(left + name_w / 2.0, r.y + 26.0), name, 15.0, ph, ty.legend.tracking(0.18));
     for (k, line) in LEGENDS[i].iter().enumerate() {
-        s.text_in(pt(x, r.y + 48.0 + 15.0 * k as f64), *line, 9.0, soft, mono);
+        s.text_in(pt(mid, r.y + 48.0 + 15.0 * k as f64), format!("{line:<width$}"), 9.0, soft, ty.value);
     }
 }
 
@@ -157,16 +164,23 @@ pub fn face(p: &VaultParams) -> Face {
         .gap(gap)
         .align(Align::Center),
     );
+    // The running machine's plate, and only it: each plate follows
+    // its step of the topology selector.
     let one = |title: &'static str, b: Bind| Plate::titled(title).around(Knob::new(b).node());
-    let machines = row(vec![
-        room,
-        one("PLATE", p.stiff.bind()),
-        one("MEMORY", p.ascend.bind()),
-        one("DETONATE", p.fuse.bind()),
-        one("VOID", p.dawn.bind()),
-    ])
-    .gap(gap)
-    .align(Align::Stretch);
+    let topology = p.topology.bind();
+    let machines = stack(
+        [
+            room,
+            one("PLATE", p.stiff.bind()),
+            one("MEMORY", p.ascend.bind()),
+            one("DETONATE", p.fuse.bind()),
+            one("VOID", p.dawn.bind()),
+        ]
+        .into_iter()
+        .zip(0..)
+        .map(|(plate, step)| on_step(plate, topology, step))
+        .collect(),
+    );
 
     let body = column(vec![
         header,
@@ -177,15 +191,4 @@ pub fn face(p: &VaultParams) -> Face {
     .gap(theme.space(3))
     .align(Align::Stretch);
     Face::new(theme, Panel { margin: 18.0, pad: 24.0, ..Panel::default() }.around(body))
-}
-
-#[cfg(test)]
-mod tests {
-    use stave_core::params::AnyParam;
-
-    #[test]
-    fn the_machine_window_reads_the_topology_parameter() {
-        let p = crate::params::VaultParams::new();
-        assert_eq!(p.topology.meta().id.0, super::TOPOLOGY_ID);
-    }
 }

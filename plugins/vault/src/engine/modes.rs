@@ -55,8 +55,8 @@ const MODE_IDX: [(u8, u8, u8); 24] = [
 pub(super) const MODE_COUNT: usize = MODE_IDX.len();
 
 use super::scene::{Scene, SPEED_M_S};
-use stave_dsp::primitives::random::{unit_f32, wang_hash};
-use stave_dsp::t60_gain;
+use stave::dsp::primitives::random::{unit_f32, wang_hash};
+use stave::dsp::t60_gain;
 
 /// The modal band: below ~26 Hz is sub-rumble, above ~215 Hz the
 /// tank's statistics take over (edge-faded, never switched).

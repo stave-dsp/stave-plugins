@@ -26,7 +26,7 @@
 //! pickup-brightness tilt from TONE. No geometry stages at all —
 //! the CPU answer falls out of the architecture.
 
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::{t60_gain, DelayLine};
 
 use super::tank::hadamard16;
 
@@ -221,21 +221,21 @@ impl Plate {
         for (i, line) in self.lines.iter_mut().enumerate() {
             // Capacity for size 3 (transit scale √3) + headroom.
             let cap = (BASE_MS[i] * 0.001 * sr * 1.8) as usize + 16;
-            line.delay.prepare(cap);
+            line.delay.allocate(cap);
             line.len = BASE_MS[i] * 0.001 * sr;
             line.sheen_ph = (i as f32) * 2.399_963;
             line.sheen_rate = 0.4 * (0.55 + 0.9 * ((i as f32 * 0.618_034) % 1.0));
             line.ap_len = (LOOP_AP_MS[i] * 0.001 * sr).round() as usize;
-            line.ap.prepare(line.ap_len + 8);
+            line.ap.allocate(line.ap_len + 8);
             line.ap2_len = (LOOP_AP2_MS[i] * 0.001 * sr).round() as usize;
-            line.ap2.prepare(line.ap2_len + 8);
+            line.ap2.allocate(line.ap2_len + 8);
         }
         for (ch, chain) in self.in_diff.iter_mut().enumerate() {
             for (k, st) in chain.iter_mut().enumerate() {
                 // R detuned 1.07 (the diffuser convention).
                 let det = if ch == 0 { 1.0 } else { 1.07 };
                 st.len = (IN_DIFF_MS[k] * det * 0.001 * sr).round() as usize;
-                st.delay.prepare(st.len + 8);
+                st.delay.allocate(st.len + 8);
             }
         }
         self.k_tilt = 1.0 - (-core::f32::consts::TAU * 1_600.0 / sr).exp();
