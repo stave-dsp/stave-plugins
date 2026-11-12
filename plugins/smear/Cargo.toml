@@ -1,6 +1,6 @@
 [package]
 name = "stave-smear-vst3"
-version = "0.0.1"
+version = "2.0.0"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -13,17 +13,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-stave-core.workspace = true
-stave-ui.workspace = true
-stave-vst3.workspace = true
-stave-clap.workspace = true
-stave-dsp.workspace = true
-rustfft = "6"
+stave.workspace = true
 
 [dev-dependencies]
-assert_no_alloc = "1"
+rustfft = "6"
 stave-test.workspace = true
-stave-host.workspace = true
 
 [lints]
 workspace = true

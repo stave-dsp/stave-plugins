@@ -3,10 +3,7 @@
 //! LEAF (a dense cross-coupled core);
 //! the kernel's job is the plumbing around it.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
-use stave_dsp::Xorshift32;
+use stave::dsp::Xorshift32;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -41,6 +38,9 @@ pub(super) struct ChanState {
     pub(super) detune_tgt: Vec<f32>, // drift target
     pub(super) tone_state: f32,
     pub(super) rng: Xorshift32,
+    /// The drift walk's seed: a reset restarts the walk, so a reset
+    /// garden sounds as a fresh one does.
+    seed: u32,
 }
 
 /// Uniform in [−1, 1] over the full 32-bit draw (the garden's
@@ -68,6 +68,7 @@ impl ChanState {
             detune_tgt: vec![1.0; N_RES],
             tone_state: 0.0,
             rng: Xorshift32::new(seed | 1),
+            seed,
         };
         s.reset();
         s
@@ -81,11 +82,12 @@ impl ChanState {
         self.detune.fill(1.0);
         self.detune_tgt.fill(1.0);
         self.tone_state = 0.0;
+        self.rng = Xorshift32::new(self.seed | 1);
     }
 
     /// Recompute resonator coefficients from the current decay (→ ring
     /// time) and detune. Called once per control block.
-    pub(super) fn update_coeffs(&mut self, sr: f32, decay: f32, motion: f32, flux: f32) {
+    pub(super) fn update_coeffs(&mut self, sample_rate: f32, decay: f32, motion: f32, flux: f32) {
         // Ring time → pole radius r. Interpolate (1−r) geometrically so the
         // knob spans ~14 ms (plucky) to several seconds (drone). r must sit
         // very close to 1 for musical sustain.
@@ -97,14 +99,14 @@ impl ChanState {
         // each detune toward its target. FLUX = how often the target moves,
         // MOTION = how far it can stray (chorus depth, ≤ ~1.2%).
         let drift = motion * 0.012;
-        let nyq = sr * 0.47;
+        let nyq = sample_rate * 0.47;
         for i in 0..N_RES {
             if flux > 0.0 && (self.rng.next_u32() & 0x3f) < (flux * 40.0) as u32 {
                 self.detune_tgt[i] = 1.0 + rand_bi(&mut self.rng) * drift;
             }
             self.detune[i] += 0.05 * (self.detune_tgt[i] - self.detune[i]);
             let f = (self.base_freq[i] * self.detune[i]).min(nyq);
-            let w = TWO_PI * f / sr;
+            let w = TWO_PI * f / sample_rate;
             self.a1[i] = 2.0 * r * w.cos();
             self.a2[i] = r * r;
             self.b0[i] = b0v;

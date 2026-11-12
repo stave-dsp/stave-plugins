@@ -2,9 +2,8 @@
 //!
 //! Run: cargo test -p stave-smear-vst3 --release --test garden -- --nocapture
 
-use stave_core::Plugin;
 use stave_smear_vst3::Smear;
-use stave_test::harness::PluginHarness;
+use stave_test::PluginHarness;
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -12,15 +11,12 @@ const BLOCK: usize = 256;
 /// Render: `tone_secs` of a 220 Hz tone (A3, on the lattice), then silence
 /// to `total_secs`. Returns (wet, dry).
 fn render(total_secs: f32, tone_secs: f32, params: &[(&str, f32)]) -> (Vec<f32>, Vec<f32>) {
-    let mut h = PluginHarness::<Smear>::new(SR, BLOCK);
-    let table = h.plugin_mut().param_table();
-    for (k, v) in params {
-        table
-            .by_name(k)
-            .unwrap_or_else(|| panic!("param '{k}'"))
-            .set_plain(f64::from(*v));
-    }
-    h.plugin_mut().activate(SR, BLOCK);
+    let mut h = params
+        .iter()
+        .fold(PluginHarness::<Smear>::builder().sample_rate(SR).block_size(BLOCK), |b, (k, v)| {
+            b.set(k, f64::from(*v))
+        })
+        .build();
     let total = (total_secs * SR) as usize;
     let tone = (tone_secs * SR) as usize;
     let (mut wet, mut dry) = (Vec::new(), Vec::new());
@@ -40,7 +36,8 @@ fn render(total_secs: f32, tone_secs: f32, params: &[(&str, f32)]) -> (Vec<f32>,
         }
         h.set_input(0, &l);
         h.set_input(1, &r);
-        let b = h.process_block(&[]);
+        h.process(&[]);
+        let b = h.outputs();
         for i in 0..BLOCK {
             wet.push(2.0 * b[0][i] - l[i]); // reconstruct wet at mix=0.5
         }

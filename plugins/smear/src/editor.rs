@@ -4,35 +4,37 @@
 //! FLUX/MOTION), the four garden controls as the hero row, then
 //! motion, tone and output.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
+use stave::face::photo::hex;
+use stave::face::{CapStyle, Coat, Finish, Hardware, Palette};
+use stave::prelude::*;
 
-use stave_core::face::prelude::*;
-use stave_core::face::{CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_ui::photo::hex;
-
-use crate::SmearParams;
+use crate::{SmearParams, SmearTaps};
 
 /// Smear's look: plum enamel, ivory print, a soft-gold light.
 pub fn theme() -> Theme {
     let base = Theme::verdigris();
     Theme {
         name: "smear",
-        surface: hex(0x5B2F4E),
-        finish: Finish::Enamel,
-        plate: hex(0x4A253F),
-        desk: hex(0x1E1B1F),
-        ink: Color::rgba(0.96, 0.91, 0.84, 1.0),
-        ink_soft: Color::rgba(0.96, 0.91, 0.84, 0.6),
-        accent: Color::rgba(0.98, 0.80, 0.52, 1.0),
-        lamp: [1.6, 0.9, 0.5],
-        caps: CapStyle::Soft,
-        cap: hex(0xEFE4D2),
-        pointer: Color::rgba(0.42, 0.17, 0.35, 1.0),
-        screen: Color::rgba(0.05, 0.03, 0.05, 1.0),
-        phosphor: Color::rgba(1.0, 0.78, 0.86, 1.0),
+        finish: Finish {
+            coat: Coat::Enamel,
+            surface: hex(0x5B2F4E),
+            plate: hex(0x4A253F),
+            desk: hex(0x1E1B1F),
+            ..base.finish
+        },
+        palette: Palette {
+            ink: Color::rgba(0.96, 0.91, 0.84, 1.0),
+            ink_soft: Color::rgba(0.96, 0.91, 0.84, 0.6),
+            accent: Color::rgba(0.98, 0.80, 0.52, 1.0),
+            screen: Color::rgba(0.05, 0.03, 0.05, 1.0),
+            phosphor: Color::rgba(1.0, 0.78, 0.86, 1.0),
+        },
+        hardware: Hardware {
+            caps: CapStyle::Soft,
+            cap: hex(0xEFE4D2),
+            pointer: Color::rgba(0.42, 0.17, 0.35, 1.0),
+            lamp: [1.6, 0.9, 0.5],
+        },
         ..base
     }
 }
@@ -51,7 +53,7 @@ pub fn face(p: &SmearParams) -> Face {
     .align(Align::Center);
 
     let garden_view = Display::new(560.0, 150.0, garden::draw)
-        .probes(&["io_out"])
+        .taps(&[SmearTaps::IO_OUT])
         .reads(&[
             p.smear.bind(),
             p.bloom.bind(),
@@ -64,9 +66,9 @@ pub fn face(p: &SmearParams) -> Face {
         .animated()
         .node();
     let top = row(vec![
-        column(vec![Meter::db("io_in").label("IN").height(150.0).node()]).align(Align::Center),
+        column(vec![Meter::db(SmearTaps::IO_IN).label("IN").height(150.0).node()]).align(Align::Center),
         garden_view,
-        column(vec![Meter::db("io_out").label("OUT").height(150.0).node()]).align(Align::Center),
+        column(vec![Meter::db(SmearTaps::IO_OUT).label("OUT").height(150.0).node()]).align(Align::Center),
     ])
     .gap(row_gap)
     .align(Align::Center)
@@ -113,13 +115,9 @@ pub fn face(p: &SmearParams) -> Face {
 
 /// The garden on glass.
 mod garden {
-    use stave_core::face::prelude::*;
-    use stave_core::params::BindParam;
-    use std::sync::LazyLock;
+    use stave::prelude::*;
 
-    use crate::SmearParams;
-
-    static P: LazyLock<SmearParams> = LazyLock::new(SmearParams::new);
+    use crate::SmearTaps;
 
     fn alpha(c: Color, a: f64) -> Color {
         Color::rgba(c.r, c.g, c.b, c.a * a)
@@ -131,17 +129,11 @@ mod garden {
     /// FLUX and MOTION drift the tuning (the strings sway), SHIMMER
     /// lights the octave partials, DEPTH spreads the lanes apart.
     pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-        let p = &*P;
         let th = f.theme;
-        let v = |b: Bind| f.value(b);
-        let (smear, bloom, decay) = (v(p.smear.bind()), v(p.bloom.bind()), v(p.decay.bind()));
-        let (flux, shimmer, motion, depth) = (
-            v(p.flux.bind()),
-            v(p.shimmer.bind()),
-            v(p.motion.bind()),
-            v(p.depth.bind()),
-        );
-        let level = ((f.probe("io_out") + 60.0) / 60.0).clamp(0.0, 1.0);
+        // The binds `face` declares, in its order.
+        let (smear, bloom, decay) = (f.bound(0), f.bound(1), f.bound(2));
+        let (flux, shimmer, motion, depth) = (f.bound(3), f.bound(4), f.bound(5), f.bound(6));
+        let level = ((f.tap(SmearTaps::IO_OUT) + 60.0) / 60.0).clamp(0.0, 1.0);
         let t = f.time;
 
         screens::grid(f, r, s, 12, 4);
@@ -191,17 +183,17 @@ mod garden {
             let a = 0.25 + 0.75 * g * energy;
             s.stroke(
                 Path::polyline(&pts),
-                Stroke::round(alpha(th.phosphor, 0.12 * a), 6.0),
+                Stroke::round(alpha(th.palette.phosphor, 0.12 * a), 6.0),
             );
             s.stroke(
                 Path::polyline(&pts),
-                Stroke::round(alpha(th.phosphor, 0.35 + 0.6 * a), 1.2),
+                Stroke::round(alpha(th.palette.phosphor, 0.35 + 0.6 * a), 1.2),
             );
             // The string's node: a bead of light at the antinode.
             let c = pts[n / 2];
             s.solid(
                 Path::circle(c, 2.0 + 2.5 * g * energy),
-                alpha(th.accent, 0.3 + 0.6 * a),
+                alpha(th.palette.accent, 0.3 + 0.6 * a),
             );
         }
     }

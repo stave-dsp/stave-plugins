@@ -2,9 +2,7 @@
 //! controls glide slowly (50 ms) so the field drifts rather than steps;
 //! the excitation and tone controls at 20 ms, the gains at 5 ms.
 
-extern crate alloc;
-
-use stave_core::params::{FloatParam, Params, Range, Smooth, Taper, Unit};
+use stave::prelude::*;
 
 #[derive(Params)]
 pub struct SmearParams {
@@ -22,12 +20,13 @@ pub struct SmearParams {
     pub output: FloatParam,
 }
 
-impl SmearParams {
-    pub(crate) fn new() -> Self {
+impl Default for SmearParams {
+    fn default() -> Self {
         let unit01 = |id: u32, name: &'static str, default: f64, group: &'static str, ms| {
-            FloatParam::new(id, name, default, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group(group)
-                .with_smooth(Smooth::Exp { ms })
+            FloatParam::new(ParamId(id), name, Range::linear(0.0, 1.0))
+                .default(default)
+                .group(group)
+                .smooth(Smooth::ms(ms))
         };
         Self {
             seed: unit01(1, "seed", 0.5, "Garden", 20.0),
@@ -41,14 +40,11 @@ impl SmearParams {
             depth: unit01(9, "depth", 0.4, "Motion", 50.0),
             tone: unit01(10, "tone", 0.4, "Output", 20.0),
             mix: unit01(11, "mix", 0.5, "Output", 5.0),
-            output: FloatParam::new(12, "output", 0.0, Range::new(-24.0, 12.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
+            output: FloatParam::new(ParamId(12), "output", Range::linear(-24.0, 12.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Per-channel resonator garden
-// ---------------------------------------------------------------------------
