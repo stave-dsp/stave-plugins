@@ -3,7 +3,6 @@
 //! The framework resolves ids to wire/control names wherever presets
 //! surface. Enum values are their step indices.
 
-use stave::params::AnyParam;
 use stave::prelude::*;
 
 use crate::params::ForgeParams;

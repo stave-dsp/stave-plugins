@@ -35,8 +35,8 @@ fn the_keyboard_nudges_the_focused_output_trim() {
 #[test]
 fn the_bypass_footswitch_latches() {
     let mut ui = FaceDriver::of::<Forge>();
-    ui.click("Bypass");
-    assert_eq!(ui.value("Bypass"), 1.0);
-    ui.click("Bypass");
-    assert_eq!(ui.value("Bypass"), 0.0);
+    ui.click("bypass");
+    assert_eq!(ui.value("bypass"), 1.0);
+    ui.click("bypass");
+    assert_eq!(ui.value("bypass"), 0.0);
 }

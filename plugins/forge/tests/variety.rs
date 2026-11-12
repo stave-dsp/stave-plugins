@@ -53,7 +53,7 @@ const BASE: &[(&str, f64)] = &[
     ("input", 0.0),
     ("mix", 1.0),
     ("output", 0.0),
-    ("Bypass", 0.0),
+    ("bypass", 0.0),
 ];
 
 fn rig(overrides: &[(&str, f64)]) -> Rig {

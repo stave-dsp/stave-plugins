@@ -110,7 +110,7 @@ impl Default for ForgeParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(19)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(19), "bypass").group("Output"),
         }
     }
 }

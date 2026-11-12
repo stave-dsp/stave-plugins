@@ -20,6 +20,8 @@ fn mix_dry(dry: f32, wet: f32, mix: f32) -> f32 {
 }
 
 /// One `Smoother` per smoothed knob.
+#[derive(Smoothers)]
+#[smoothers(params = ForgeParams)]
 pub(super) struct Smoothers {
     input: Smoother,
     mix: Smoother,
@@ -27,32 +29,6 @@ pub(super) struct Smoothers {
     drive: Smoother,
     bias: Smoother,
     width: Smoother,
-}
-
-impl Smoothers {
-    pub(super) fn new(p: &ForgeParams) -> Self {
-        Smoothers {
-            input: Smoother::new(&p.input),
-            mix: Smoother::new(&p.mix),
-            output: Smoother::new(&p.output),
-            drive: Smoother::new(&p.drive),
-            bias: Smoother::new(&p.bias),
-            width: Smoother::new(&p.width),
-        }
-    }
-
-    pub(super) fn prepare(&mut self, env: &Environment) {
-        for s in [
-            &mut self.input,
-            &mut self.mix,
-            &mut self.output,
-            &mut self.drive,
-            &mut self.bias,
-            &mut self.width,
-        ] {
-            s.prepare(env);
-        }
-    }
 }
 
 /// The primary stage's operating point for this sample; push-pull keeps
@@ -91,13 +67,7 @@ pub(super) fn process_block(
     modulation: &mut Modulation,
     telemetry: &mut Observer,
 ) -> (f32, f32) {
-    let s = smoothers;
-    let mut input = s.input.ramp(block, &p.input);
-    let mut mix = s.mix.ramp(block, &p.mix);
-    let mut output = s.output.ramp(block, &p.output);
-    let mut drive = s.drive.ramp(block, &p.drive);
-    let mut bias = s.bias.ramp(block, &p.bias);
-    let mut width = s.width.ramp(block, &p.width);
+    let SmoothersRamps { mut input, mut mix, mut output, mut drive, mut bias, mut width } = smoothers.ramp(block, p);
     let stack = p.stack.value().0 as usize;
 
     telemetry.begin_block();

@@ -45,11 +45,11 @@ pub fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     }
     let ty = &f.theme.typography;
     s.text_in(
-        pt(r.x + r.w / 2.0, r.y + 14.0),
+        pt(r.x + 8.0, r.y + 14.0),
         "TRANSFER",
         ty.caption_size,
         alpha(f.theme.palette.phosphor, 0.6),
-        ty.caption,
+        ty.caption.align(TextAlign::Left),
     );
 }
 
@@ -61,11 +61,11 @@ pub fn harmonics(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let base = r.y + r.h - 18.0;
     let top = r.y + 22.0;
     s.text_in(
-        pt(r.x + r.w / 2.0, r.y + 14.0),
+        pt(r.x + 8.0, r.y + 14.0),
         "HARMONICS",
         ty.caption_size,
         alpha(th.phosphor, 0.6),
-        ty.caption,
+        ty.caption.align(TextAlign::Left),
     );
     s.stroke(
         Path::new()
