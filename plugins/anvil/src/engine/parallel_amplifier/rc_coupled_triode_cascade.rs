@@ -22,8 +22,8 @@
 //! actually runs at — for a cascade inside a nested 4× oversampler that
 //! is 4× the host rate.
 
-use stave_dsp::db_to_amp;
-use stave_dsp::{
+use stave::dsp::db_to_amp;
+use stave::dsp::{
     Coupler, CurveStage, EnvelopeFollower, EnvelopeTimes, Frame, Koren, LevelPolicy, Stage, Triode,
 };
 
@@ -190,7 +190,6 @@ impl RcCoupledTriodeCascade {
                 release_ms: blocking_recovery_milliseconds,
                 slow_release_ms: None,
             });
-            blocking_envelope.retime(self.sample_rate);
         }
         for (stage_index, cathode_envelope) in self.cathode_envelopes.iter_mut().enumerate() {
             let cathode_time_milliseconds = if self.stage_cathode_settings[stage_index].1 > 0.0 {
@@ -203,13 +202,19 @@ impl RcCoupledTriodeCascade {
                 release_ms: cathode_time_milliseconds,
                 slow_release_ms: None,
             });
-            cathode_envelope.retime(self.sample_rate);
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(1.0);
         self.triode_prototype.prepare(sample_rate);
+        for envelope in self
+            .blocking_envelopes
+            .iter_mut()
+            .chain(self.cathode_envelopes.iter_mut())
+        {
+            envelope.prepare(self.sample_rate);
+        }
         self.rebuild_stages();
         self.reset();
     }
@@ -220,6 +225,8 @@ impl RcCoupledTriodeCascade {
             Stage::reset(&mut self.curves[stage_index]);
         }
         self.stage_outputs = [0.0; MAXIMUM_STAGE_COUNT];
+        self.supply_scale = 1.0;
+        self.normalized_supply_draw = 1.0;
         for envelope in self
             .blocking_envelopes
             .iter_mut()
@@ -238,7 +245,7 @@ impl RcCoupledTriodeCascade {
         self.coupling_hz = frequency_hz.clamp(1.0, 200.0);
         for stage_index in 0..self.stage_count {
             if self.stage_coupling_frequencies_hz[stage_index] <= 0.0 {
-                self.couplers[stage_index].set_corner(self.coupling_hz, self.sample_rate);
+                self.couplers[stage_index].set_hz(self.coupling_hz);
             }
         }
         self.update_time_constants();
@@ -514,7 +521,19 @@ fn drive_volts(drive_db: f32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stave_dsp::Oversampler2xFir;
+    use stave::dsp::Oversampled2x;
+
+    /// The cascade as a [`Stage`], to run inside the framework oversampler.
+    struct CascadeStage(RcCoupledTriodeCascade);
+
+    impl Stage for CascadeStage {
+        fn prepare(&mut self, sample_rate: f32) {
+            self.0.prepare(sample_rate);
+        }
+        fn tick(&mut self, x: f32) -> f32 {
+            self.0.process_sample(x)
+        }
+    }
 
     fn goertzel(buf: &[f32], f: f64, sample_rate: f64) -> f64 {
         let w = 2.0 * core::f64::consts::PI * f / sample_rate;
@@ -872,46 +891,33 @@ mod tests {
         let sample_rate = 48_000.0;
         let n = 8192usize;
         let m = 38usize; // ~222 Hz, bin-centred
-                         // Realistic substantial setting (2 stages, moderate drive),
-                         // through the linear-phase FIR half-band stack that replaced the
-                         // Butterworth ceiling. Prepared at 4× — the rate the cascade
-                         // actually ticks inside the nested oversamplers (rate contract).
+        // Realistic substantial setting (2 stages, moderate drive),
+        // through the framework's steep front + nested 2x pair. The
+        // cascade is prepared at 4x — the rate it actually ticks
+        // inside the nested oversamplers (rate contract).
         let mut p = RcCoupledTriodeCascade::new();
         p.set_stage_count(2);
-        p.prepare(sample_rate as f32 * 4.0);
         p.set_drive_db(8.0);
         p.set_blocking_depth(0.5);
         // A heavy cascade generates far more HF than a single stage, so it
-        // needs 4× (nested 2×) — the standard for cascaded amp sims.
-        let mut os = Oversampler2xFir::new();
+        // needs 4x (nested 2x) — the standard for cascaded amp sims.
+        let mut os = Oversampled2x::front(Oversampled2x::nested(CascadeStage(p)));
         os.prepare(sample_rate as f32);
-        let mut os2 = Oversampler2xFir::new();
-        os2.prepare(sample_rate as f32 * 2.0);
-        let sample = |p: &mut RcCoupledTriodeCascade,
-                      os: &mut Oversampler2xFir,
-                      os2: &mut Oversampler2xFir,
-                      s: f32|
-         -> f32 {
-            os.process_one(s, |a| os2.process_one(a, |b| p.process_sample(b)))
-        };
-        let render = |p: &mut RcCoupledTriodeCascade,
-                      os: &mut Oversampler2xFir,
-                      os2: &mut Oversampler2xFir|
-         -> Vec<f32> {
+        let mut render = || -> Vec<f32> {
             for i in 0..n {
                 let s = 0.5
                     * (2.0 * core::f64::consts::PI * m as f64 * i as f64 / n as f64).sin() as f32;
-                let _ = sample(p, os, os2, s);
+                let _ = os.tick(s);
             }
             let mut out = vec![0.0f32; n];
-            for i in 0..n {
+            for (i, y) in out.iter_mut().enumerate() {
                 let s = 0.5
                     * (2.0 * core::f64::consts::PI * m as f64 * i as f64 / n as f64).sin() as f32;
-                out[i] = sample(p, os, os2, s);
+                *y = os.tick(s);
             }
             out
         };
-        let out = render(&mut p, &mut os, &mut os2);
+        let out = render();
         let bin_hz = |b: usize| b as f64 * sample_rate / n as f64;
         let h1 = goertzel(&out, bin_hz(m), sample_rate);
         let mut noise = 0.0f64;

@@ -4,9 +4,8 @@
 //! branches, and their linear recombination live here as one complete
 //! topology.
 
-use stave_dsp::db_to_amp;
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, LinkwitzRiley4};
+use stave::dsp::LinkwitzRiley4;
+use stave::prelude::*;
 
 use super::branch::{AmplifierBranch, BranchDesign};
 use crate::controls::{AmplifierSettings, InputSettings};
@@ -34,29 +33,25 @@ struct ThreeWayCrossover {
 impl ThreeWayCrossover {
     fn new() -> Self {
         Self {
-            low_crossover_lowpass: LinkwitzRiley4::new(),
-            low_crossover_highpass: LinkwitzRiley4::new(),
-            high_crossover_lowpass: LinkwitzRiley4::new(),
-            high_crossover_highpass: LinkwitzRiley4::new(),
-            low_band_phase_compensation_lowpass: LinkwitzRiley4::new(),
-            low_band_phase_compensation_highpass: LinkwitzRiley4::new(),
+            low_crossover_lowpass: LinkwitzRiley4::lowpass(LOW_CROSSOVER_HZ),
+            low_crossover_highpass: LinkwitzRiley4::highpass(LOW_CROSSOVER_HZ),
+            high_crossover_lowpass: LinkwitzRiley4::lowpass(HIGH_CROSSOVER_HZ),
+            high_crossover_highpass: LinkwitzRiley4::highpass(HIGH_CROSSOVER_HZ),
+            low_band_phase_compensation_lowpass: LinkwitzRiley4::lowpass(HIGH_CROSSOVER_HZ),
+            low_band_phase_compensation_highpass: LinkwitzRiley4::highpass(HIGH_CROSSOVER_HZ),
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        self.low_crossover_lowpass
-            .set_lowpass(LOW_CROSSOVER_HZ, sample_rate);
-        self.low_crossover_highpass
-            .set_highpass(LOW_CROSSOVER_HZ, sample_rate);
-        self.high_crossover_lowpass
-            .set_lowpass(HIGH_CROSSOVER_HZ, sample_rate);
-        self.high_crossover_highpass
-            .set_highpass(HIGH_CROSSOVER_HZ, sample_rate);
-        self.low_band_phase_compensation_lowpass
-            .set_lowpass(HIGH_CROSSOVER_HZ, sample_rate);
-        self.low_band_phase_compensation_highpass
-            .set_highpass(HIGH_CROSSOVER_HZ, sample_rate);
+        self.low_crossover_lowpass.prepare(sample_rate);
+        self.low_crossover_highpass.prepare(sample_rate);
+        self.high_crossover_lowpass.prepare(sample_rate);
+        self.high_crossover_highpass.prepare(sample_rate);
+        self.low_band_phase_compensation_lowpass.prepare(sample_rate);
+        self.low_band_phase_compensation_highpass.prepare(sample_rate);
+    }
 
+    fn reset(&mut self) {
         self.low_crossover_lowpass.reset();
         self.low_crossover_highpass.reset();
         self.high_crossover_lowpass.reset();
@@ -67,22 +62,22 @@ impl ThreeWayCrossover {
 
     #[inline]
     fn split_sample(&mut self, input_sample: f32) -> FrequencyBandSamples {
-        let low_band = self.low_crossover_lowpass.process(input_sample);
-        let upper_bands = self.low_crossover_highpass.process(input_sample);
+        let low_band = self.low_crossover_lowpass.tick(input_sample);
+        let upper_bands = self.low_crossover_highpass.tick(input_sample);
         FrequencyBandSamples {
             low_band,
-            low_mid_band: self.high_crossover_lowpass.process(upper_bands),
-            high_band: self.high_crossover_highpass.process(upper_bands),
+            low_mid_band: self.high_crossover_lowpass.tick(upper_bands),
+            high_band: self.high_crossover_highpass.tick(upper_bands),
         }
     }
 
     #[inline]
     fn compensate_low_band_phase(&mut self, low_band_sample: f32) -> f32 {
         self.low_band_phase_compensation_lowpass
-            .process(low_band_sample)
+            .tick(low_band_sample)
             + self
                 .low_band_phase_compensation_highpass
-                .process(low_band_sample)
+                .tick(low_band_sample)
     }
 }
 
@@ -101,42 +96,34 @@ struct DeepBranchIsolationFilter {
 impl DeepBranchIsolationFilter {
     fn new() -> Self {
         Self {
-            input_guard: Biquad::new(),
-            first_output_guard: Biquad::new(),
-            second_output_guard: Biquad::new(),
-            third_output_guard: Biquad::new(),
+            input_guard: Biquad::new(FilterSpec::Lowpass { hz: 700.0, q: 0.6 }),
+            first_output_guard: Biquad::new(FilterSpec::Lowpass {
+                hz: 800.0,
+                q: 0.518,
+            }),
+            second_output_guard: Biquad::new(FilterSpec::Lowpass {
+                hz: 800.0,
+                q: 0.707,
+            }),
+            third_output_guard: Biquad::new(FilterSpec::Lowpass {
+                hz: 800.0,
+                q: 1.932,
+            }),
         }
     }
 
     fn prepare(&mut self, sample_rate: f32) {
+        self.input_guard.prepare(sample_rate);
+        self.first_output_guard.prepare(sample_rate);
+        self.second_output_guard.prepare(sample_rate);
+        self.third_output_guard.prepare(sample_rate);
+    }
+
+    fn reset(&mut self) {
         self.input_guard.reset();
         self.first_output_guard.reset();
         self.second_output_guard.reset();
         self.third_output_guard.reset();
-
-        self.input_guard
-            .set(FilterSpec::Lowpass { hz: 700.0, q: 0.6 }, sample_rate);
-        self.first_output_guard.set(
-            FilterSpec::Lowpass {
-                hz: 800.0,
-                q: 0.518,
-            },
-            sample_rate,
-        );
-        self.second_output_guard.set(
-            FilterSpec::Lowpass {
-                hz: 800.0,
-                q: 0.707,
-            },
-            sample_rate,
-        );
-        self.third_output_guard.set(
-            FilterSpec::Lowpass {
-                hz: 800.0,
-                q: 1.932,
-            },
-            sample_rate,
-        );
     }
 
     #[inline]
@@ -144,7 +131,7 @@ impl DeepBranchIsolationFilter {
         if isolation_amount <= 0.0 {
             input_sample
         } else {
-            let filtered_input = self.input_guard.process(input_sample);
+            let filtered_input = self.input_guard.tick(input_sample);
             input_sample + (filtered_input - input_sample) * isolation_amount
         }
     }
@@ -154,9 +141,9 @@ impl DeepBranchIsolationFilter {
         if isolation_amount <= 0.0 {
             unguarded_output
         } else {
-            let filtered_output = self.third_output_guard.process(
+            let filtered_output = self.third_output_guard.tick(
                 self.second_output_guard
-                    .process(self.first_output_guard.process(unguarded_output)),
+                    .tick(self.first_output_guard.tick(unguarded_output)),
             );
             unguarded_output + (filtered_output - unguarded_output) * isolation_amount
         }
@@ -206,6 +193,16 @@ impl SplitBandAmplifier {
             .prepare(sample_rate, power_pair_cold_bias_volts);
         self.high_band_branch
             .prepare(sample_rate, power_pair_cold_bias_volts);
+        self.measurements = SplitBandMeasurements::default();
+    }
+
+    pub(super) fn reset(&mut self) {
+        self.crossover.reset();
+        self.low_band_isolation_filter.reset();
+        self.low_mid_band_isolation_filter.reset();
+        self.low_band_branch.reset();
+        self.low_mid_band_branch.reset();
+        self.high_band_branch.reset();
         self.measurements = SplitBandMeasurements::default();
     }
 

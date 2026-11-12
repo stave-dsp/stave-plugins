@@ -3,7 +3,8 @@
 //! Only the complementary high band is limited, so pick spikes are rounded
 //! without asking the low-frequency parallel amplifier to share another nonlinearity.
 
-use stave_dsp::LinkwitzRiley4;
+use stave::dsp::LinkwitzRiley4;
+use stave::prelude::*;
 
 const HIGH_BAND_LIMITER_CROSSOVER_HZ: f32 = 2_500.0;
 const HIGH_BAND_DRIVE: f32 = 3.0;
@@ -16,24 +17,25 @@ pub struct HighBandLimiter {
 impl HighBandLimiter {
     pub fn new() -> Self {
         Self {
-            lowpass: LinkwitzRiley4::new(),
-            highpass: LinkwitzRiley4::new(),
+            lowpass: LinkwitzRiley4::lowpass(HIGH_BAND_LIMITER_CROSSOVER_HZ),
+            highpass: LinkwitzRiley4::highpass(HIGH_BAND_LIMITER_CROSSOVER_HZ),
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32) {
-        self.lowpass
-            .set_lowpass(HIGH_BAND_LIMITER_CROSSOVER_HZ, sample_rate);
-        self.highpass
-            .set_highpass(HIGH_BAND_LIMITER_CROSSOVER_HZ, sample_rate);
+        self.lowpass.prepare(sample_rate);
+        self.highpass.prepare(sample_rate);
+    }
+
+    pub fn reset(&mut self) {
         self.lowpass.reset();
         self.highpass.reset();
     }
 
     #[inline]
     pub fn process_sample(&mut self, input_sample: f32) -> f32 {
-        let high_band_sample = self.highpass.process(input_sample);
-        let low_band_sample = self.lowpass.process(input_sample);
+        let high_band_sample = self.highpass.tick(input_sample);
+        let low_band_sample = self.lowpass.tick(input_sample);
         low_band_sample + (high_band_sample * HIGH_BAND_DRIVE).tanh() / HIGH_BAND_DRIVE
     }
 }

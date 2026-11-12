@@ -6,59 +6,34 @@
 //! proxy through anvil (defaults) then tolex (defaults=BREAKDOWN
 //! and INIT), band energies re the thump band.
 use rustfft::{num_complex::Complex, FftPlanner};
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
-use std::sync::Arc;
+use stave::Plugin;
+use stave_anvil_vst3::Anvil;
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK_SIZE: usize = 256;
 const SAMPLE_COUNT: usize = 96_256;
 
-fn process_through_plugin<P: Plugin>(plugin: &mut P, input: &[f32]) -> Vec<f32> {
-    let debug_bus = DebugBus::new();
-    plugin.debug_attach(debug_bus.clone());
-    plugin.activate(SAMPLE_RATE, BLOCK_SIZE);
+/// `input` through a fresh `P` with `parameter_values` set before it is
+/// prepared; the left output.
+fn process_through_plugin<P: Plugin>(parameter_values: &[(&str, f64)], input: &[f32]) -> Vec<f32> {
+    let mut harness = parameter_values
+        .iter()
+        .fold(
+            PluginHarness::<P>::builder().sample_rate(SAMPLE_RATE).block_size(BLOCK_SIZE),
+            |builder, (parameter_name, parameter_value)| builder.set(parameter_name, *parameter_value),
+        )
+        .build();
     let mut rendered_output = Vec::with_capacity(input.len());
-    let (mut left_input, mut right_input) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
-    let (mut left_output, mut right_output) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
     for input_chunk in input.chunks(BLOCK_SIZE) {
-        left_input[..input_chunk.len()].copy_from_slice(input_chunk);
-        right_input.copy_from_slice(&left_input);
-        let mut input_channel_pointers = [core::ptr::null_mut(); 2];
-        let mut output_channel_pointers = [core::ptr::null_mut(); 2];
-        let input_buffer = AudioBuffer::from_slices(
-            &mut input_channel_pointers,
-            [&mut left_input, &mut right_input],
-            BLOCK_SIZE,
-        );
-        let output_buffer = AudioBuffer::from_slices(
-            &mut output_channel_pointers,
-            [&mut left_output, &mut right_output],
-            BLOCK_SIZE,
-        );
-        let mut process_context = ProcessCtx {
-            sample_rate: SAMPLE_RATE,
-            frames: BLOCK_SIZE,
-            transport: None,
-            input: input_buffer,
-            output: output_buffer,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut process_context);
-        rendered_output.extend_from_slice(&left_output);
-    }
-    let _ = Arc::strong_count(&debug_bus);
-    rendered_output
-}
-
-fn set_parameter_values<P: Plugin>(plugin: &mut P, parameter_values: &[(&str, f64)]) {
-    let parameter_table = plugin.param_table();
-    for (parameter_name, parameter_value) in parameter_values {
-        if let Some(parameter) = parameter_table.by_name(parameter_name) {
-            parameter.set_plain(*parameter_value)
+        for channel in harness.inputs_mut() {
+            channel[..input_chunk.len()].copy_from_slice(input_chunk);
         }
+        harness.process(&[]);
+        rendered_output.extend_from_slice(&harness.outputs()[0]);
     }
+    rendered_output
 }
 
 fn measure_frequency_bands(signal: &[f32]) -> Vec<(String, f64)> {
@@ -131,30 +106,22 @@ fn rig_balance() {
         })
         .collect();
 
-    let mut anvil_plugin = stave_anvil_vst3::Anvil::new();
-    let amplifier_output = process_through_plugin(&mut anvil_plugin, &input);
+    let amplifier_output = process_through_plugin::<Anvil>(&[], &input);
     eprintln!("== ANVIL alone (defaults) ==");
     for (band_name, relative_energy_db) in measure_frequency_bands(&amplifier_output) {
         eprintln!("  {band_name:<16} {relative_energy_db:+6.1} dB");
     }
     for topology_separation_amount in [0.0f64, 1.0] {
-        let mut comparison_anvil_plugin = stave_anvil_vst3::Anvil::new();
-        set_parameter_values(
-            &mut comparison_anvil_plugin,
-            &[("focus", topology_separation_amount)],
-        );
-        let comparison_output = process_through_plugin(&mut comparison_anvil_plugin, &input);
+        let comparison_output =
+            process_through_plugin::<Anvil>(&[("focus", topology_separation_amount)], &input);
         eprintln!("== ANVIL focus {topology_separation_amount} ==");
         for (band_name, relative_energy_db) in measure_frequency_bands(&comparison_output) {
             eprintln!("  {band_name:<16} {relative_energy_db:+6.1} dB");
         }
     }
     for cabinet_preset_name in ["BREAKDOWN(default)", "INIT"] {
-        let mut tolex_plugin = stave_tolex_vst3::Tolex::new();
-        if cabinet_preset_name == "INIT" {
-            set_parameter_values(
-                &mut tolex_plugin,
-                &[
+        let cabinet_settings: &[(&str, f64)] = if cabinet_preset_name == "INIT" {
+            &[
                     ("resonance", 80.0),
                     ("q", 0.85),
                     ("mass", 1.0),
@@ -170,10 +137,12 @@ fn rig_balance() {
                     ("model", 0.0),
                     ("mic", 3.0),
                     ("position", 0.25),
-                ],
-            );
-        }
-        let complete_rig_output = process_through_plugin(&mut tolex_plugin, &amplifier_output);
+                ]
+        } else {
+            &[]
+        };
+        let complete_rig_output =
+            process_through_plugin::<Tolex>(cabinet_settings, &amplifier_output);
         eprintln!("== RIG anvil -> tolex {cabinet_preset_name} ==");
         for (band_name, relative_energy_db) in measure_frequency_bands(&complete_rig_output) {
             eprintln!("  {band_name:<16} {relative_energy_db:+6.1} dB");
@@ -192,10 +161,8 @@ fn rig_balance() {
     // -7.1 / -13.3 / -11.6 / -1.2 / -15.9. PROVISIONAL until the
     // pair is ear-ratified — fizz especially (a head this open may
     // need the pair pulled back; tighten these when the ear rules).
-    let mut law_anvil_plugin = stave_anvil_vst3::Anvil::new();
-    let law_amplifier_output = process_through_plugin(&mut law_anvil_plugin, &input);
-    let mut law_tolex_plugin = stave_tolex_vst3::Tolex::new();
-    let law_rig_output = process_through_plugin(&mut law_tolex_plugin, &law_amplifier_output);
+    let law_amplifier_output = process_through_plugin::<Anvil>(&[], &input);
+    let law_rig_output = process_through_plugin::<Tolex>(&[], &law_amplifier_output);
     let measured_bands = measure_frequency_bands(&law_rig_output);
     let find_band_energy = |band_name_prefix: &str| {
         measured_bands

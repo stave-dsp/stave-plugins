@@ -24,6 +24,10 @@ impl ToneSection {
         self.tone_stack.prepare(sample_rate);
     }
 
+    pub(super) fn reset(&mut self) {
+        self.tone_stack.reset();
+    }
+
     pub(super) fn apply_settings(&mut self, settings: ToneSettings) {
         self.tone_stack.set_controls(AnvilToneControlPositions::new(
             f64::from(settings.treble_control_position / 10.0),

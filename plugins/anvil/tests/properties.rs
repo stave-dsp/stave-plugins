@@ -9,58 +9,29 @@
 //!   measured "almost synth-like" quality no tube circuit can do;
 //! * EQ sign laws — bass and treble point the right way at low gain.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_anvil_vst3::Anvil;
+use stave_test::PluginHarness;
 
 const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK_SIZE: usize = 256;
 
 fn render_plugin(parameter_values: &[(&'static str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_anvil_vst3::Anvil::new();
-    let debug_bus = DebugBus::new();
-    plugin.debug_attach(debug_bus.clone());
-    let parameter_table = plugin.param_table();
-    for (parameter_name, parameter_value) in parameter_values {
-        parameter_table
-            .by_name(parameter_name)
-            .unwrap_or_else(|| panic!("parameter '{parameter_name}'"))
-            .set_plain(*parameter_value);
-    }
-    plugin.activate(SAMPLE_RATE, BLOCK_SIZE);
+    let mut harness = parameter_values
+        .iter()
+        .fold(
+            PluginHarness::<Anvil>::builder().sample_rate(SAMPLE_RATE).block_size(BLOCK_SIZE),
+            |builder, (parameter_name, parameter_value)| builder.set(parameter_name, *parameter_value),
+        )
+        .build();
     let mut rendered_output = Vec::with_capacity(input.len());
-    let (mut left_input, mut right_input) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
-    let (mut left_output, mut right_output) = (vec![0.0f32; BLOCK_SIZE], vec![0.0f32; BLOCK_SIZE]);
     for chunk in input.chunks(BLOCK_SIZE) {
-        left_input[..chunk.len()].copy_from_slice(chunk);
-        left_input[chunk.len()..].fill(0.0);
-        right_input.copy_from_slice(&left_input);
-        let mut input_channel_pointers = [core::ptr::null_mut(); 2];
-        let mut output_channel_pointers = [core::ptr::null_mut(); 2];
-        let input_buffer = AudioBuffer::from_slices(
-            &mut input_channel_pointers,
-            [&mut left_input, &mut right_input],
-            BLOCK_SIZE,
-        );
-        let output_buffer = AudioBuffer::from_slices(
-            &mut output_channel_pointers,
-            [&mut left_output, &mut right_output],
-            BLOCK_SIZE,
-        );
-        let mut process_context = ProcessCtx {
-            sample_rate: SAMPLE_RATE,
-            frames: BLOCK_SIZE,
-            transport: None,
-            input: input_buffer,
-            output: output_buffer,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut process_context);
-        rendered_output.extend_from_slice(&left_output);
+        for channel in harness.inputs_mut() {
+            channel[..chunk.len()].copy_from_slice(chunk);
+            channel[chunk.len()..].fill(0.0);
+        }
+        harness.process(&[]);
+        rendered_output.extend_from_slice(&harness.outputs()[0]);
     }
-    let _ = Arc::strong_count(&debug_bus);
     rendered_output
 }
 

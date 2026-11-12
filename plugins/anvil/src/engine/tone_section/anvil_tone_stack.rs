@@ -1,7 +1,9 @@
 //! Anvil's product-owned component values and control surface around the shared
 //! passive-network mechanism.
 
-use stave_dsp::{PassiveToneControlPositions, PassiveToneStack, PassiveToneStackComponents};
+use stave::dsp::{
+    PassiveToneControlPositions, PassiveToneStack, PassiveToneStackComponents, Stage,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnvilToneStackComponents {
@@ -76,13 +78,17 @@ impl AnvilToneStack {
         self.mechanism.prepare(sample_rate);
     }
 
+    pub fn reset(&mut self) {
+        self.mechanism.reset();
+    }
+
     pub fn set_controls(&mut self, controls: AnvilToneControlPositions) {
         self.mechanism.set_controls(controls.mechanism_positions());
     }
 
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        self.mechanism.process(input)
+        self.mechanism.tick(input)
     }
 
     pub fn magnitude_at(&self, frequency_hz: f64) -> f64 {

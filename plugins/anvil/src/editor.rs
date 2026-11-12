@@ -5,37 +5,45 @@
 //! path: the preamp and the stack on top (large), the
 //! voicing, the power section and the master beneath.
 
-use stave_core::face::prelude::*;
-use stave_core::face::{CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_core::ui::photo::hex;
+use stave::face::photo::hex;
+use stave::face::{CapStyle, Coat, Coverings, Finish, Hardware, Palette};
+use stave::prelude::*;
 
 use crate::params::AnvilParameters;
 
 /// Black crinkle faceplate, chrome print, ivory chicken-heads, black
 /// tolex with red piping.
 fn theme() -> Theme {
+    let base = Theme::graphite();
     Theme {
         name: "anvil",
-        surface: hex(0x1A1A1C),
-        finish: Finish::Crinkle,
-        plate: hex(0x121213),
-        desk: hex(0x0B0B0C),
-        ink: Color::rgba(0.93, 0.93, 0.94, 1.0),
-        ink_soft: Color::rgba(0.93, 0.93, 0.94, 0.55),
-        accent: Color::rgba(1.0, 0.24, 0.14, 1.0),
-        lamp: [1.95, 0.22, 0.08],
-        caps: CapStyle::Chicken,
-        cap: hex(0xE6E2D8),
-        pointer: Color::rgba(0.07, 0.07, 0.08, 1.0),
-        screen: Color::rgba(0.03, 0.03, 0.03, 1.0),
-        phosphor: Color::rgba(1.0, 0.4, 0.22, 1.0),
-        tolex: hex(0x0F0F10),
-        piping: hex(0xA3161A),
-        grille: hex(0x1C1C1E),
-        badge: [0.9, 0.9, 0.93],
-        radius: 10.0,
-        ..Theme::graphite()
+        finish: Finish {
+            coat: Coat::Crinkle,
+            surface: hex(0x1A1A1C),
+            plate: hex(0x121213),
+            desk: hex(0x0B0B0C),
+            radius: 10.0,
+        },
+        palette: Palette {
+            ink: Color::rgba(0.93, 0.93, 0.94, 1.0),
+            ink_soft: Color::rgba(0.93, 0.93, 0.94, 0.55),
+            accent: Color::rgba(1.0, 0.24, 0.14, 1.0),
+            screen: Color::rgba(0.03, 0.03, 0.03, 1.0),
+            phosphor: Color::rgba(1.0, 0.4, 0.22, 1.0),
+        },
+        hardware: Hardware {
+            caps: CapStyle::Chicken,
+            cap: hex(0xE6E2D8),
+            pointer: Color::rgba(0.07, 0.07, 0.08, 1.0),
+            lamp: [1.95, 0.22, 0.08],
+        },
+        coverings: Coverings {
+            tolex: hex(0x0F0F10),
+            piping: hex(0xA3161A),
+            grille: hex(0x1C1C1E),
+            badge: [0.9, 0.9, 0.93],
+        },
+        ..base
     }
 }
 

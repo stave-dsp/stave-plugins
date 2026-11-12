@@ -11,14 +11,9 @@
 //! Reusable mechanisms live in stave-dsp; this topology stays concrete because
 //! it is Anvil's product design.
 
-extern crate alloc;
-use alloc::sync::Arc;
-use stave_dsp::db_to_amp;
-use stave_dsp::FilterSpec;
-
-use stave_core::params::ContinuousControl;
-use stave_core::{Environment, ProcessCtx, Tail, Tap};
-use stave_dsp::{Biquad, PerChannel};
+use stave::dsp::Slew;
+use stave::params::AnyParam;
+use stave::prelude::*;
 
 mod difference_tone;
 mod high_band_limiter;
@@ -45,7 +40,7 @@ struct ProcessingLane {
     /// Post-parallel amplifier slew (field-ratified in the SMOOTH pair): big
     /// fast swings round, small ones pass — level-dependent
     /// transient smoothing, the Miller-physics cousin.
-    slew_limiter: stave_dsp::Slew,
+    slew_limiter: Slew,
     previous_amplifier_output: f32,
     // THE OVERSAMPLER IS GONE (field-ratified 2026-08-06): measured
     // at the ratified voice, the 2x kernel bought 2 dB of alias
@@ -65,42 +60,29 @@ struct ProcessingLane {
 /// feedback"). <= -99 = off, bit-identical.
 const AMPLIFIER_FEEDBACK_DB: f32 = -100.0;
 
-/// The engine's declared observation points.
-struct AnvilTaps {
-    build: Tap,
-    classic_out_db: Tap,
-    low_out_db: Tap,
-    high_out_db: Tap,
-    pair_in_db: Tap,
-    draw: Tap,
-    v_min: Tap,
-    v_max: Tap,
-    draw_mean: Tap,
+/// Anvil's observation points, out to the bench and the face.
+#[derive(Taps)]
+pub struct AnvilTaps {
+    /// The compile timestamp (build.rs): a bench measurement without a
+    /// fresh stamp is fiction — the poisoned-measurement day's law.
+    pub build: Tap,
+    pub classic_out_db: Tap,
+    pub low_out_db: Tap,
+    pub high_out_db: Tap,
+    pub pair_in_db: Tap,
+    pub draw: Tap,
+    pub v_min: Tap,
+    pub v_max: Tap,
+    pub draw_mean: Tap,
 }
 
-impl Default for AnvilTaps {
-    fn default() -> Self {
-        Self {
-            build: Tap::new("build"),
-            classic_out_db: Tap::new("classic_out_db"),
-            low_out_db: Tap::new("low_out_db"),
-            high_out_db: Tap::new("high_out_db"),
-            pair_in_db: Tap::new("pair_in_db"),
-            draw: Tap::new("draw"),
-            v_min: Tap::new("v_min"),
-            v_max: Tap::new("v_max"),
-            draw_mean: Tap::new("draw_mean"),
-        }
-    }
-}
-
-pub struct AnvilEngine {
-    telemetry_bus: Option<Arc<stave_core::DebugBus>>,
+/// The plugin: the panel, its glides, and the amplifier they drive.
+pub struct Anvil {
     taps: AnvilTaps,
     parameters: Arc<AnvilParameters>,
     amplifier: Amplifier,
     panel: Panel,
-    output_level_control: ContinuousControl,
+    output_level: Smoother,
 }
 
 /// The panel re-resolves into the amplifier this often while it moves:
@@ -125,28 +107,52 @@ struct Amplifier {
 }
 
 impl Amplifier {
-    /// Prepare every lane, voice it for `panel`, and settle it at its
-    /// real operating point (bias, blocking, cathode, supply), so silence
-    /// in is silence out from the first block: run until the output stays
-    /// under 1e-5 for 256 samples, at most one second.
+    /// Prepare every lane at `sample_rate`, then [`settle`](Self::settle)
+    /// it for `panel`.
     fn prepare(&mut self, sample_rate: f32, panel: PanelControlValues) {
         self.sample_rate = sample_rate;
         for lane in self.lanes.iter_mut() {
-            lane.input_highpass_filter.reset();
+            lane.input_highpass_filter.prepare(sample_rate);
             lane.difference_tone_generator.prepare(sample_rate);
-            lane.slew_limiter.set_rates(8.0, 8.0, sample_rate);
+            lane.slew_limiter.prepare(sample_rate);
             lane.parallel_amplifier
                 .prepare(sample_rate, self.design.power_pair_cold_bias_volts);
             lane.high_band_limiter.prepare(sample_rate);
             lane.tone_section.prepare(sample_rate);
             lane.output_conditioner.prepare(sample_rate);
+            lane.previous_amplifier_output = 0.0;
         }
+        self.settle(panel);
+    }
+
+    /// Clear every lane's signal state (no allocation), then
+    /// [`settle`](Self::settle) it for `panel`: the prepared state again.
+    fn reset(&mut self, panel: PanelControlValues) {
+        for lane in self.lanes.iter_mut() {
+            lane.input_highpass_filter.reset();
+            lane.difference_tone_generator.reset();
+            lane.slew_limiter.reset();
+            lane.parallel_amplifier.reset();
+            lane.high_band_limiter.reset();
+            lane.tone_section.reset();
+            lane.output_conditioner.reset();
+            lane.previous_amplifier_output = 0.0;
+        }
+        self.settle(panel);
+    }
+
+    /// Voice every lane for `panel` and settle it at its real operating
+    /// point (bias, blocking, cathode, supply), so silence in is silence
+    /// out from the first block: run until the output stays under 1e-5
+    /// for 256 samples, at most one second.
+    fn settle(&mut self, panel: PanelControlValues) {
         self.last_input_settings.reset();
         self.last_difference_tone_injection_amount.reset();
         self.last_amplifier_settings.reset();
         self.last_tone_settings.reset();
         self.last_output_settings.reset();
         self.apply(panel);
+        let sample_rate = self.sample_rate;
         for lane in self.lanes.iter_mut() {
             let mut quiet = 0u32;
             for _ in 0..sample_rate as usize {
@@ -177,13 +183,10 @@ impl Amplifier {
 
         for processing_lane in self.lanes.iter_mut() {
             if input_settings_changed {
-                processing_lane.input_highpass_filter.set(
-                    FilterSpec::Highpass {
-                        hz: settings.input.highpass_cutoff_hz,
-                        q: 0.71,
-                    },
-                    self.sample_rate,
-                );
+                processing_lane.input_highpass_filter.set(FilterSpec::Highpass {
+                    hz: settings.input.highpass_cutoff_hz,
+                    q: 0.71,
+                });
             }
             if difference_tone_settings_changed {
                 processing_lane
@@ -220,7 +223,7 @@ impl Amplifier {
 
 #[inline]
 fn process_lane_sample(processing_lane: &mut ProcessingLane, input_sample: f32) -> f32 {
-    let conditioned_input = processing_lane.input_highpass_filter.process(input_sample)
+    let conditioned_input = processing_lane.input_highpass_filter.tick(input_sample)
         + if AMPLIFIER_FEEDBACK_DB > -99.0 {
             db_to_amp(AMPLIFIER_FEEDBACK_DB) * processing_lane.previous_amplifier_output
         } else {
@@ -237,7 +240,7 @@ fn process_lane_sample(processing_lane: &mut ProcessingLane, input_sample: f32) 
         .process_sample(unbounded_amplifier_output);
     processing_lane.previous_amplifier_output = amplifier_output;
     let slew_limited_output =
-        stave_dsp::kernel::node::Stage::tick(&mut processing_lane.slew_limiter, amplifier_output);
+        processing_lane.slew_limiter.tick(amplifier_output);
     let tone_stack_output = processing_lane
         .tone_section
         .process_sample(slew_limited_output);
@@ -246,19 +249,34 @@ fn process_lane_sample(processing_lane: &mut ProcessingLane, input_sample: f32) 
         .process_sample(tone_stack_output)
 }
 
-impl stave_core::Processor for AnvilEngine {
+impl Plugin for Anvil {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.anvil.vst3",
+        name: "Stave Anvil",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "The impossible metalcore head.",
+        features: &[Feature::AudioEffect, Feature::Stereo],
+        ..Info::EFFECT
+    };
+    /// 1: the tone stack's bass/mid/treble moved from dB to knob
+    /// positions (0–10).
+    const STATE_VERSION: u32 = 1;
     type Params = AnvilParameters;
 
-    fn new(parameters: Arc<AnvilParameters>) -> Self {
+    fn new(parameters: &Arc<AnvilParameters>, telemetry: &Telemetry) -> Self {
+        let taps = AnvilTaps::new(telemetry);
+        // The render self-identifies: `build` = compile timestamp.
+        taps.build
+            .set(env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0));
         Self {
-            telemetry_bus: None,
-            taps: AnvilTaps::default(),
+            taps,
             amplifier: Amplifier {
                 sample_rate: 48_000.0,
                 lanes: PerChannel::new(|_| ProcessingLane {
-                    input_highpass_filter: Biquad::new(),
+                    input_highpass_filter: Biquad::passthrough(),
                     difference_tone_generator: DifferenceToneGenerator::new(),
-                    slew_limiter: stave_dsp::Slew::new(8.0, 8.0),
+                    slew_limiter: Slew::new(8.0, 8.0),
                     previous_amplifier_output: 0.0,
                     parallel_amplifier: ParallelAmplifier::new(),
                     high_band_limiter: HighBandLimiter::new(),
@@ -273,31 +291,38 @@ impl stave_core::Processor for AnvilEngine {
                 last_output_settings: LastAppliedSettings::new(),
                 makeup_gain: 1.0,
             },
-            panel: Panel::new(&parameters),
-            output_level_control: ContinuousControl::new(&parameters.output_level),
-            parameters,
+            panel: Panel::new(parameters),
+            output_level: Smoother::new(&parameters.output_level),
+            parameters: parameters.clone(),
         }
     }
 
-    fn activate(&mut self, environment: Environment) {
-        let rate = f64::from(environment.sample_rate);
-        self.output_level_control
-            .prepare(rate, &self.parameters.output_level);
-        self.panel.prepare(rate, &self.parameters);
+    fn prepare(&mut self, environment: &Environment) {
+        self.output_level.prepare(environment);
+        self.panel.prepare(environment);
         self.amplifier.prepare(
             environment.sample_rate,
             PanelControlValues::read(&self.parameters),
         );
     }
 
-    fn process(&mut self, context: &mut ProcessCtx<'_>) {
-        let parameters = self.parameters.clone();
-        let mut panel = self.panel.begin_block(context.params, &parameters);
-        let mut output_level_values = self
-            .output_level_control
-            .begin_block(context.params, &parameters.output_level);
+    /// Back to the state `prepare` left: the panel snaps to the params
+    /// and the amplifier re-settles at its idle operating point (bounded
+    /// compute, no allocation).
+    fn reset(&mut self) {
+        self.output_level
+            .snap(AnyParam::value(&self.parameters.output_level));
+        self.panel.snap(&self.parameters);
+        self.amplifier
+            .reset(PanelControlValues::read(&self.parameters));
+    }
+
+    fn process(&mut self, block: &mut Block<'_>) {
+        let parameters = &self.parameters;
+        let mut panel = self.panel.ramp(block, parameters);
+        let mut output_level_values = self.output_level.ramp(block, &parameters.output_level);
         let amplifier = &mut self.amplifier;
-        let audio_lanes = context.lanes::<2>();
+        let audio_lanes = block.lanes::<2>();
         let active_channel_count = audio_lanes.active().min(2);
         audio_lanes.run(|audio_frame| {
             let panel_values = panel.next();
@@ -314,68 +339,54 @@ impl stave_core::Processor for AnvilEngine {
                 audio_frame.write(channel_index, output_sample);
             }
         });
-        if let Some(telemetry_bus) = self.telemetry_bus.as_deref() {
-            let measurements = self.amplifier.lanes[0]
-                .parallel_amplifier
-                .take_measurements();
-            let amplitude_to_decibels = |amplitude: f32| 20.0 * amplitude.max(1e-9).log10();
-            self.taps.classic_out_db.set(
-                telemetry_bus,
-                f64::from(amplitude_to_decibels(measurements.full_band_output_peak)),
-            );
-            self.taps.low_out_db.set(
-                telemetry_bus,
-                f64::from(amplitude_to_decibels(measurements.low_band_output_peak)),
-            );
-            self.taps.high_out_db.set(
-                telemetry_bus,
-                f64::from(amplitude_to_decibels(measurements.high_band_output_peak)),
-            );
-            self.taps.pair_in_db.set(
-                telemetry_bus,
-                f64::from(amplitude_to_decibels(
-                    measurements.full_band_power_pair_input_peak,
-                )),
-            );
-            self.taps.draw.set(
-                telemetry_bus,
-                f64::from(measurements.full_band_power_pair_draw_peak),
-            );
-            self.taps.v_min.set(
-                telemetry_bus,
-                f64::from(measurements.full_band_supply_voltage_minimum),
-            );
-            self.taps.v_max.set(
-                telemetry_bus,
-                f64::from(measurements.full_band_supply_voltage_maximum),
-            );
-            self.taps.draw_mean.set(
-                telemetry_bus,
-                f64::from(
-                    measurements.full_band_power_pair_draw_sum
-                        / measurements.full_band_power_pair_draw_sample_count.max(1.0),
-                ),
-            );
+        drop(panel);
+        drop(output_level_values);
+        let measurements = self.amplifier.lanes[0]
+            .parallel_amplifier
+            .take_measurements();
+        let amplitude_to_decibels = |amplitude: f32| f64::from(amp_to_db(amplitude.max(1e-9)));
+        let taps = &self.taps;
+        taps.classic_out_db
+            .set(amplitude_to_decibels(measurements.full_band_output_peak));
+        taps.low_out_db
+            .set(amplitude_to_decibels(measurements.low_band_output_peak));
+        taps.high_out_db
+            .set(amplitude_to_decibels(measurements.high_band_output_peak));
+        taps.pair_in_db
+            .set(amplitude_to_decibels(measurements.full_band_power_pair_input_peak));
+        taps.draw
+            .set(f64::from(measurements.full_band_power_pair_draw_peak));
+        taps.v_min
+            .set(f64::from(measurements.full_band_supply_voltage_minimum));
+        taps.v_max
+            .set(f64::from(measurements.full_band_supply_voltage_maximum));
+        taps.draw_mean.set(f64::from(
+            measurements.full_band_power_pair_draw_sum
+                / measurements.full_band_power_pair_draw_sample_count.max(1.0),
+        ));
+    }
+
+    fn face(parameters: &AnvilParameters) -> Option<Face> {
+        Some(crate::editor::face(parameters))
+    }
+
+    fn presets(parameters: &AnvilParameters) -> Vec<Preset> {
+        crate::presets::build_presets(parameters)
+    }
+
+    fn migrations() -> Migrations {
+        fn legacy_six_decibel_tone_value_to_position(value: f64) -> f64 {
+            (value + 6.0) * (10.0 / 12.0)
         }
-    }
 
-    fn attach_telemetry(&mut self, telemetry_bus: Arc<stave_core::DebugBus>) {
-        // The render self-identifies: `build` = compile timestamp
-        // (build.rs). A bench measurement without a fresh stamp is
-        // fiction — the poisoned-measurement day's law.
-        self.taps.build.set(
-            &telemetry_bus,
-            env!("STAVE_BUILD_STAMP").parse::<f64>().unwrap_or(0.0),
-        );
-        self.telemetry_bus = Some(telemetry_bus);
-    }
+        fn legacy_midrange_tone_value_to_position(value: f64) -> f64 {
+            (value + 8.0) * (10.0 / 12.0)
+        }
 
-    fn latency_samples(&self) -> u32 {
-        0
-    }
-
-    fn tail(&self) -> Tail {
-        Tail::None
+        Migrations::default()
+            .rescaled_before(1, ParamId(6), legacy_six_decibel_tone_value_to_position)
+            .rescaled_before(1, ParamId(7), legacy_midrange_tone_value_to_position)
+            .rescaled_before(1, ParamId(8), legacy_six_decibel_tone_value_to_position)
     }
 }
 

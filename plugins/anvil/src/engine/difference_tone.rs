@@ -4,8 +4,7 @@
 //! a power chord therefore generates its octave below from the chord's own
 //! frequencies. This is an idealized Anvil mechanism, not an emulated pedal.
 
-use stave_dsp::Biquad;
-use stave_dsp::FilterSpec;
+use stave::prelude::*;
 
 const GENERATION_BAND_HZ: f32 = 650.0;
 const OUTPUT_BAND_HZ: f32 = 175.0;
@@ -22,35 +21,29 @@ pub struct DifferenceToneGenerator {
 impl DifferenceToneGenerator {
     pub fn new() -> Self {
         Self {
-            generation_band: Biquad::new(),
-            output_lowpass_1: Biquad::new(),
-            output_lowpass_2: Biquad::new(),
+            generation_band: Biquad::new(FilterSpec::Lowpass {
+                hz: GENERATION_BAND_HZ,
+                q: 0.6,
+            }),
+            output_lowpass_1: Biquad::new(FilterSpec::Lowpass {
+                hz: OUTPUT_BAND_HZ,
+                q: 0.541,
+            }),
+            output_lowpass_2: Biquad::new(FilterSpec::Lowpass {
+                hz: OUTPUT_BAND_HZ,
+                q: 1.307,
+            }),
             injection_amount: 0.0,
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32) {
-        self.generation_band.set(
-            FilterSpec::Lowpass {
-                hz: GENERATION_BAND_HZ,
-                q: 0.6,
-            },
-            sample_rate,
-        );
-        self.output_lowpass_1.set(
-            FilterSpec::Lowpass {
-                hz: OUTPUT_BAND_HZ,
-                q: 0.541,
-            },
-            sample_rate,
-        );
-        self.output_lowpass_2.set(
-            FilterSpec::Lowpass {
-                hz: OUTPUT_BAND_HZ,
-                q: 1.307,
-            },
-            sample_rate,
-        );
+        self.generation_band.prepare(sample_rate);
+        self.output_lowpass_1.prepare(sample_rate);
+        self.output_lowpass_2.prepare(sample_rate);
+    }
+
+    pub fn reset(&mut self) {
         self.generation_band.reset();
         self.output_lowpass_1.reset();
         self.output_lowpass_2.reset();
@@ -65,11 +58,11 @@ impl DifferenceToneGenerator {
         if self.injection_amount <= 0.001 {
             return input_sample;
         }
-        let generation_band_sample = self.generation_band.process(input_sample) * GENERATOR_DRIVE;
+        let generation_band_sample = self.generation_band.tick(input_sample) * GENERATOR_DRIVE;
         let even_order_product = (generation_band_sample * generation_band_sample.abs()).tanh();
         let difference_tone_sample = self
             .output_lowpass_2
-            .process(self.output_lowpass_1.process(even_order_product));
+            .tick(self.output_lowpass_1.tick(even_order_product));
         input_sample
             + self.injection_amount * DIFFERENCE_TONE_INJECTION_GAIN * difference_tone_sample
     }

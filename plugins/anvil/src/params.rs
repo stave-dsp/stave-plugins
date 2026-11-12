@@ -1,10 +1,7 @@
 //! Anvil's typed parameter table. Identifiers are FOREVER — pick once,
 //! never reuse or renumber.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::{BoolParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit};
+use stave::prelude::*;
 
 // DEFAULTS = the rhythm brief (2026-07-26): load anvil into tolex
 // and the pair IS the metalcore rig, no knob touched.
@@ -48,77 +45,59 @@ pub struct AnvilParameters {
     pub bypass: BoolParam,
 }
 
-impl AnvilParameters {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+impl Default for AnvilParameters {
+    fn default() -> Self {
+        Self {
             // Range widened 24 -> 30 same-day pre-release (never shipped):
             // the knob is a CHARACTER sweep — loudness-compensated, so
             // the whole range is usable from a -18..-6 dBFS DI.
-            preamp_gain: FloatParam::new(3, "gain", 18.0, Range::new(0.0, 30.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Gain"),
-            input_low_cut: FloatParam::new(4, "tight", 120.0, Range::new(40.0, 300.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Gain"),
-            bass_tone: FloatParam::new(6, "bass", 6.25, Range::new(0.0, 10.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Tone"),
-            midrange_tone: FloatParam::new(
-                7,
-                "mid",
-                4.583_333,
-                Range::new(0.0, 10.0, Taper::Linear),
-            )
-            .with_unit(Unit::Plain { decimals: 1 })
-            .with_group("Tone"),
-            treble_tone: FloatParam::new(8, "treble", 7.5, Range::new(0.0, 10.0, Taper::Linear))
-                .with_unit(Unit::Plain { decimals: 1 })
-                .with_group("Tone"),
-            presence_tone: FloatParam::new(
-                9,
-                "presence",
-                2.5,
-                Range::new(-6.0, 6.0, Taper::Linear),
-            )
-            .with_unit(Unit::Db { floor_db: None })
-            .with_group("Power"),
-            depth_tone: FloatParam::new(10, "depth", 2.5, Range::new(-6.0, 6.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Power"),
-            difference_tone: FloatParam::new(13, "sub", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Voicing"),
-            high_frequency_emphasis: FloatParam::new(
-                14,
-                "edge",
-                0.0,
-                Range::new(0.0, 1.0, Taper::Linear),
-            )
-            .with_group("Voicing"),
-            topology_separation_amount: FloatParam::new(
-                11,
-                "focus",
-                0.5,
-                Range::new(0.0, 1.0, Taper::Linear),
-            )
-            .with_group("Gain"),
-            power_pair_overdrive: FloatParam::new(
-                12,
-                "squash",
-                12.0,
-                Range::new(0.0, 18.0, Taper::Linear),
-            )
-            .with_unit(Unit::Db { floor_db: None })
-            .with_group("Power"),
-            output_level: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-        })
+            preamp_gain: FloatParam::new(ParamId(3), "gain", Range::linear(0.0, 30.0))
+                .default(18.0)
+                .unit(Unit::Db)
+                .group("Gain"),
+            input_low_cut: FloatParam::new(ParamId(4), "tight", Range::log(40.0, 300.0))
+                .default(120.0)
+                .unit(Unit::Hz)
+                .group("Gain"),
+            bass_tone: FloatParam::new(ParamId(6), "bass", Range::linear(0.0, 10.0))
+                .default(6.25)
+                .unit(Unit::Plain { decimals: 1 })
+                .group("Tone"),
+            midrange_tone: FloatParam::new(ParamId(7), "mid", Range::linear(0.0, 10.0))
+                .default(4.583_333)
+            .unit(Unit::Plain { decimals: 1 })
+            .group("Tone"),
+            treble_tone: FloatParam::new(ParamId(8), "treble", Range::linear(0.0, 10.0))
+                .default(7.5)
+                .unit(Unit::Plain { decimals: 1 })
+                .group("Tone"),
+            presence_tone: FloatParam::new(ParamId(9), "presence", Range::linear(-6.0, 6.0))
+                .default(2.5)
+            .unit(Unit::Db)
+            .group("Power"),
+            depth_tone: FloatParam::new(ParamId(10), "depth", Range::linear(-6.0, 6.0))
+                .default(2.5)
+                .unit(Unit::Db)
+                .group("Power"),
+            difference_tone: FloatParam::new(ParamId(13), "sub", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Voicing"),
+            high_frequency_emphasis: FloatParam::new(ParamId(14), "edge", Range::linear(0.0, 1.0))
+                .default(0.0)
+            .group("Voicing"),
+            topology_separation_amount: FloatParam::new(ParamId(11), "focus", Range::linear(0.0, 1.0))
+                .default(0.5)
+            .group("Gain"),
+            power_pair_overdrive: FloatParam::new(ParamId(12), "squash", Range::linear(0.0, 18.0))
+                .default(12.0)
+            .unit(Unit::Db)
+            .group("Power"),
+            output_level: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+        }
     }
 }

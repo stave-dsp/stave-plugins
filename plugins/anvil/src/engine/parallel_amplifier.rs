@@ -10,8 +10,7 @@ mod branch;
 mod rc_coupled_triode_cascade;
 mod split_band_amplifier;
 
-use stave_dsp::Biquad;
-use stave_dsp::FilterSpec;
+use stave::prelude::*;
 
 use branch::{AmplifierBranch, BranchDesign};
 pub use rc_coupled_triode_cascade::RcCoupledTriodeCascade;
@@ -48,25 +47,28 @@ impl ParallelAmplifier {
         Self {
             full_band_branch: AmplifierBranch::new(BranchDesign::full_band()),
             split_band_amplifier: SplitBandAmplifier::new(),
-            full_band_phase_alignment: Biquad::new(),
+            full_band_phase_alignment: Biquad::new(FilterSpec::Allpass {
+                hz: FULL_BAND_PHASE_ALIGNMENT_HZ,
+                q: FULL_BAND_PHASE_ALIGNMENT_QUALITY,
+            }),
             topology_separation_amount: 0.7,
             measurements: AmplifierMeasurements::default(),
         }
     }
 
     pub fn prepare(&mut self, sample_rate: f32, power_pair_cold_bias_volts: f64) {
-        self.full_band_phase_alignment.reset();
-        self.full_band_phase_alignment.set(
-            FilterSpec::Allpass {
-                hz: FULL_BAND_PHASE_ALIGNMENT_HZ,
-                q: FULL_BAND_PHASE_ALIGNMENT_QUALITY,
-            },
-            sample_rate,
-        );
+        self.full_band_phase_alignment.prepare(sample_rate);
         self.full_band_branch
             .prepare(sample_rate, power_pair_cold_bias_volts);
         self.split_band_amplifier
             .prepare(sample_rate, power_pair_cold_bias_volts);
+        self.measurements = AmplifierMeasurements::default();
+    }
+
+    pub fn reset(&mut self) {
+        self.full_band_phase_alignment.reset();
+        self.full_band_branch.reset();
+        self.split_band_amplifier.reset();
         self.measurements = AmplifierMeasurements::default();
     }
 
@@ -97,7 +99,7 @@ impl ParallelAmplifier {
         );
     }
 
-    pub fn expected_output_level_db(&self, input_level_db: f32) -> f32 {
+    pub fn expected_output_level_db(&mut self, input_level_db: f32) -> f32 {
         self.full_band_branch
             .expected_output_level_db(input_level_db)
     }
@@ -152,7 +154,7 @@ impl ParallelAmplifier {
             .max(power_supply_voltage);
 
         let phase_aligned_full_band_output =
-            self.full_band_phase_alignment.process(full_band_output);
+            self.full_band_phase_alignment.tick(full_band_output);
         phase_aligned_full_band_output
             + (split_band_output - phase_aligned_full_band_output) * self.topology_separation_amount
     }
