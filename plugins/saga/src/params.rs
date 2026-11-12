@@ -83,7 +83,7 @@ impl Default for SagaParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             mode: EnumParam::new(ParamId(3), "mode", Mode(0)).group("Program"),
             feedback: FloatParam::new(ParamId(4), "feedback", unit())
                 .default(0.45)

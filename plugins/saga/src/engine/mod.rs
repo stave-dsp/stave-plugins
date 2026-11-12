@@ -40,6 +40,8 @@ const SYNC_BEATS: [f32; 7] = [0.0, 2.0, 1.0, 0.75, 0.5, 1.0 / 3.0, 0.25];
 const SWITCH_FADE_MS: f32 = 25.0;
 
 /// One `Smoother` per gliding knob.
+#[derive(Smoothers)]
+#[smoothers(params = SagaParams)]
 struct Controls {
     feedback: Smoother,
     regen: Smoother,
@@ -51,40 +53,6 @@ struct Controls {
     width: Smoother,
     mod_rate: Smoother,
     output: Smoother,
-}
-
-impl Controls {
-    fn new(p: &SagaParams) -> Self {
-        Self {
-            feedback: Smoother::new(&p.feedback),
-            regen: Smoother::new(&p.regen),
-            mod_depth: Smoother::new(&p.mod_depth),
-            mix: Smoother::new(&p.mix),
-            x: Smoother::new(&p.x),
-            time: Smoother::new(&p.time),
-            tone: Smoother::new(&p.tone),
-            width: Smoother::new(&p.width),
-            mod_rate: Smoother::new(&p.mod_rate),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        for s in [
-            &mut self.feedback,
-            &mut self.regen,
-            &mut self.mod_depth,
-            &mut self.mix,
-            &mut self.x,
-            &mut self.time,
-            &mut self.tone,
-            &mut self.width,
-            &mut self.mod_rate,
-            &mut self.output,
-        ] {
-            s.prepare(env);
-        }
-    }
 }
 
 /// The plugin: the clock, the programs, the wet stage.
@@ -162,17 +130,18 @@ impl Plugin for Saga {
         let (shift, ramp, held) = (p.shift.value(), p.ramp.value(), p.dive.value());
 
         // 2. The audio block.
-        let c = &mut self.controls;
-        let mut time_ramp = c.time.ramp(block, &p.time);
-        let mut fb_ramp = c.feedback.ramp(block, &p.feedback);
-        let mut regen_ramp = c.regen.ramp(block, &p.regen);
-        let mut x_ramp = c.x.ramp(block, &p.x);
-        let mut mix_ramp = c.mix.ramp(block, &p.mix);
-        let mut tone_ramp = c.tone.ramp(block, &p.tone);
-        let mut width_ramp = c.width.ramp(block, &p.width);
-        let mut depth_ramp = c.mod_depth.ramp(block, &p.mod_depth);
-        let mut rate_ramp = c.mod_rate.ramp(block, &p.mod_rate);
-        let mut out_ramp = c.output.ramp(block, &p.output);
+        let ControlsRamps {
+            time: mut time_ramp,
+            feedback: mut fb_ramp,
+            regen: mut regen_ramp,
+            x: mut x_ramp,
+            mix: mut mix_ramp,
+            tone: mut tone_ramp,
+            width: mut width_ramp,
+            mod_depth: mut depth_ramp,
+            mod_rate: mut rate_ramp,
+            output: mut out_ramp,
+        } = self.controls.ramp(block, p);
         let fade_step = 1000.0 / (SWITCH_FADE_MS * self.sample_rate);
         let (motion, clock, programs, wet) = (&mut self.motion, &mut self.clock, &mut self.programs, &mut self.wet);
         let (mode, fade) = (&mut self.mode, &mut self.fade);

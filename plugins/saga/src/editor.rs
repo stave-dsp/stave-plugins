@@ -57,14 +57,11 @@ fn program(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let soft = Color::rgba(ph.r, ph.g, ph.b, 0.55);
     let i = step_of(f.bound(0), MODES.len() as u32) as usize;
     let (title, keys) = LEGENDS[i.min(LEGENDS.len() - 1)];
-    // The face API names no font, family or alignment, so the house
-    // fonts are set flush left as a `Title` sets (and the numeral in the
-    // title's face: the serif is out of reach).
-    let flush = Title::new("").align;
+    // The house fonts set flush left; the numeral in a serif.
     let ty = &th.typography;
-    let left = ty.legend.tracking(0.1).align(flush);
-    let mono = ty.value.align(flush);
-    let numeral = ty.title.tracking(0.0).align(flush);
+    let left = ty.legend.tracking(0.1).align(TextAlign::Left);
+    let mono = ty.value.align(TextAlign::Left);
+    let numeral = Font::new(Family::Serif, 600).align(TextAlign::Left);
     let x = r.x + 18.0;
     s.text_in(pt(x, r.y + 22.0), "PROGRAM", 7.5, soft, left);
     s.text_in(pt(x, r.y + 60.0), MODES[i], 34.0, ph, numeral);
