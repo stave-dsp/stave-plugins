@@ -70,6 +70,8 @@ pub(crate) struct FrameCtx {
 }
 
 /// One `Smoother` per gliding knob, each riding its declared glide.
+#[derive(Smoothers)]
+#[smoothers(params = EddyParams)]
 struct Glides {
     time: Smoother,
     feedback: Smoother,
@@ -87,52 +89,6 @@ struct Glides {
     orbit: Smoother,
     diffuse: Smoother,
     bleed: Smoother,
-}
-
-impl Glides {
-    fn new(p: &EddyParams) -> Self {
-        Glides {
-            time: Smoother::new(&p.time),
-            feedback: Smoother::new(&p.feedback),
-            dry: Smoother::new(&p.dry),
-            wet: Smoother::new(&p.wet),
-            output: Smoother::new(&p.output),
-            rate: Smoother::new(&p.rate),
-            depth: Smoother::new(&p.depth),
-            spread: Smoother::new(&p.spread),
-            heat: Smoother::new(&p.heat),
-            sag: Smoother::new(&p.sag),
-            shift: Smoother::new(&p.shift),
-            grain: Smoother::new(&p.grain),
-            splice: Smoother::new(&p.splice),
-            orbit: Smoother::new(&p.orbit),
-            diffuse: Smoother::new(&p.diffuse),
-            bleed: Smoother::new(&p.bleed),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        for s in [
-            &mut self.time,
-            &mut self.feedback,
-            &mut self.dry,
-            &mut self.wet,
-            &mut self.output,
-            &mut self.rate,
-            &mut self.depth,
-            &mut self.spread,
-            &mut self.heat,
-            &mut self.sag,
-            &mut self.shift,
-            &mut self.grain,
-            &mut self.splice,
-            &mut self.orbit,
-            &mut self.diffuse,
-            &mut self.bleed,
-        ] {
-            s.prepare(env);
-        }
-    }
 }
 
 pub struct Eddy {
@@ -216,23 +172,24 @@ impl Plugin for Eddy {
         // 2. The audio block: every knob rides its DECLARED glide;
         //    the lanes scaffolding owns the channel plumbing; the
         //    active algorithm owns the frame law.
-        let g = &mut self.glides;
-        let mut time = g.time.ramp(block, &p.time);
-        let mut feedback = g.feedback.ramp(block, &p.feedback);
-        let mut dry = g.dry.ramp(block, &p.dry);
-        let mut wet = g.wet.ramp(block, &p.wet);
-        let mut output = g.output.ramp(block, &p.output);
-        let mut rate = g.rate.ramp(block, &p.rate);
-        let mut depth = g.depth.ramp(block, &p.depth);
-        let mut spread = g.spread.ramp(block, &p.spread);
-        let mut heat = g.heat.ramp(block, &p.heat);
-        let mut sag = g.sag.ramp(block, &p.sag);
-        let mut semitones = g.shift.ramp(block, &p.shift);
-        let mut grain = g.grain.ramp(block, &p.grain);
-        let mut splice = g.splice.ramp(block, &p.splice);
-        let mut orbit = g.orbit.ramp(block, &p.orbit);
-        let mut diffuse = g.diffuse.ramp(block, &p.diffuse);
-        let mut bleed = g.bleed.ramp(block, &p.bleed);
+        let GlidesRamps {
+            mut time,
+            mut feedback,
+            mut dry,
+            mut wet,
+            mut output,
+            mut rate,
+            mut depth,
+            mut spread,
+            mut heat,
+            mut sag,
+            shift: mut semitones,
+            mut grain,
+            mut splice,
+            mut orbit,
+            mut diffuse,
+            mut bleed,
+        } = self.glides.ramp(block, p);
         let sample_rate = self.sample_rate;
         let (echo, motion) = (&mut self.echo, &mut self.motion);
         let (circuit, motor, shift) = (&mut self.circuit, &mut self.motor, &mut self.shift);

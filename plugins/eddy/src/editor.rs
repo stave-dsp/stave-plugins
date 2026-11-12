@@ -9,14 +9,12 @@
 //! knob), and the plate under it follows the tab: only the running
 //! law's, and the running voice's, own knobs are on the face.
 
-use stave::face::material;
 use stave::face::photo::hex;
-use stave::face::part::Bake;
-use stave::face::{leaf, step_of, Area, CapStyle, Coat, Finish, Gesture, Grab, Hardware, Palette, Part};
+use stave::face::{CapStyle, Coat, Finish, Hardware, Palette};
 use stave::prelude::*;
 
 use crate::engine::EddyTaps;
-use crate::params::{EddyParams, ALGOS, DIFFUSIONS};
+use crate::params::EddyParams;
 
 /// The editor-local page set behind the pager.
 const PAGES: u32 = 1;
@@ -140,7 +138,7 @@ pub fn face(p: &EddyParams) -> Face {
     );
     let orbit = Plate::titled("ORBIT").around(Knob::new(p.orbit.bind()).centered().node());
     let algo_page = column(vec![
-        Tabs::new(p.algo.bind(), ALGOS).node(),
+        Tabs::of(&p.algo).node(),
         follow(p.algo.bind(), vec![circuit, motor, shift, orbit]),
     ])
     .gap(gap)
@@ -169,7 +167,7 @@ pub fn face(p: &EddyParams) -> Face {
         ],
     );
     let field_page = column(vec![
-        Tabs::new(p.diffusion.bind(), DIFFUSIONS).node(),
+        Tabs::of(&p.diffusion).node(),
         row(vec![voices, couple]).gap(gap).align(Align::Stretch),
     ])
     .gap(gap)
@@ -201,66 +199,4 @@ fn follow(bind: Bind, plates: Vec<FaceNode>) -> FaceNode {
         .map(|(n, i)| on_step(n.width(Dim::Fill(1.0)).height(Dim::Fill(1.0)), bind, i))
         .collect();
     stack(steps)
-}
-
-/// A row of lit tabs choosing a stepped parameter's option (the
-/// `Pager`'s look, but the choice is the plugin's, not the face's).
-#[derive(Clone, Debug)]
-struct Tabs {
-    bind: Bind,
-    labels: &'static [&'static str],
-}
-
-const TAB_W: f64 = 88.0;
-const TAB_H: f64 = 40.0;
-
-impl Tabs {
-    fn new(bind: Bind, labels: &'static [&'static str]) -> Self {
-        Tabs { bind, labels }
-    }
-    fn node(self) -> FaceNode {
-        let w = TAB_W * self.labels.len() as f64;
-        leaf(self, w, TAB_H).width(Dim::Px(w))
-    }
-    fn cell(r: Rect, i: usize) -> Rect {
-        Rect { x: r.x + TAB_W * i as f64, y: r.y, w: TAB_W, h: TAB_H }
-    }
-}
-
-impl Part for Tabs {
-    fn bake(&self, r: Rect, cx: &mut Bake<'_>) {
-        let th = cx.theme;
-        let ty = &th.typography;
-        let scale = cx.scale;
-        let seat = material::sprite(14.0, scale, |dx, dy| material::lamp_seat(dx, dy, 6.0, scale));
-        for (i, l) in self.labels.iter().enumerate() {
-            let c = Self::cell(r, i);
-            cx.image(c.x + c.w / 2.0 - 7.0, c.y + 3.0, 14.0, 14.0, seat.clone());
-            cx.scene.text_in(pt(c.x + c.w / 2.0, c.y + 33.0), *l, ty.caption_size, th.palette.ink_soft, ty.caption);
-        }
-    }
-
-    fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {
-        let th = f.theme;
-        let ty = &th.typography;
-        let at = step_of(f.value(self.bind), self.labels.len() as u32) as usize;
-        if let Some(l) = self.labels.get(at) {
-            let c = Self::cell(r, at);
-            lamp(f, s, pt(c.x + c.w / 2.0, c.y + 10.0));
-            let mut font = ty.caption;
-            font.weight = 750;
-            s.text_in(pt(c.x + c.w / 2.0, c.y + 33.0), *l, ty.caption_size, th.palette.accent, font);
-        }
-    }
-
-    fn grabs(&self, r: Rect, _f: &Frame<'_>, out: &mut Vec<Grab>) {
-        out.extend((0..self.labels.len()).map(|i| Grab {
-            area: Area::Rect(Self::cell(r, i)),
-            gesture: Gesture::Choose { bind: self.bind, step: i as u32 },
-        }));
-    }
-
-    fn reads(&self) -> Reads {
-        Reads::params(&[self.bind])
-    }
 }

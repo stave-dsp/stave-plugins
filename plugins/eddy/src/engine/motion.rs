@@ -7,7 +7,7 @@
 //! samples (the visibility law keeps them honest).
 
 use stave::dsp::{Lag, Lfo, Waveform};
-use stave::prelude::Stage;
+use stave::prelude::{Generator, Stage};
 
 use crate::params::EddyParams;
 
@@ -173,7 +173,7 @@ impl Motion {
     #[inline]
     pub(super) fn tick(&mut self, rate_hz: f32, depth: f32, sr: f32) -> f32 {
         self.lfo.set_hz(rate_hz);
-        let raw = self.lfo.tick(0.0);
+        let raw = self.lfo.next();
         let shaped = if self.lag_on {
             self.lag.tick(raw) * self.makeup
         } else {

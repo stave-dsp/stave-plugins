@@ -148,7 +148,7 @@ impl Default for EddyParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             time: FloatParam::new(ParamId(3), "time", Range::log(1.0, 2000.0))
                 .default(350.0)
                 .unit(Unit::Ms)
