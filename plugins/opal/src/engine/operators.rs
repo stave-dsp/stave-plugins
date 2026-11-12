@@ -12,7 +12,7 @@
 //! bandwidth at audible ratios; the sideband laws in tests/properties.rs
 //! pin the calibration.
 
-use stave::dsp::{Adsr, Stage};
+use stave::dsp::{Adsr, Generator};
 
 pub(super) const MOD_DEPTH: f32 = core::f32::consts::TAU;
 pub(super) const FB_DEPTH: f32 = core::f32::consts::TAU;
@@ -174,7 +174,7 @@ impl FmCore {
             if i == 3 {
                 pm += set.feedback * 0.5 * (self.fb1 + self.fb2);
             }
-            let env = envs[i].tick(0.0);
+            let env = envs[i].next();
             let s = core::f64::consts::TAU * self.phase[i] + f64::from(MOD_DEPTH * pm);
             let y = s.sin() as f32 * set.levels[i] * env;
             let is_carrier = w.carriers & (1 << i) != 0;

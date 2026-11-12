@@ -6,7 +6,6 @@
 //! place, not a diff — mod presets also ZERO the slots they don't
 //! use.
 
-use stave::params::AnyParam;
 use stave::prelude::*;
 
 use crate::params::OpalParams;

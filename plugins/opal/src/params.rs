@@ -177,7 +177,7 @@ impl Default for OpalParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             algo: EnumParam::new(ParamId(3), "algo", Algo(0)).group("Global"),
             feedback: FloatParam::new(ParamId(4), "feedback", Range::linear(0.0, 1.0))
                 .group("Global")

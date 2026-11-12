@@ -11,7 +11,6 @@ use stave::dsp::{
     hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig,
     Ensemble, ModLfo, ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack,
 };
-use stave::params::Watch;
 use stave::prelude::*;
 
 use crate::params::{LfoTrig, OpalParams};

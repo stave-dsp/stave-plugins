@@ -18,7 +18,6 @@
 
 use stave::face::photo::hex;
 use stave::face::{CapStyle, Finish, Hardware, Palette};
-use stave::params::AnyParam;
 use stave::prelude::*;
 
 use crate::engine::OpalTaps;

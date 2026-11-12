@@ -194,23 +194,6 @@ mod tests {
         }
     }
 
-    /// The scene's ops as their debug text: `Op` is not reachable from
-    /// `stave` (only `Scene` is), so the laws read the ops' shapes off
-    /// their `Debug` form.
-    fn ops(sc: &Scene) -> Vec<String> {
-        sc.ops.iter().map(|o| format!("{o:?}")).collect()
-    }
-
-    /// A stroke op's width and segment count.
-    fn stroke_of(op: &str) -> Option<(bool, usize)> {
-        let body = op.strip_prefix("Stroke {")?;
-        let segs = ["MoveTo(", "LineTo(", "QuadTo(", "CubicTo(", "Arc {", "Close"]
-            .iter()
-            .map(|s| body.matches(s).count())
-            .sum();
-        Some((body.contains("width: 1.2"), segs))
-    }
-
     fn chain() -> Wiring {
         // 4→3→2→1, carrier 1, feedback on 4 (opal's CHAIN).
         Wiring {
@@ -244,9 +227,10 @@ mod tests {
         for w in [chain(), organ()] {
             let expected: u32 = w.mods.iter().map(|m| m.count_ones()).sum();
             let sc = scene(&st(w), &style());
-            let routes = ops(&sc)
+            let routes = sc
+                .ops
                 .iter()
-                .filter(|op| stroke_of(op) == Some((true, 4)))
+                .filter(|op| matches!(op, Op::Stroke { path, stroke } if stroke.width == 1.2 && path.segs.len() == 4))
                 .count() as u32;
             assert_eq!(routes, expected);
         }
@@ -272,10 +256,10 @@ mod tests {
     #[test]
     fn carriers_fill_modulators_outline() {
         let sc = scene(&st(chain()), &style());
-        let fills = ops(&sc).iter().filter(|o| o.starts_with("Fill {")).count();
+        let fills = sc.ops.iter().filter(|o| matches!(o, Op::Fill { .. })).count();
         assert_eq!(fills, 1, "CHAIN has exactly one carrier");
         let sc = scene(&st(organ()), &style());
-        let fills = ops(&sc).iter().filter(|o| o.starts_with("Fill {")).count();
+        let fills = sc.ops.iter().filter(|o| matches!(o, Op::Fill { .. })).count();
         assert_eq!(fills, 4, "ORGAN is all carriers");
     }
 
@@ -286,10 +270,9 @@ mod tests {
         let nums: Vec<_> = sc
             .ops
             .iter()
-            .filter_map(|o| {
-                let o = format!("{o:?}");
-                let rest = o.strip_prefix("Text {")?.split("text: \"").nth(1)?;
-                Some(rest.split('"').next()?.to_owned())
+            .filter_map(|o| match o {
+                Op::Text { text, .. } => Some(text.as_str()),
+                _ => None,
             })
             .collect();
         assert_eq!(nums, ["1", "2", "3", "4"]);
