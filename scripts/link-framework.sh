@@ -35,7 +35,7 @@ case "${1:-}" in
     if linked; then
       echo "linked: $(grep -m1 'path = ' Cargo.toml | sed -E 's/.*path = "([^"]+)\/crates.*/\1/')"
     else
-      echo "pinned: $(grep -m1 "git = \"$URL\"" Cargo.toml | sed -E 's/.*tag = "([^"]+)".*/\1/')"
+      echo "pinned: $(grep -m1 "git = \"$URL\"" Cargo.toml | sed -E 's/.*(tag|rev) = "([^"]+)".*/\2/')"
     fi
     ;;
   --off)
@@ -48,7 +48,7 @@ case "${1:-}" in
     FW="$(cd "${1:-../stave}" && pwd)"
     [[ -f "$FW/crates/stave-core/Cargo.toml" ]] || { echo "not a stave checkout: $FW" >&2; exit 1; }
     linked && unlink_block
-    crates=$(grep -E "^stave-[a-z0-9-]+ = \{ git = \"$URL\"" Cargo.toml | cut -d' ' -f1)
+    crates=$(grep -E "^stave(-[a-z0-9-]+)? = \{ git = \"$URL\"" Cargo.toml | cut -d' ' -f1)
     {
       echo ""
       echo "$BEGIN"

@@ -27,7 +27,7 @@ edition = "2021"
 license = "MIT"
 authors = ["Ryan Bahan <ryan@ryanbahan.com>"]
 repository = "https://github.com/stave-dsp/stave-plugins"
-rust-version = "1.80"
+rust-version = "1.86"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -43,22 +43,16 @@ missing_safety_doc = "deny"
 needless_range_loop = "allow"
 
 [workspace.dependencies]
-# The framework, pinned to a release tag of github.com/stave-dsp/stave.
-# Upgrade by bumping the tag (all twelve together). To co-edit a sibling
-# checkout at ../stave instead, see scripts/link-framework.sh.
+# The framework, pinned to a release tag of github.com/stave-dsp/stave
+# (or, between releases, the commit the plugins were validated against).
+# Upgrade with scripts/bump-framework.sh (all together). To co-edit a
+# sibling checkout at ../stave instead, see scripts/link-framework.sh.
 libc = "0.2"
-stave-ui = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-ui-cocoa = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-raster = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-macros = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-core = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-clap = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-vst3 = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-debug = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-dsp = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-test = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-host = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
-stave-measure = { git = "https://github.com/stave-dsp/stave", tag = "v0.2.2" }
+stave = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
+stave-dsp = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
+stave-host = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
+stave-measure = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
+stave-test = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
 thiserror = "2"
 
 [profile.release]
@@ -76,6 +70,13 @@ opt-level = 1
 # Panics still name functions; for a debugger session build with
 # `--profile debugging`.
 debug = false
+
+# Dependencies (the framework among them) optimized even in dev: the
+# face laws lay a face out hundreds of times and the validation checks
+# run seconds of audio, so an unoptimized framework made a plugin's test
+# run minutes instead of seconds. Plugin crates stay at opt-level 1.
+[profile.dev.package."*"]
+opt-level = 3
 
 [profile.debugging]
 inherits = "dev"

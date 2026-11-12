@@ -6,18 +6,21 @@
 set -euo pipefail
 fail=0
 
-# 1. ONE SPINE per engine: `impl XxxEngine` blocks live in exactly
-#    one engine file — components, never distributed extensions.
+# 1. ONE SPINE per plugin: the plugin type's `impl Plugin for X` and its
+#    inherent `impl X` blocks live in exactly one file — components,
+#    never distributed extensions.
 for proj in plugins/*/; do
   src="$proj/src"
   [ -d "$src" ] || continue
-  files=$(grep -rl "^impl [A-Za-z]*Engine " "$src" --include="*.rs" 2>/dev/null | grep -v "lib.rs" | sort -u || true)
-  n=$(echo "$files" | grep -c . || true)
-  if [ "$n" -gt 1 ]; then
-    echo "RULE: $proj engine impl blocks are distributed across files (one spine only):"
-    echo "$files"
-    fail=1
-  fi
+  for ty in $(grep -rhoE "^impl Plugin for [A-Za-z0-9_]+" "$src" --include="*.rs" | awk '{print $4}' | sort -u); do
+    files=$(grep -rlE "^impl (Plugin for )?${ty}( |\{)" "$src" --include="*.rs" | sort -u || true)
+    n=$(echo "$files" | grep -c . || true)
+    if [ "$n" -gt 1 ]; then
+      echo "RULE: $proj $ty impl blocks are distributed across files (one spine only):"
+      echo "$files"
+      fail=1
+    fi
+  done
 done
 
 # 2. GROWTH SIGNAL (advisory, never fails): a large single-file
@@ -40,22 +43,14 @@ if grep -rEn "$TAGS" plugins conformance --include="*.rs" >/dev/null 2>&1; then
   fail=1
 fi
 
-# 4. DECLARATION-BACKED READS (E1): a cast-and-clamp beside a read
-#    restates the declaration and drifts.
-if grep -rn 'plain() as f32' plugins/*/src --include="*.rs" >/dev/null 2>&1; then
-  echo "RULE: 'plain() as f32' in an engine — use p.x.value() (typed, bounded by the declaration):"
-  grep -rn 'plain() as f32' plugins/*/src --include="*.rs" | head -5
+# 4. DECLARATION-BACKED READS (E1): `value()` is already the param's
+#    natural type; a cast-and-clamp beside a read restates the
+#    declaration and drifts.
+if grep -rnE '\.value\(\) as f32' plugins/*/src --include="*.rs" >/dev/null 2>&1; then
+  echo "RULE: 'value() as f32' in a plugin — p.x.value() is typed and bounded by the declaration:"
+  grep -rnE '\.value\(\) as f32' plugins/*/src --include="*.rs" | head -5
   fail=1
 fi
-
-# 5. THE EDITOR STYLE: a legacy UiNode editor is ui! markup, never
-#    builder calls. (A face composes typed parts with row/column.)
-for f in plugins/*/src/editor.rs; do
-  grep -q 'UiNode' "$f" || continue
-  if grep -qE 'row\(vec!|column\(vec!' "$f"; then
-    echo "RULE: $f uses the builder editor style — the house style is ui! markup"; fail=1
-  fi
-done
 
 if [ "$fail" -ne 0 ]; then
   exit 1

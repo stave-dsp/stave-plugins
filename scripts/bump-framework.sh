@@ -19,9 +19,9 @@ fi
 git ls-remote --exit-code --tags "$URL" "refs/tags/${TAG}" >/dev/null \
   || { echo "no tag ${TAG} on ${URL}" >&2; exit 1; }
 
-current=$(grep -m1 "git = \"$URL\"" Cargo.toml | sed -E 's/.*tag = "([^"]+)".*/\1/')
-sed -i.bak -E "s#(git = \"${URL//./\\.}\", tag = \")[^\"]+\"#\1${TAG}\"#" Cargo.toml && rm Cargo.toml.bak
-crates=$(grep -E "^stave-[a-z0-9-]+ = \{ git = \"$URL\"" Cargo.toml | cut -d' ' -f1)
+current=$(grep -m1 "git = \"$URL\"" Cargo.toml | sed -E 's/.*(tag|rev) = "([^"]+)".*/\2/')
+sed -i.bak -E "s#(git = \"${URL//./\\.}\", )(tag|rev) = \"[^\"]+\"#\1tag = \"${TAG}\"#" Cargo.toml && rm Cargo.toml.bak
+crates=$(grep -E "^stave(-[a-z0-9-]+)? = \{ git = \"$URL\"" Cargo.toml | cut -d' ' -f1)
 # shellcheck disable=SC2086
 cargo update $(printf -- '-p %s ' $crates)
 echo "framework: ${current} -> ${TAG}"
