@@ -56,7 +56,7 @@ impl Default for RibbonParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             rate: FloatParam::new(ParamId(3), "rate", Range::log(0.35, 1.6))
                 .default(1.0)
                 .unit(Unit::Plain { decimals: 2 })

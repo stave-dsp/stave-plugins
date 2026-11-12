@@ -72,6 +72,8 @@ fn lerp_log(range: [f32; 2], t: f32) -> f32 {
     range[0] * (range[1] / range[0]).powf(t)
 }
 
+#[derive(Smoothers)]
+#[smoothers(params = RibbonParams)]
 struct Controls {
     intensity: Smoother,
     drive: Smoother,
@@ -80,30 +82,6 @@ struct Controls {
     spring: Smoother,
     mix: Smoother,
     output: Smoother,
-}
-
-impl Controls {
-    fn new(p: &RibbonParams) -> Self {
-        Self {
-            intensity: Smoother::new(&p.intensity),
-            drive: Smoother::new(&p.drive),
-            wear: Smoother::new(&p.wear),
-            erase: Smoother::new(&p.erase),
-            spring: Smoother::new(&p.spring),
-            mix: Smoother::new(&p.mix),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        self.intensity.prepare(env);
-        self.drive.prepare(env);
-        self.wear.prepare(env);
-        self.erase.prepare(env);
-        self.spring.prepare(env);
-        self.mix.prepare(env);
-        self.output.prepare(env);
-    }
 }
 
 pub struct Ribbon {
@@ -197,14 +175,15 @@ impl Plugin for Ribbon {
         self.preamp.set_drive(p.drive.value());
 
         // 2. The audio block.
-        let c = &mut self.controls;
-        let mut int_ramp = c.intensity.ramp(block, &p.intensity);
-        let mut drive_ramp = c.drive.ramp(block, &p.drive);
-        let mut wear_ramp = c.wear.ramp(block, &p.wear);
-        let mut erase_ramp = c.erase.ramp(block, &p.erase);
-        let mut spring_ramp = c.spring.ramp(block, &p.spring);
-        let mut mix_ramp = c.mix.ramp(block, &p.mix);
-        let mut out_ramp = c.output.ramp(block, &p.output);
+        let ControlsRamps {
+            intensity: mut int_ramp,
+            drive: mut drive_ramp,
+            wear: mut wear_ramp,
+            erase: mut erase_ramp,
+            spring: mut spring_ramp,
+            mix: mut mix_ramp,
+            output: mut out_ramp,
+        } = self.controls.ramp(block, p);
         let sample_rate = self.sample_rate;
         let (preamp, tape, spring) = (&mut self.preamp, &mut self.tape, &mut self.spring);
         let (fb_low, fb_top, gap, hiss_tilt, dc) =

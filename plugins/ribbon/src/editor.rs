@@ -81,28 +81,16 @@ const CAPSTAN: f64 = 0.78;
 /// The ribbon travels left→right along the BOTTOM run (past the heads),
 /// up round the right roller, back along the top.
 struct Deck {
-    l: Xy,
-    r: Xy,
+    l: Pt,
+    r: Pt,
     rad: f64,
-}
-
-/// A point on the deck (the scene's own point type is not on the
-/// author surface; `pt(p.x, p.y)` draws it).
-#[derive(Copy, Clone)]
-struct Xy {
-    x: f64,
-    y: f64,
-}
-
-fn xy(x: f64, y: f64) -> Xy {
-    Xy { x, y }
 }
 
 impl Deck {
     fn of(s: Rect) -> Self {
         let rad = s.h * 0.24;
         let cy = s.y + s.h * 0.42;
-        Deck { l: xy(s.x + s.w * 0.13, cy), r: xy(s.x + s.w * 0.87, cy), rad }
+        Deck { l: pt(s.x + s.w * 0.13, cy), r: pt(s.x + s.w * 0.87, cy), rad }
     }
     fn run(&self) -> f64 {
         self.r.x - self.l.x
@@ -111,19 +99,19 @@ impl Deck {
         2.0 * self.run() + TAU * self.rad
     }
     /// A point `s` points along the path, and the direction there.
-    fn at(&self, s: f64) -> (Xy, (f64, f64)) {
+    fn at(&self, s: f64) -> (Pt, (f64, f64)) {
         let (run, arc, rad) = (self.run(), PI * self.rad, self.rad);
         let s = s.rem_euclid(self.len());
         if s < run {
-            (xy(self.l.x + s, self.l.y + rad), (1.0, 0.0))
+            (pt(self.l.x + s, self.l.y + rad), (1.0, 0.0))
         } else if s < run + arc {
             let a = PI / 2.0 - (s - run) / rad;
-            (xy(self.r.x + rad * a.cos(), self.r.y + rad * a.sin()), (a.sin(), -a.cos()))
+            (pt(self.r.x + rad * a.cos(), self.r.y + rad * a.sin()), (a.sin(), -a.cos()))
         } else if s < 2.0 * run + arc {
-            (xy(self.r.x - (s - run - arc), self.r.y - rad), (-1.0, 0.0))
+            (pt(self.r.x - (s - run - arc), self.r.y - rad), (-1.0, 0.0))
         } else {
             let a = -PI / 2.0 - (s - 2.0 * run - arc) / rad;
-            (xy(self.l.x + rad * a.cos(), self.l.y + rad * a.sin()), (a.sin(), -a.cos()))
+            (pt(self.l.x + rad * a.cos(), self.l.y + rad * a.sin()), (a.sin(), -a.cos()))
         }
     }
 }
@@ -170,7 +158,6 @@ fn draw_tape(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // Rollers: shadow, a machined aluminium disc, a hub, spokes turned by
     // the tape passing over them.
     for c in [d.l, d.r] {
-        let c = pt(c.x, c.y);
         s.solid(Path::circle(pt(c.x + 4.0, c.y + 6.0), d.rad), Color::rgba(0.0, 0.0, 0.0, 0.45));
         metal_disc(s, (c.x, c.y), d.rad - 2.0, (c.y - d.rad, c.y + d.rad), 0.72, 0.32);
         s.stroke(Path::circle(c, d.rad - 6.0), Stroke::new(grey(0.2, 0.5), 1.0));
@@ -212,12 +199,7 @@ fn draw_tape(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     metal_disc(s, (cx, run_y - 7.0), 4.5, (run_y - 11.0, run_y - 3.0), 0.95, 0.45);
 
     // The ribbon: shadow, oxide brown, a satin sheen.
-    let pts: Vec<_> = (0..=200)
-        .map(|i| {
-            let p = d.at(d.len() * f64::from(i) / 200.0).0;
-            pt(p.x, p.y)
-        })
-        .collect();
+    let pts: Vec<_> = (0..=200).map(|i| d.at(d.len() * f64::from(i) / 200.0).0).collect();
     let shadow: Vec<_> = pts.iter().map(|p| pt(p.x + 2.0, p.y + 3.0)).collect();
     s.stroke(Path::polyline(&shadow), Stroke::round(Color::rgba(0.0, 0.0, 0.0, 0.5), 9.0));
     s.stroke(Path::polyline(&pts), Stroke::round(Color::rgba(0.25, 0.14, 0.08, 1.0), 7.0));
@@ -237,12 +219,7 @@ fn draw_tape(f: &Frame<'_>, r: Rect, s: &mut Scene) {
         );
     }
     // The splice: a strip of pale leader tape, once round the loop.
-    let splice: Vec<_> = (0..=8)
-        .map(|k| {
-            let p = d.at(travel + 20.0 * f64::from(k) / 8.0).0;
-            pt(p.x, p.y)
-        })
-        .collect();
+    let splice: Vec<_> = (0..=8).map(|k| d.at(travel + 20.0 * f64::from(k) / 8.0).0).collect();
     s.stroke(Path::polyline(&splice), Stroke::new(Color::rgba(0.88, 0.85, 0.76, 0.95), 7.0));
 
     // Legends under the heads, lamps under the live playback heads.
@@ -263,54 +240,16 @@ fn draw_tape(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     }
     // The motor's speed, read off in the corner like a deck's counter.
     let speed = Some(f.tap(RibbonTaps::TAPE_SPEED)).filter(|v| v.is_finite()).unwrap_or(0.0);
-    // Set flush to the corners by half their width (the author surface
-    // has no `TextAlign`): the value font is mono, ~0.6 em a figure; the
-    // caption tracked caps, ~0.78 em a letter.
+    // Set flush to the corners.
     let ph = f.theme.palette.phosphor;
     let counter = format!("{:.2}×", speed.max(0.0));
-    let counter_half = 0.5 * counter.chars().count() as f64 * ty.value_size * 0.6;
-    s.text_in(pt(r.x + r.w - 12.0 - counter_half, r.y + 18.0), counter, ty.value_size, ph, ty.value);
-    let loop_half = 0.5 * 4.0 * ty.caption_size * 0.78;
-    s.text_in(pt(r.x + 12.0 + loop_half, r.y + 18.0), "LOOP", ty.caption_size, ph, ty.caption);
+    s.text_in(pt(r.x + r.w - 12.0, r.y + 18.0), counter, ty.value_size, ph, ty.value.align(TextAlign::Right));
+    s.text_in(pt(r.x + 12.0, r.y + 18.0), "LOOP", ty.caption_size, ph, ty.caption.align(TextAlign::Left));
 }
 
 /// A vertical linear gradient (`stops` over `y0..y1`) filling the
 /// rounded rect `r` (corner `radius`; a square with half-side radius is
-/// a circle). The face's author surface has no gradient brush, so it is
-/// painted as 1 pt bands of solid colour, each overlapping the next by a
-/// band so no seam shows.
+/// a circle).
 fn vertical_gradient(s: &mut Scene, r: Rect, radius: f64, (y0, y1): (f64, f64), stops: &[(f64, Color)]) {
-    const BAND: f64 = 1.0;
-    let rad = radius.min(r.w / 2.0).min(r.h / 2.0);
-    // The outline's horizontal inset at height y.
-    let inset = |y: f64| {
-        let dy = (r.y + rad - y).max(y - (r.y + r.h - rad)).clamp(0.0, rad);
-        rad - (rad * rad - dy * dy).sqrt()
-    };
-    let colour = |t: f64| {
-        let t = t.clamp(0.0, 1.0);
-        let i = stops.iter().position(|(at, _)| *at >= t).unwrap_or(stops.len() - 1);
-        if i == 0 {
-            return stops[0].1;
-        }
-        let ((ta, a), (tb, b)) = (stops[i - 1], stops[i]);
-        let u = if tb > ta { (t - ta) / (tb - ta) } else { 1.0 };
-        let mix = |x: f64, y: f64| x + (y - x) * u;
-        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
-    };
-    let bands = (r.h / BAND).ceil().max(1.0) as usize;
-    for i in 0..bands {
-        let top = r.y + i as f64 * BAND;
-        let bot = (top + 2.0 * BAND).min(r.y + r.h);
-        let ys = [top, (top + bot) / 2.0, bot];
-        let mut path = Path::new().move_to(pt(r.x + inset(top), top));
-        for &y in &ys[1..] {
-            path = path.line_to(pt(r.x + inset(y), y));
-        }
-        for &y in ys.iter().rev() {
-            path = path.line_to(pt(r.x + r.w - inset(y), y));
-        }
-        let mid = (top + BAND / 2.0).min(r.y + r.h);
-        s.solid(path.close(), colour((mid - y0) / (y1 - y0)));
-    }
+    s.fill(rrect_path(r, radius), Brush::Linear { from: pt(r.x, y0), to: pt(r.x, y1), stops: stops.to_vec() });
 }
