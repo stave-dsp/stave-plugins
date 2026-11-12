@@ -8,7 +8,7 @@
 //! normalized by the total in-phase sum so driver count changes
 //! the WEAVE, not the volume.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 const C_AIR: f32 = 343.0;
 /// 12" driver center spacing in a standard lattice.
@@ -39,7 +39,7 @@ impl Drivers {
     pub fn prepare(&mut self, rate: f32) {
         self.rate = rate.max(1.0);
         // Longest extra path: the diagonal as r → 0, ~1.4 ms.
-        self.delay.prepare((self.rate * 0.002) as usize + 8);
+        self.delay.allocate((self.rate * 0.002) as usize + 8);
         self.delay.reset();
     }
 

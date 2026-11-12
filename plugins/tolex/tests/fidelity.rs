@@ -12,11 +12,11 @@
 //! Run: cargo test --release -p stave-tolex-vst3 --test fidelity -- --nocapture
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -208,10 +208,7 @@ fn analyze(ir: &[f32], grid: &[f64], fft: &std::sync::Arc<dyn rustfft::Fft<f32>>
 // ===================================================================
 
 fn tolex_ir() -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     // The bench cabinet: 12" / fs 80 / Qts 0.85 / closed 60 L /
     // moderate tube damping / drive at reference / close mic.
     for (n, v) in [
@@ -232,45 +229,26 @@ fn tolex_ir() -> Vec<f32> {
         ("speakers", 0.0),
         ("model", 0.0),
     ] {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(v);
+        builder = builder.set(n, v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
 
     // A tiny impulse keeps the motor in its linear region — this is
     // the LINEAR snapshot, the thing an IR actually is.
     let mut out = Vec::with_capacity(IR_LEN + BLOCK);
     let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     let blocks = IR_LEN.div_ceil(BLOCK);
     for b in 0..blocks {
         in_l.fill(0.0);
         if b == 0 {
             in_l[0] = 0.01;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out.truncate(IR_LEN);
     out
 }
@@ -285,6 +263,8 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn fidelity_report_for_the_record() {
     if cfg!(debug_assertions) {
         eprintln!("fidelity: skipped in debug (run --release)");
@@ -316,8 +296,7 @@ fn fidelity_report_for_the_record() {
     let mut pop: Vec<Metrics> = Vec::with_capacity(files.len());
     let mut skipped = 0usize;
     for f in &files {
-        let Ok((sr, chans)) = stave_measure::wav::read(f).map(|a| (a.sample_rate, a.channels))
-        else {
+        let Ok((sr, chans)) = stave_host::wav::read(f).map(|a| (a.sample_rate, a.channels)) else {
             skipped += 1;
             continue;
         };

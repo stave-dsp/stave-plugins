@@ -18,8 +18,8 @@
 //!   ringy, pine is loud and low, MDF is dead — the classic lore,
 //!   here as numbers the laws can hold.
 
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, DelayLine};
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, DelayLine, Stage};
 
 const C_AIR: f32 = 343.0;
 /// Reference box scale: ∛(60 L).
@@ -99,14 +99,14 @@ impl Interior {
             ring_samples: 0.0,
             ring_fb: 0.0,
             ring_out: 0.0,
-            ring_lp: Biquad::new(),
+            ring_lp: Biquad::passthrough(),
             tap_samples: [0.0; 3],
             tap_gain: [0.0; 3],
-            tap_lp: [Biquad::new(); 3],
+            tap_lp: [Biquad::passthrough(); 3],
             cross_samples: [0.0; 2],
             cross_gain: [0.0; 2],
-            air: [Biquad::new(); 3],
-            panels: [Biquad::new(); 3],
+            air: [Biquad::passthrough(); 3],
+            panels: [Biquad::passthrough(); 3],
             rate: 0.0,
         }
     }
@@ -114,19 +114,19 @@ impl Interior {
     pub fn prepare(&mut self, rate: f32) {
         self.rate = rate.max(1.0);
         // Longest tap (depth round trip at 200 L) with headroom.
-        self.delay.prepare((self.rate * 0.003) as usize + 8);
+        self.delay.allocate((self.rate * 0.003) as usize + 8);
         self.delay.reset();
-        self.ring.prepare((self.rate * 0.003) as usize + 8);
+        self.ring.allocate((self.rate * 0.003) as usize + 8);
         self.ring.reset();
-        self.ring_lp.reset();
+        self.ring_lp.prepare(self.rate);
         for lp in self.tap_lp.iter_mut() {
-            lp.reset();
+            lp.prepare(self.rate);
         }
         for a in self.air.iter_mut() {
-            a.reset();
+            a.prepare(self.rate);
         }
         for p in self.panels.iter_mut() {
-            p.reset();
+            p.prepare(self.rate);
         }
     }
 
@@ -145,20 +145,17 @@ impl Interior {
         for (k, (frac, gain, lp_hz)) in TAPS.iter().enumerate() {
             self.tap_samples[k] = frac * s / C_AIR * rate;
             self.tap_gain[k] = gain * tap_scale * if k == 0 { 1.0 } else { vent };
-            self.tap_lp[k].set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 }, rate);
+            self.tap_lp[k].set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 });
         }
         // The diffuse tail: depth-path recirculation, heavier and
         // longer as the box grows (T ~ V/A ~ s).
         self.ring_samples = ASPECT.2 * 2.0 * s / C_AIR * rate;
         self.ring_fb = (0.30 * (s / S_REF)).clamp(0.0, 0.55) * vent;
         self.ring_out = 0.20 * vent;
-        self.ring_lp.set(
-            FilterSpec::Lowpass {
-                hz: 1_000.0,
-                q: 0.6,
-            },
-            rate,
-        );
+        self.ring_lp.set(FilterSpec::Lowpass {
+            hz: 1_000.0,
+            q: 0.6,
+        });
         let lay = layout.min(2);
         for (k, (dist, gain, min_layout)) in CROSS_TAPS.iter().enumerate() {
             self.cross_samples[k] = dist / C_AIR * rate;
@@ -179,14 +176,11 @@ impl Interior {
         let g_scale = (s / S_REF).powf(0.7).clamp(0.7, 1.5);
         for (k, (frac, db, q)) in AIR_MODES.iter().enumerate() {
             let f = C_AIR / (2.0 * frac * s);
-            self.air[k].set(
-                FilterSpec::Peak {
-                    hz: f,
-                    db: db * vent * g_scale,
-                    q: q * q_scale,
-                },
-                rate,
-            );
+            self.air[k].set(FilterSpec::Peak {
+                hz: f,
+                db: db * vent * g_scale,
+                q: q * q_scale,
+            });
         }
         // Panel AREA rides the box: a 4x12's walls ring louder and
         // carry real late energy (with air-mode level, the honest
@@ -195,14 +189,11 @@ impl Interior {
         let modes = &PANELS[material.min(PANELS.len() - 1)];
         let f_scale = S_REF / s;
         for (k, (hz, db, q)) in modes.iter().enumerate() {
-            self.panels[k].set(
-                FilterSpec::Peak {
-                    hz: hz * f_scale,
-                    db: db * panel_scale,
-                    q: *q,
-                },
-                rate,
-            );
+            self.panels[k].set(FilterSpec::Peak {
+                hz: hz * f_scale,
+                db: db * panel_scale,
+                q: *q,
+            });
         }
     }
 
@@ -211,21 +202,21 @@ impl Interior {
         self.delay.write(x);
         let mut y = x;
         for k in 0..3 {
-            y += self.tap_gain[k] * self.tap_lp[k].process(self.delay.read(self.tap_samples[k]));
+            y += self.tap_gain[k] * self.tap_lp[k].tick(self.delay.read(self.tap_samples[k]));
         }
         for k in 0..2 {
             y += self.cross_gain[k] * self.delay.read(self.cross_samples[k]);
         }
         self.delay.advance();
-        let r = self.ring_lp.process(self.ring.read(self.ring_samples));
+        let r = self.ring_lp.tick(self.ring.read(self.ring_samples));
         y += self.ring_out * r;
         self.ring.write(x + self.ring_fb * r);
         self.ring.advance();
         for a in self.air.iter_mut() {
-            y = a.process(y);
+            y = a.tick(y);
         }
         for p in self.panels.iter_mut() {
-            y = p.process(y);
+            y = p.tick(y);
         }
         y
     }
@@ -245,12 +236,13 @@ pub(crate) fn response_db(
     let vent = if open { 0.7 } else { 1.0 };
     let tap_scale = (s / S_REF).sqrt().min(1.4);
     let (mut re, mut im) = (1.0f32, 0.0f32);
-    let mut lp = Biquad::new();
+    let mut lp = Biquad::passthrough();
+    lp.prepare(rate);
     for (k, (frac, gain, lp_hz)) in TAPS.iter().enumerate() {
         let tau = frac * s / C_AIR;
         let g = gain * tap_scale * if k == 0 { 1.0 } else { vent };
-        lp.set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 }, rate);
-        let (lr, li) = lp.response_at(hz, rate);
+        lp.set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 });
+        let (lr, li) = lp.response_at(hz);
         let th = core::f32::consts::TAU * hz * tau;
         let (c, sn) = (th.cos(), th.sin());
         // g·H_lp·e^{-jθ}
@@ -275,14 +267,11 @@ pub(crate) fn response_db(
         let tau = ASPECT.2 * 2.0 * s / C_AIR;
         let g_fb = (0.30 * (s / S_REF)).clamp(0.0, 0.55) * vent;
         let g_out = 0.20 * vent;
-        lp.set(
-            FilterSpec::Lowpass {
-                hz: 1_000.0,
-                q: 0.6,
-            },
-            rate,
-        );
-        let (hr, hi) = lp.response_at(hz, rate);
+        lp.set(FilterSpec::Lowpass {
+            hz: 1_000.0,
+            q: 0.6,
+        });
+        let (hr, hi) = lp.response_at(hz);
         let th = core::f32::consts::TAU * hz * tau;
         let (c, sn) = (th.cos(), th.sin());
         let (er, ei) = (hr * c + hi * sn, hi * c - hr * sn);
@@ -296,29 +285,23 @@ pub(crate) fn response_db(
     let g_scale = (s / S_REF).powf(0.7).clamp(0.7, 1.5);
     for (frac, db_m, q) in &AIR_MODES {
         let f = C_AIR / (2.0 * frac * s);
-        lp.set(
-            FilterSpec::Peak {
-                hz: f,
-                db: db_m * vent * g_scale,
-                q: q * q_scale,
-            },
-            rate,
-        );
-        db += 20.0 * lp.magnitude_at(hz, rate).max(1e-12).log10();
+        lp.set(FilterSpec::Peak {
+            hz: f,
+            db: db_m * vent * g_scale,
+            q: q * q_scale,
+        });
+        db += 20.0 * lp.magnitude_at(hz).max(1e-12).log10();
     }
     let panel_scale = (s / S_REF).powf(0.7).clamp(0.7, 1.4);
     let modes = &PANELS[material.min(PANELS.len() - 1)];
     let f_scale = S_REF / s;
     for (hz_m, db_m, q) in modes {
-        lp.set(
-            FilterSpec::Peak {
-                hz: hz_m * f_scale,
-                db: db_m * panel_scale,
-                q: *q,
-            },
-            rate,
-        );
-        db += 20.0 * lp.magnitude_at(hz, rate).max(1e-12).log10();
+        lp.set(FilterSpec::Peak {
+            hz: hz_m * f_scale,
+            db: db_m * panel_scale,
+            q: *q,
+        });
+        db += 20.0 * lp.magnitude_at(hz).max(1e-12).log10();
     }
     db
 }

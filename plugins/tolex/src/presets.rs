@@ -5,11 +5,8 @@
 //! the living leg taught — a cab that cannot exist, behaving like
 //! the best of the ones that do.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::params::AnyParam;
-use stave_core::Preset;
+use stave::params::AnyParam;
+use stave::prelude::*;
 
 use crate::params::TolexParams;
 
@@ -22,7 +19,7 @@ fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
 }
 
 pub fn presets(p: &TolexParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         // THE IDEAL MODERN METALCORE CAB. The recipe, justified:
         // a V30-class heavy cone (mass 1.15 — smoother top, breakup
         // seated lower) in a big CLOSED birch 4x12 (170 L: the air

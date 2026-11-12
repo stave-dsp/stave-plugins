@@ -10,8 +10,8 @@
 //! lives in the motor's k_box, not here). The fade is a 20 ms lag so
 //! a back switch mid-note is a move, not a click.
 
-use stave_dsp::FilterSpec;
-use stave_dsp::{Biquad, DelayLine};
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, DelayLine, Stage};
 
 /// Wrap distance for the 60 L reference cab (front of baffle to the
 /// open back and out to the axis), scaled by ∛(V/60L) with the box.
@@ -28,15 +28,13 @@ pub(crate) fn response_db(open: bool, vb_liters: f32, mic_r_m: f32, hz: f32, rat
     let wrap = WRAP_60L_M * (vb_liters.max(1.0) / 60.0).cbrt();
     let tau = wrap / 343.0;
     let g = mic_r_m / (mic_r_m + wrap);
-    let mut lp = Biquad::new();
-    lp.set(
-        FilterSpec::Lowpass {
-            hz: DIFFRACTION_HZ,
-            q: 0.6,
-        },
-        rate,
-    );
-    let (lr, li) = lp.response_at(hz, rate);
+    let mut lp = Biquad::passthrough();
+    lp.prepare(rate);
+    lp.set(FilterSpec::Lowpass {
+        hz: DIFFRACTION_HZ,
+        q: 0.6,
+    });
+    let (lr, li) = lp.response_at(hz);
     let th = core::f32::consts::TAU * hz * tau;
     let (c, s) = (th.cos(), th.sin());
     // e^{-jθ}·(lr + j·li)
@@ -60,7 +58,7 @@ impl RearPath {
     pub fn new() -> Self {
         Self {
             delay: DelayLine::new(),
-            diffraction: Biquad::new(),
+            diffraction: Biquad::passthrough(),
             wrap_m: WRAP_60L_M,
             delay_samples: 0.0,
             open: false,
@@ -71,9 +69,9 @@ impl RearPath {
 
     pub fn prepare(&mut self, rate: f32) {
         // Longest wrap (200 L) at this rate, with headroom.
-        self.delay.prepare((rate * 0.005) as usize + 8);
+        self.delay.allocate((rate * 0.005) as usize + 8);
         self.delay.reset();
-        self.diffraction.reset();
+        self.diffraction.prepare(rate);
         self.mix_k = 1.0 - (-1.0 / (0.020 * rate)).exp();
         self.mix = 0.0;
         self.rate_apply(rate);
@@ -87,7 +85,7 @@ impl RearPath {
     }
 
     /// Jump the open/closed engagement to its target — the FIRST
-    /// bind after activate only (no history to click against; the
+    /// bind after prepare only (no history to click against; the
     /// 20 ms glide is for mid-play switches). Without this, a fresh
     /// open-back cab faded its rear path in from silence — the
     /// picture-truth law caught the render missing its comb.
@@ -97,13 +95,10 @@ impl RearPath {
 
     fn rate_apply(&mut self, rate: f32) {
         self.delay_samples = self.wrap_m / 343.0 * rate;
-        self.diffraction.set(
-            FilterSpec::Lowpass {
-                hz: DIFFRACTION_HZ,
-                q: 0.6,
-            },
-            rate,
-        );
+        self.diffraction.set(FilterSpec::Lowpass {
+            hz: DIFFRACTION_HZ,
+            q: 0.6,
+        });
     }
 
     /// `mic_r` in meters — the per-sample geometry read (rides the
@@ -111,9 +106,7 @@ impl RearPath {
     #[inline]
     pub fn tick(&mut self, x: f32, mic_r: f32) -> f32 {
         self.delay.write(x);
-        let rear = self
-            .diffraction
-            .process(self.delay.read(self.delay_samples));
+        let rear = self.diffraction.tick(self.delay.read(self.delay_samples));
         self.delay.advance();
 
         let target = if self.open { 1.0 } else { 0.0 };

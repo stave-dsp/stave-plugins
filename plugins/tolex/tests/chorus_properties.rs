@@ -6,11 +6,10 @@
 //! the comb DEEPENS as the mic pulls back (the real reason close-
 //! mic'd 4×12s sound like 1×12s), and more drivers comb harder.
 
-use std::sync::Arc;
-
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -18,46 +17,24 @@ const IR_LEN: usize = 24_064;
 const FFT_N: usize = 32_768;
 
 fn render_ir(set: &[(&'static str, f64)]) -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
+        builder = builder.set(n, *v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
     let mut out = Vec::with_capacity(IR_LEN);
     let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for b in 0..(IR_LEN / BLOCK) {
         in_l.fill(0.0);
         if b == 0 {
             in_l[0] = 0.01;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 
@@ -111,6 +88,8 @@ fn with(base: &[(&'static str, f64)], extra: &[(&'static str, f64)]) -> Vec<(&'s
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn the_chorus_combs_at_the_mic() {
     // The physics, restated: 12" centers d = 0.33 m; at mic r the
     // neighbor's extra path is Δ = √(r² + d²) − r; first null at

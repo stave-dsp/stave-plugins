@@ -18,9 +18,8 @@
 //!   the constructive band (~312 Hz for the default wrap), thins the
 //!   deep bass, and leaves the diffraction-lowpassed top alone.
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -34,44 +33,22 @@ const RHO: f64 = 1.204; // kg/m³
 const C_AIR: f64 = 343.0; // m/s
 
 fn render(set: &[(&'static str, f64)], input: &[f32]) -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
+        builder = builder.set(n, *v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
     let mut out = Vec::with_capacity(input.len());
     let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for chunk in input.chunks(BLOCK) {
         in_l[..chunk.len()].copy_from_slice(chunk);
         in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 
@@ -155,6 +132,7 @@ fn with(base: &[(&'static str, f64)], extra: &[(&'static str, f64)]) -> Vec<(&'s
 /// The closed back is an air spring: the resonance peak lands where
 /// ρc²Sd²/V says, and opening the back returns it to free-air fs.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_box_stiffens_the_spring() {
     let fs = 80.0f64;
     let cms = 1.0 / (MMS_12 * (2.0 * std::f64::consts::PI * fs).powi(2));
@@ -182,6 +160,7 @@ fn the_box_stiffens_the_spring() {
 /// resonance ≥ 6 dB over solid-state, measured against the same
 /// 1 kHz passband reference.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_amp_lets_the_cone_bloom() {
     let bloom = |damping: f64| {
         let set = with(BENCH, &[("damping", damping), ("back", 0.0)]);
@@ -203,6 +182,7 @@ fn the_amp_lets_the_cone_bloom() {
 /// should return exactly +14 dB of fundamental. The nonlinear motor
 /// gives some of it back as compression — and pays out H3.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn excursion_compresses() {
     let f0 = 93.75f32; // FS/512 — bin-exact projections
     let set_lo = with(BENCH, &[("damping", 0.75), ("back", 0.0), ("drive", -12.0)]);
@@ -237,6 +217,7 @@ fn excursion_compresses() {
 /// the diffraction-lowpassed top alone. Same motor both renders —
 /// alignment cancels; only the rear path can move these numbers.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_back_door_combs_at_the_mic() {
     // Difference-in-differences: mic distance now carries honest
     // PROXIMITY (a common-mode LF effect), so the rear path's

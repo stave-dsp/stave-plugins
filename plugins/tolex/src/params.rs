@@ -1,13 +1,7 @@
 //! Tolex's typed parameter table. Ids are FOREVER — pick once,
 //! never reuse or renumber. Ids 6–8, 13–14 and 16–18 are reserved.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// Driver diameter. Sets the cone area Sd and the moving-mass
@@ -109,70 +103,72 @@ pub struct TolexParams {
     pub mic: FloatParam,
 }
 
-/// The speaker, cab and mic construction rebuilds the model when it
-/// changes, so it does not glide; hosts may not automate it.
-const CONSTRUCTION: ParamFlags = ParamFlags {
-    bypass: false,
-    non_automatable: true,
-    hidden: false,
-};
-
-impl TolexParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-            size: EnumParam::new(3, "size", SpeakerSize(2)).with_group("Speaker"),
-            resonance: FloatParam::new(4, "resonance", 92.0, Range::new(55.0, 120.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            q: FloatParam::new(5, "q", 0.7, Range::new(0.3, 1.2, Taper::Linear))
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            drive: FloatParam::new(9, "drive", 6.0, Range::new(-12.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Amp")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            damping: FloatParam::new(10, "damping", 0.3, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Amp")
-                .with_flags(CONSTRUCTION),
+// The speaker, cab and mic construction rebuilds the model when it
+// changes, so it does not glide; hosts may not automate it
+// (`.not_automatable()` below).
+impl Default for TolexParams {
+    fn default() -> Self {
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            size: EnumParam::new(ParamId(3), "size", SpeakerSize(2)).group("Speaker"),
+            resonance: FloatParam::new(ParamId(4), "resonance", Range::log(55.0, 120.0))
+                .default(92.0)
+                .unit(Unit::Hz)
+                .group("Speaker")
+                .not_automatable(),
+            q: FloatParam::new(ParamId(5), "q", Range::linear(0.3, 1.2))
+                .default(0.7)
+                .group("Speaker")
+                .not_automatable(),
+            drive: FloatParam::new(ParamId(9), "drive", Range::linear(-12.0, 24.0))
+                .default(6.0)
+                .unit(Unit::Db)
+                .group("Amp")
+                .smooth(Smooth::ms(20.0)),
+            damping: FloatParam::new(ParamId(10), "damping", Range::linear(0.0, 1.0))
+                .default(0.3)
+                .group("Amp")
+                .not_automatable(),
             // Range extended 31 -> 32 the same day id 19 was minted
             // (pre-release; never in a shipped build): slot 32+ are
             // MEASURED anchors, 0-31 the invented space.
-            cone: FloatParam::new(19, "cone", 21.0, Range::new(0.0, 32.0, Taper::Linear))
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            mass: FloatParam::new(6, "mass", 1.05, Range::new(0.5, 2.0, Taper::Log))
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            breakup: FloatParam::new(7, "breakup", 0.6, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            doping: FloatParam::new(8, "doping", 0.38, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Speaker")
-                .with_flags(CONSTRUCTION),
-            back: EnumParam::new(11, "back", CabBack(0)).with_group("Cab"),
-            position: FloatParam::new(16, "position", 0.15, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Mic")
-                .with_flags(CONSTRUCTION),
-            cab: FloatParam::new(12, "cab", 170.0, Range::new(25.0, 200.0, Taper::Log))
-                .with_group("Cab")
-                .with_flags(CONSTRUCTION),
-            material: EnumParam::new(13, "material", CabMaterial(0)).with_group("Cab"),
-            speakers: EnumParam::new(14, "speakers", SpeakerCount(2)).with_group("Cab"),
-            model: EnumParam::new(17, "model", MicModel(1)).with_group("Mic"),
-            mic: FloatParam::new(15, "mic", 2.5, Range::new(0.5, 60.0, Taper::Log))
-                .with_group("Mic")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-        })
+            cone: FloatParam::new(ParamId(19), "cone", Range::linear(0.0, 32.0))
+                .default(21.0)
+                .group("Speaker")
+                .not_automatable(),
+            mass: FloatParam::new(ParamId(6), "mass", Range::log(0.5, 2.0))
+                .default(1.05)
+                .group("Speaker")
+                .not_automatable(),
+            breakup: FloatParam::new(ParamId(7), "breakup", Range::linear(0.0, 1.0))
+                .default(0.6)
+                .group("Speaker")
+                .not_automatable(),
+            doping: FloatParam::new(ParamId(8), "doping", Range::linear(0.0, 1.0))
+                .default(0.38)
+                .group("Speaker")
+                .not_automatable(),
+            back: EnumParam::new(ParamId(11), "back", CabBack(0)).group("Cab"),
+            position: FloatParam::new(ParamId(16), "position", Range::linear(0.0, 1.0))
+                .default(0.15)
+                .group("Mic")
+                .not_automatable(),
+            cab: FloatParam::new(ParamId(12), "cab", Range::log(25.0, 200.0))
+                .default(170.0)
+                .group("Cab")
+                .not_automatable(),
+            material: EnumParam::new(ParamId(13), "material", CabMaterial(0)).group("Cab"),
+            speakers: EnumParam::new(ParamId(14), "speakers", SpeakerCount(2)).group("Cab"),
+            model: EnumParam::new(ParamId(17), "model", MicModel(1)).group("Mic"),
+            mic: FloatParam::new(ParamId(15), "mic", Range::log(0.5, 60.0))
+                .default(2.5)
+                .group("Mic")
+                .smooth(Smooth::ms(30.0)),
+        }
     }
 }

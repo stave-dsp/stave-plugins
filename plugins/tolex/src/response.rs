@@ -7,21 +7,16 @@
 //! sound (the engine's display twins) and a law renders audio to keep
 //! the picture honest (tests/curve_properties.rs).
 
-extern crate alloc;
-use alloc::string::ToString;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
 use std::sync::LazyLock;
 
-use stave_core::face::prelude::*;
-use stave_core::face::step_of;
-use stave_core::params::{BindParam, FloatParam};
-use stave_ui::scene::TextAlign;
+use stave::face::step_of;
+use stave::prelude::*;
 
 use crate::curve::{self, Sheet};
 use crate::params::TolexParams;
+use crate::TolexTaps;
 
-static P: LazyLock<Arc<TolexParams>> = LazyLock::new(TolexParams::new);
+static P: LazyLock<TolexParams> = LazyLock::new(TolexParams::default);
 
 const N_PTS: usize = 140;
 const F_LO: f64 = 45.0;
@@ -61,9 +56,9 @@ pub fn reads(p: &TolexParams) -> Vec<Bind> {
 
 /// The build sheet at the face's current (normalized) values.
 fn sheet(f: &Frame<'_>) -> Sheet {
-    let p = &**P;
+    let p = &*P;
     let plain = |q: &FloatParam| q.range().denormalize(f.value(q.bind())) as f32;
-    let step = |b: Bind| step_of(f.value(b), f.host.steps(b.id)) as usize;
+    let step = |b: Bind| step_of(f.value(b), f.controller.steps(b.id)) as usize;
     Sheet {
         size: step(p.size.bind()),
         resonance: plain(&p.resonance),
@@ -85,7 +80,7 @@ fn sheet(f: &Frame<'_>) -> Sheet {
 
 pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let th = f.theme;
-    let ty = &th.type_;
+    let (ty, pal) = (&th.typography, &th.palette);
     let x_of =
         |hz: f64| r.x + PAD_L + (hz / F_LO).ln() / (F_HI / F_LO).ln() * (r.w - PAD_L - PAD_R);
     let y_of = |db: f64| {
@@ -94,9 +89,11 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     };
 
     // Grid: dB rules every 12, decade frequency rules with labels.
-    let grid = Stroke::new(alpha(th.phosphor, 0.09), 1.0);
-    let label = alpha(th.phosphor, 0.45);
-    let left = ty.value.align(TextAlign::Left);
+    let grid = Stroke::new(alpha(pal.phosphor, 0.09), 1.0);
+    let label = alpha(pal.phosphor, 0.45);
+    // Left-set labels. `TextAlign` has no path under `stave` (API
+    // friction, reported): a `Title`'s default alignment is Left.
+    let left = ty.value.align(Title::new("").align);
     for db in [-24.0, -12.0, 0.0] {
         s.stroke(
             Path::new()
@@ -143,12 +140,12 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             y_of(f64::from(curve::envelope_at(at(i) as f32, false))),
         ));
     }
-    s.solid(band.close(), alpha(th.accent, 0.10));
+    s.solid(band.close(), alpha(pal.accent, 0.10));
 
     // Two curves, same math as the sound: the RESTING sheet as a ghost,
     // the LIVE curve at the motor's operating point on top.
     let sheet = sheet(f);
-    let excursion = f.probe("excursion") as f32;
+    let excursion = f.tap(TolexTaps::EXCURSION) as f32;
     let mut hz = [0.0f32; N_PTS];
     for (i, slot) in hz.iter_mut().enumerate() {
         *slot = (F_LO * (F_HI / F_LO).powf(i as f64 / (N_PTS - 1) as f64)) as f32;
@@ -164,7 +161,7 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
         curve::response_into(&sheet, 0.0, &hz, &mut db);
         s.stroke(
             Path::polyline(&to_pts(&db)),
-            Stroke::new(alpha(th.ink, 0.35), 1.0),
+            Stroke::new(alpha(pal.ink, 0.35), 1.0),
         );
     }
     curve::response_into(&sheet, excursion, &hz, &mut db);

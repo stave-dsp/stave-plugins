@@ -9,8 +9,8 @@
 //! The SM57 is the flat reference — the cab's own voice IS the
 //! 57-at-position picture the rest of the model was built on.
 
-use stave_dsp::Biquad;
-use stave_dsp::FilterSpec;
+use stave::dsp::FilterSpec;
+use stave::dsp::{Biquad, Stage};
 
 /// The corpus capture distance: the distilled signatures already
 /// CARRY proximity at ~3 cm (York's close-mic practice) — the shelf
@@ -99,8 +99,8 @@ pub struct Microphone {
 impl Microphone {
     pub fn new() -> Self {
         Self {
-            sections: [Biquad::new(); 10],
-            proximity: Biquad::new(),
+            sections: [Biquad::passthrough(); 10],
+            proximity: Biquad::passthrough(),
             rate: 0.0,
         }
     }
@@ -108,9 +108,9 @@ impl Microphone {
     pub fn prepare(&mut self, rate: f32) {
         self.rate = rate.max(1.0);
         for s in self.sections.iter_mut() {
-            s.reset();
+            s.prepare(self.rate);
         }
-        self.proximity.reset();
+        self.proximity.prepare(self.rate);
         self.set(0, R_REF_M);
     }
 
@@ -120,45 +120,33 @@ impl Microphone {
         let gains = &MIC_GAINS[model.min(MIC_GAINS.len() - 1)];
         for (k, (kind, hz, q)) in MIC_SECTIONS.iter().enumerate() {
             match kind {
-                0 => self.sections[k].set(
-                    FilterSpec::LowShelfRbj {
-                        hz: *hz,
-                        db: gains[k],
-                    },
-                    self.rate,
-                ),
-                2 => self.sections[k].set(
-                    FilterSpec::HighShelfRbj {
-                        hz: *hz,
-                        db: gains[k],
-                    },
-                    self.rate,
-                ),
-                _ => self.sections[k].set(
-                    FilterSpec::Peak {
-                        hz: *hz,
-                        db: gains[k],
-                        q: *q,
-                    },
-                    self.rate,
-                ),
+                0 => self.sections[k].set(FilterSpec::LowShelfRbj {
+                    hz: *hz,
+                    db: gains[k],
+                }),
+                2 => self.sections[k].set(FilterSpec::HighShelfRbj {
+                    hz: *hz,
+                    db: gains[k],
+                }),
+                _ => self.sections[k].set(FilterSpec::Peak {
+                    hz: *hz,
+                    db: gains[k],
+                    q: *q,
+                }),
             }
         }
         let (corner, gain) = proximity_shelf(model, mic_r_m);
-        self.proximity.set(
-            FilterSpec::LowShelfRbj {
-                hz: corner,
-                db: gain,
-            },
-            self.rate,
-        );
+        self.proximity.set(FilterSpec::LowShelfRbj {
+            hz: corner,
+            db: gain,
+        });
     }
 
     #[inline]
     pub fn tick(&mut self, x: f32) -> f32 {
-        let mut y = self.proximity.process(x);
+        let mut y = self.proximity.tick(x);
         for s in self.sections.iter_mut() {
-            y = s.process(y);
+            y = s.tick(y);
         }
         y
     }
@@ -167,42 +155,31 @@ impl Microphone {
 /// The display twin — same tables, same setters, same shelf.
 pub(crate) fn response_db(model: usize, mic_r_m: f32, hz: f32, rate: f32) -> f32 {
     let gains = &MIC_GAINS[model.min(MIC_GAINS.len() - 1)];
-    let mut bq = Biquad::new();
+    let mut bq = Biquad::passthrough();
+    bq.prepare(rate);
     let (corner, gain) = proximity_shelf(model, mic_r_m);
-    bq.set(
-        FilterSpec::LowShelfRbj {
-            hz: corner,
-            db: gain,
-        },
-        rate,
-    );
-    let mut db = 20.0 * bq.magnitude_at(hz, rate).max(1e-12).log10();
+    bq.set(FilterSpec::LowShelfRbj {
+        hz: corner,
+        db: gain,
+    });
+    let mut db = 20.0 * bq.magnitude_at(hz).max(1e-12).log10();
     for (k, (kind, f0, q)) in MIC_SECTIONS.iter().enumerate() {
         match kind {
-            0 => bq.set(
-                FilterSpec::LowShelfRbj {
-                    hz: *f0,
-                    db: gains[k],
-                },
-                rate,
-            ),
-            2 => bq.set(
-                FilterSpec::HighShelfRbj {
-                    hz: *f0,
-                    db: gains[k],
-                },
-                rate,
-            ),
-            _ => bq.set(
-                FilterSpec::Peak {
-                    hz: *f0,
-                    db: gains[k],
-                    q: *q,
-                },
-                rate,
-            ),
+            0 => bq.set(FilterSpec::LowShelfRbj {
+                hz: *f0,
+                db: gains[k],
+            }),
+            2 => bq.set(FilterSpec::HighShelfRbj {
+                hz: *f0,
+                db: gains[k],
+            }),
+            _ => bq.set(FilterSpec::Peak {
+                hz: *f0,
+                db: gains[k],
+                q: *q,
+            }),
         }
-        db += 20.0 * bq.magnitude_at(hz, rate).max(1e-12).log10();
+        db += 20.0 * bq.magnitude_at(hz).max(1e-12).log10();
     }
     db
 }

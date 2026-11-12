@@ -6,19 +6,15 @@
 //! (open back, position off-cap, pine, 4x12 — every subsystem in
 //! the path).
 
-use std::sync::Arc;
-
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const BLOCK: usize = 256;
 
 fn render_ir(fs: f32, n: usize) -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (nm, v) in [
         ("back", 1.0),
         ("position", 0.6),
@@ -28,36 +24,22 @@ fn render_ir(fs: f32, n: usize) -> Vec<f32> {
         ("mic", 12.0),
         ("cone", 7.0),
     ] {
-        table.by_name(nm).unwrap().set_plain(v);
+        builder = builder.set(nm, v);
     }
-    plugin.activate(fs, BLOCK);
+    let mut h = builder.sample_rate(fs).build();
     let mut out = Vec::with_capacity(n);
-    let (mut in_l, mut in_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
-    let (mut out_l, mut out_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
+    let mut in_l = vec![0.0f32; BLOCK];
     for b in 0..(n / BLOCK) {
         in_l.fill(0.0);
         if b == 0 {
             in_l[0] = 0.01;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: fs,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 
@@ -99,6 +81,8 @@ fn trend(ir: &[f32], fs: f32, grid: &[f64]) -> Vec<f64> {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn the_cabinet_survives_the_clock() {
     let grid: Vec<f64> = (0..400)
         .map(|i| 90.0 * (8_000.0f64 / 90.0).powf(i as f64 / 399.0))

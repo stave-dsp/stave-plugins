@@ -17,19 +17,15 @@
 //!
 //! Run: cargo test --release -p stave-tolex-vst3 --test nonlinear_report -- --nocapture
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 const LEN: usize = 48_128; // block-aligned (the properties.rs lesson)
 
 fn render_tone(drive: f64, freq: f32, amp: f32) -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (n, v) in [
         ("drive", drive),
         ("damping", 0.75),
@@ -48,36 +44,22 @@ fn render_tone(drive: f64, freq: f32, amp: f32) -> Vec<f32> {
         ("speakers", 0.0),
         ("model", 0.0),
     ] {
-        table.by_name(n).unwrap().set_plain(v);
+        builder = builder.set(n, v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
     let mut out = Vec::with_capacity(LEN);
-    let (mut in_l, mut in_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
-    let (mut out_l, mut out_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
+    let mut in_l = vec![0.0f32; BLOCK];
     for b in 0..(LEN / BLOCK) {
         for f in 0..BLOCK {
             let t = (b * BLOCK + f) as f32 / FS;
             in_l[f] = (core::f32::consts::TAU * freq * t).sin() * amp;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 
@@ -103,14 +85,12 @@ fn db(x: f64) -> f64 {
 /// sags the fundamental by a real, bounded amount over seconds,
 /// measured early-window vs late-window on one sustained render.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn the_coil_heats() {
     if cfg!(debug_assertions) {
         return;
     }
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (n, v) in [
         ("drive", 24.0),
         ("damping", 0.0),
@@ -129,37 +109,23 @@ fn the_coil_heats() {
         ("speakers", 0.0),
         ("model", 0.0),
     ] {
-        table.by_name(n).unwrap().set_plain(v);
+        builder = builder.set(n, v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
     let len = 144_128usize; // ~3 s, block-aligned
     let mut out = Vec::with_capacity(len);
-    let (mut in_l, mut in_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
-    let (mut out_l, mut out_r) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
+    let mut in_l = vec![0.0f32; BLOCK];
     for b in 0..(len / BLOCK) {
         for f in 0..BLOCK {
             let t = (b * BLOCK + f) as f32 / FS;
             in_l[f] = (core::f32::consts::TAU * 375.0 * t).sin() * 0.5;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     // 96-cycle windows (12288 samples at 128/cycle), early vs late.
     let win = |start: usize| {
         let seg = &out[start..start + 12_288];
@@ -180,6 +146,8 @@ fn the_coil_heats() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn nonlinear_report_for_the_record() {
     if cfg!(debug_assertions) {
         eprintln!("nonlinear report: skipped in debug (run --release)");

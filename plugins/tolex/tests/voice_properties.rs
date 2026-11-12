@@ -19,11 +19,10 @@
 //!   (population median 75 ms; the analysis-filter floor is ~18 ms,
 //!   so ≥40 is comfortably a real ring).
 
-use std::sync::Arc;
-
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_test::PluginHarness;
+use stave_tolex_vst3::Tolex;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -31,46 +30,24 @@ const IR_LEN: usize = 24_064; // block-aligned (the properties.rs lesson)
 const FFT_N: usize = 32_768;
 
 fn render_ir(set: &[(&'static str, f64)]) -> Vec<f32> {
-    let mut plugin = stave_tolex_vst3::Tolex::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
+    let mut builder = PluginHarness::<Tolex>::builder().block_size(BLOCK);
     for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
+        builder = builder.set(n, *v);
     }
-    plugin.activate(FS, BLOCK);
+    let mut h = builder.sample_rate(FS).build();
     let mut out = Vec::with_capacity(IR_LEN);
     let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for b in 0..(IR_LEN / BLOCK) {
         in_l.fill(0.0);
         if b == 0 {
             in_l[0] = 0.01;
         }
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        for ch in h.inputs_mut() {
+            ch.copy_from_slice(&in_l);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 
@@ -254,6 +231,8 @@ fn with(base: &[(&'static str, f64)], extra: &[(&'static str, f64)]) -> Vec<(&'s
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn the_cone_grows_teeth() {
     let fs = fine_structure(&render_ir(BENCH));
     let ext = extrema_per_oct(&fs);
@@ -269,6 +248,8 @@ fn the_cone_grows_teeth() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn identity_survives_the_walk() {
     let cap = fine_structure(&render_ir(&with(BENCH, &[("position", 0.0)])));
     let edge = fine_structure(&render_ir(&with(BENCH, &[("position", 1.0)])));
@@ -292,6 +273,8 @@ fn identity_survives_the_walk() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn position_walks_darker() {
     let t0 = tilt_db(&fine_structure(&render_ir(&with(
         BENCH,
@@ -309,6 +292,8 @@ fn position_walks_darker() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn mass_slides_the_cliff() {
     let light = hf_corner(&fine_structure(&render_ir(&with(BENCH, &[("mass", 0.5)]))));
     let heavy = hf_corner(&fine_structure(&render_ir(&with(BENCH, &[("mass", 2.0)]))));
@@ -320,6 +305,8 @@ fn mass_slides_the_cliff() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn doping_damps_the_song() {
     let wild = ripple_rms(&fine_structure(&render_ir(&with(
         BENCH,
@@ -336,6 +323,8 @@ fn doping_damps_the_song() {
 }
 
 #[test]
+
+#[cfg_attr(miri, ignore)]
 fn the_depth_band_rings() {
     let t = depth_band_decay_ms(&render_ir(BENCH));
     assert!(

@@ -2,8 +2,7 @@
 //! root; everything below is one click away.
 //!
 //! ```text
-//! lib.rs      ← you are here: identity, ports, params, editor —
-//!               the DECLARATIONS half, no behavior
+//! lib.rs      ← you are here: the modules and the export
 //! params.rs   every knob, with its forever-stable id (the full
 //!               planned ledger is in plugins/tolex/docs/design.md)
 //! editor.rs   the face (a speaker cabinet), a pure function of params
@@ -19,19 +18,14 @@
 //!   motor.rs    the lumped electro-mechanical driver core (leaf)
 //!   cabinet.rs  the open back's wrap-around rear path
 //!   voice.rs    the modal fingerprint + position system
-//! tests/      the shared checks: validation, editor bindings, no-alloc,
-//!               perf, and THE LAWS (properties.rs — the physics promises)
+//! tests/      the shared checks (checks.rs: validation, no-alloc, perf,
+//!               the face's laws) and THE LAWS (properties.rs — the physics
+//!               promises)
 //! ```
 //!
 //! The motor (T/S + Bl(x)/Cms(x) + source impedance + box) feeds the
 //! cone's modal fingerprint: fixed mode set with ring-law Qs,
 //! mic-position weights + comb + macro walk, drive-softened breakup.
-
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::{PluginDescriptor, PluginFeature, PortConfig, Spec, StavePlugin};
-use stave_vst3::stave_vst3_export;
 
 pub mod curve;
 mod editor;
@@ -40,41 +34,10 @@ mod params;
 mod presets;
 mod response;
 
-pub use engine::TolexEngine;
+pub use engine::{Tolex, TolexTaps};
 pub use params::TolexParams;
 
-impl Spec for TolexEngine {
-    /// Stereo FX, stated — the negotiation surface is a declaration.
-    const CONFIGS: &'static [PortConfig] = &[PortConfig::STEREO_FX];
-
-    const DESCRIPTOR: PluginDescriptor = PluginDescriptor {
-        id: c"com.ryanbahan.stave.tolex.vst3",
-        name: c"Stave Tolex",
-        vendor: c"Ryan Bahan",
-        version: c"0.0.1",
-        url: c"https://github.com/stave-dsp/stave",
-        description: c"A guitar cabinet, built not sampled.",
-        features: &[PluginFeature::AudioEffect, PluginFeature::Stereo],
-    };
-
-    fn params() -> Arc<TolexParams> {
-        TolexParams::new()
-    }
-    fn face(params: &TolexParams) -> Option<stave_core::face::Face> {
-        Some(editor::face(params))
-    }
-    fn presets(params: &TolexParams) -> alloc::vec::Vec<stave_core::Preset> {
-        presets::presets(params)
-    }
-}
-
-/// The plugin: engine + declarations under the framework shell.
-pub type Tolex = StavePlugin<TolexEngine>;
-
-stave_vst3_export!(
-    TolexEngine,
-    component_cid: (0xEB796B35, 0xEDF8C2C4, 0xF9C39DCA, 0xBD83B4C7),
-    controller_cid: (0x5E690385, 0xBCCBE4AB, 0x9D21E046, 0x541F0AC3),
-);
-
-stave_clap::stave_clap_export!(TolexEngine); // CLAP build, same cdylib
+stave::export!(Tolex, vst3_class_ids: {
+    component: [0xEB796B35, 0xEDF8C2C4, 0xF9C39DCA, 0xBD83B4C7],
+    controller: [0x5E690385, 0xBCCBE4AB, 0x9D21E046, 0x541F0AC3],
+});
