@@ -175,19 +175,7 @@ fn draw_porthole(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let ty = &f.theme.typography;
     let ph = f.theme.palette.phosphor;
     let label = "ORGANISM";
-    s.text_in(
-        pt(r.x + 12.0 + caption_half_width(label, ty.caption_size), r.y + 18.0),
-        label,
-        ty.caption_size,
-        Color::rgba(ph.r, ph.g, ph.b, 0.7),
-        ty.caption,
-    );
-}
-
-/// Half a tracked-caps caption's width, for setting a centred caption
-/// flush to an edge (the author surface has no `TextAlign`).
-fn caption_half_width(text: &str, size: f64) -> f64 {
-    0.5 * text.chars().count() as f64 * size * 0.78
+    s.text_in(pt(r.x + 12.0, r.y + 18.0), label, ty.caption_size, Color::rgba(ph.r, ph.g, ph.b, 0.7), ty.caption.align(TextAlign::Left));
 }
 
 fn material_key(neg: bool, level: usize) -> u64 {
@@ -204,12 +192,13 @@ fn draw_meter(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let red = Color::rgba(0.75, 0.13, 0.08, 1.0);
     // The cream card, lamp-lit from above.
     let card = Rect { x: r.x + 8.0, y: r.y + 8.0, w: r.w - 16.0, h: r.h - 16.0 };
-    vertical_gradient(
-        s,
-        card,
-        4.0,
-        (card.y, card.y + card.h),
-        &[(0.0, Color::rgba(0.95, 0.92, 0.84, 1.0)), (1.0, Color::rgba(0.86, 0.82, 0.72, 1.0))],
+    s.fill(
+        rrect_path(card, 4.0),
+        Brush::Linear {
+            from: pt(card.x, card.y),
+            to: pt(card.x, card.y + card.h),
+            stops: vec![(0.0, Color::rgba(0.95, 0.92, 0.84, 1.0)), (1.0, Color::rgba(0.86, 0.82, 0.72, 1.0))],
+        },
     );
     let pivot = pt(card.x + card.w / 2.0, card.y + card.h - 22.0);
     // The point `r` from the pivot at y-down angle `deg`.
@@ -235,8 +224,8 @@ fn draw_meter(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // "calm" ends at the sweep's start, "lost" begins at its end.
     let size = ty.caption_size + 1.0;
     let (calm, lost) = (polar(arc_r + 18.0, deg(0.0)), polar(arc_r + 18.0, deg(1.0)));
-    s.text_in(pt(calm.x - caption_half_width("calm", size), calm.y), "calm", size, ink, ty.caption);
-    s.text_in(pt(lost.x + caption_half_width("lost", size), lost.y), "lost", size, red, ty.caption);
+    s.text_in(calm, "calm", size, ink, ty.caption.align(TextAlign::Right));
+    s.text_in(lost, "lost", size, red, ty.caption.align(TextAlign::Left));
     s.text_in(pt(pivot.x, pivot.y - arc_r * 0.42), "SURPRISE", ty.legend_size + 1.5, ink, ty.legend);
 
     // The needle (its shadow first), a red tip, the pivot boss.
@@ -250,43 +239,3 @@ fn draw_meter(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     s.solid(Path::circle(pt(pivot.x - 1.5, pivot.y - 1.5), 3.0), Color::rgba(0.55, 0.55, 0.57, 1.0));
 }
 
-/// A vertical linear gradient (`stops` over `y0..y1`) filling the
-/// rounded rect `r` (corner `radius`; a square with half-side radius is
-/// a circle). The face's author surface has no gradient brush, so it is
-/// painted as 1 pt bands of solid colour, each overlapping the next by a
-/// band so no seam shows.
-fn vertical_gradient(s: &mut Scene, r: Rect, radius: f64, (y0, y1): (f64, f64), stops: &[(f64, Color)]) {
-    const BAND: f64 = 1.0;
-    let rad = radius.min(r.w / 2.0).min(r.h / 2.0);
-    // The outline's horizontal inset at height y.
-    let inset = |y: f64| {
-        let dy = (r.y + rad - y).max(y - (r.y + r.h - rad)).clamp(0.0, rad);
-        rad - (rad * rad - dy * dy).sqrt()
-    };
-    let colour = |t: f64| {
-        let t = t.clamp(0.0, 1.0);
-        let i = stops.iter().position(|(at, _)| *at >= t).unwrap_or(stops.len() - 1);
-        if i == 0 {
-            return stops[0].1;
-        }
-        let ((ta, a), (tb, b)) = (stops[i - 1], stops[i]);
-        let u = if tb > ta { (t - ta) / (tb - ta) } else { 1.0 };
-        let mix = |x: f64, y: f64| x + (y - x) * u;
-        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
-    };
-    let bands = (r.h / BAND).ceil().max(1.0) as usize;
-    for i in 0..bands {
-        let top = r.y + i as f64 * BAND;
-        let bot = (top + 2.0 * BAND).min(r.y + r.h);
-        let ys = [top, (top + bot) / 2.0, bot];
-        let mut path = Path::new().move_to(pt(r.x + inset(top), top));
-        for &y in &ys[1..] {
-            path = path.line_to(pt(r.x + inset(y), y));
-        }
-        for &y in ys.iter().rev() {
-            path = path.line_to(pt(r.x + r.w - inset(y), y));
-        }
-        let mid = (top + BAND / 2.0).min(r.y + r.h);
-        s.solid(path.close(), colour((mid - y0) / (y1 - y0)));
-    }
-}

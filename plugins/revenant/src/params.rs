@@ -45,7 +45,7 @@ impl Default for RevenantParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             learn: FloatParam::new(ParamId(3), "learn", unit())
                 .default(0.6)
                 .unit(Unit::Percent)

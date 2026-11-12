@@ -49,6 +49,8 @@ fn soft(x: f32) -> f32 {
     CEILING * x * (27.0 + x * x) / (27.0 + 9.0 * x * x)
 }
 
+#[derive(Smoothers)]
+#[smoothers(params = RevenantParams)]
 struct Controls {
     learn: Smoother,
     memory: Smoother,
@@ -56,28 +58,6 @@ struct Controls {
     dream: Smoother,
     mix: Smoother,
     output: Smoother,
-}
-
-impl Controls {
-    fn new(p: &RevenantParams) -> Self {
-        Self {
-            learn: Smoother::new(&p.learn),
-            memory: Smoother::new(&p.memory),
-            chaos: Smoother::new(&p.chaos),
-            dream: Smoother::new(&p.dream),
-            mix: Smoother::new(&p.mix),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        self.learn.prepare(env);
-        self.memory.prepare(env);
-        self.chaos.prepare(env);
-        self.dream.prepare(env);
-        self.mix.prepare(env);
-        self.output.prepare(env);
-    }
 }
 
 pub struct Revenant {
@@ -176,13 +156,21 @@ impl Plugin for Revenant {
         let horizon_steps = (p.horizon.value() * 0.001 * brain_hz).round() as usize;
         let asleep = p.sleep.value();
 
-        let c = &mut self.controls;
-        let mut learn_ramp = c.learn.ramp(block, &p.learn);
-        let mut memory_ramp = c.memory.ramp(block, &p.memory);
-        let mut chaos_ramp = c.chaos.ramp(block, &p.chaos);
-        let mut dream_ramp = c.dream.ramp(block, &p.dream);
-        let mut mix_ramp = c.mix.ramp(block, &p.mix);
-        let mut out_ramp = c.output.ramp(block, &p.output);
+        let ControlsRamps {
+
+            learn: mut learn_ramp,
+
+            memory: mut memory_ramp,
+
+            chaos: mut chaos_ramp,
+
+            dream: mut dream_ramp,
+
+            mix: mut mix_ramp,
+
+            output: mut out_ramp,
+
+        } = self.controls.ramp(block, p);
         let decim = self.decim;
         let inv = 1.0 / decim as f32;
         let (brain, phase, acc) = (&mut self.brain, &mut self.phase, &mut self.acc);
