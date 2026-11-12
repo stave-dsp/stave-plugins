@@ -137,43 +137,9 @@ fn string(s: &mut Scene, x: f64, y0: f64, y1: f64, c: usize, level: f64, t: f64,
 
 /// A vertical linear gradient (`stops` over `y0..y1`) filling the
 /// rounded rect `r` (corner `radius`; a square with half-side radius is
-/// a circle). The face's author surface has no gradient brush, so it is
-/// painted as 1 pt bands of solid colour, each overlapping the next by a
-/// band so no seam shows.
+/// a circle).
 fn vertical_gradient(s: &mut Scene, r: Rect, radius: f64, (y0, y1): (f64, f64), stops: &[(f64, Color)]) {
-    const BAND: f64 = 1.0;
-    let rad = radius.min(r.w / 2.0).min(r.h / 2.0);
-    // The outline's horizontal inset at height y.
-    let inset = |y: f64| {
-        let dy = (r.y + rad - y).max(y - (r.y + r.h - rad)).clamp(0.0, rad);
-        rad - (rad * rad - dy * dy).sqrt()
-    };
-    let colour = |t: f64| {
-        let t = t.clamp(0.0, 1.0);
-        let i = stops.iter().position(|(at, _)| *at >= t).unwrap_or(stops.len() - 1);
-        if i == 0 {
-            return stops[0].1;
-        }
-        let ((ta, a), (tb, b)) = (stops[i - 1], stops[i]);
-        let u = if tb > ta { (t - ta) / (tb - ta) } else { 1.0 };
-        let mix = |x: f64, y: f64| x + (y - x) * u;
-        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
-    };
-    let bands = (r.h / BAND).ceil().max(1.0) as usize;
-    for i in 0..bands {
-        let top = r.y + i as f64 * BAND;
-        let bot = (top + 2.0 * BAND).min(r.y + r.h);
-        let ys = [top, (top + bot) / 2.0, bot];
-        let mut path = Path::new().move_to(pt(r.x + inset(top), top));
-        for &y in &ys[1..] {
-            path = path.line_to(pt(r.x + inset(y), y));
-        }
-        for &y in ys.iter().rev() {
-            path = path.line_to(pt(r.x + r.w - inset(y), y));
-        }
-        let mid = (top + BAND / 2.0).min(r.y + r.h);
-        s.solid(path.close(), colour((mid - y0) / (y1 - y0)));
-    }
+    s.fill(rrect_path(r, radius), Brush::Linear { from: pt(r.x, y0), to: pt(r.x, y1), stops: stops.to_vec() });
 }
 
 #[cfg(test)]

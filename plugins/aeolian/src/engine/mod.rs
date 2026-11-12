@@ -46,6 +46,8 @@ fn pans() -> [[f32; 2]; CLASSES] {
     })
 }
 
+#[derive(Smoothers)]
+#[smoothers(params = AeolianParams)]
 struct Controls {
     mix: Smoother,
     tone: Smoother,
@@ -53,28 +55,6 @@ struct Controls {
     wind: Smoother,
     sustain: Smoother,
     output: Smoother,
-}
-
-impl Controls {
-    fn new(p: &AeolianParams) -> Self {
-        Self {
-            mix: Smoother::new(&p.mix),
-            tone: Smoother::new(&p.tone),
-            drift: Smoother::new(&p.drift),
-            wind: Smoother::new(&p.wind),
-            sustain: Smoother::new(&p.sustain),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        self.mix.prepare(env);
-        self.tone.prepare(env);
-        self.drift.prepare(env);
-        self.wind.prepare(env);
-        self.sustain.prepare(env);
-        self.output.prepare(env);
-    }
 }
 
 pub struct Aeolian {
@@ -138,13 +118,14 @@ impl Plugin for Aeolian {
         let nyq = 0.45 * self.sample_rate;
 
         // 2. The audio block.
-        let c = &mut self.controls;
-        let mut mix_ramp = c.mix.ramp(block, &p.mix);
-        let mut tone_ramp = c.tone.ramp(block, &p.tone);
-        let mut mod_ramp = c.drift.ramp(block, &p.drift);
-        let mut sens_ramp = c.wind.ramp(block, &p.wind);
-        let mut fb_ramp = c.sustain.ramp(block, &p.sustain);
-        let mut out_ramp = c.output.ramp(block, &p.output);
+        let ControlsRamps {
+            mix: mut mix_ramp,
+            tone: mut tone_ramp,
+            drift: mut mod_ramp,
+            wind: mut sens_ramp,
+            sustain: mut fb_ramp,
+            output: mut out_ramp,
+        } = self.controls.ramp(block, p);
         let (detector, strings, ensemble, tone, pans) =
             (&mut self.detector, &mut self.strings, &mut self.ensemble, &mut self.tone, &self.pans);
         let mut frame = 0usize;

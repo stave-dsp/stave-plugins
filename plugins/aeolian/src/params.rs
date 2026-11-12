@@ -53,7 +53,7 @@ impl Default for AeolianParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             mix: FloatParam::new(ParamId(3), "mix", unit())
                 .default(0.5)
                 .unit(Unit::Percent)
