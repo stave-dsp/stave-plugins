@@ -1,0 +1,114 @@
+# CI for the plugin suite. The plugins build against the framework at
+# ../stave, so every job checks out both repos side by side:
+#   $GITHUB_WORKSPACE/stave-plugins   (this repo)
+#   $GITHUB_WORKSPACE/stave           (github.com/stave-dsp/stave, main)
+# Builds are not --locked: the framework tracks its main branch, so a
+# new framework dependency would otherwise fail here until this lock
+# file caught up.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Lets the framework (or you) re-run this suite after a framework change.
+  repository_dispatch:
+    types: [framework-updated]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: stave-plugins
+
+jobs:
+  test:
+    name: build + test
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: stave-plugins }
+      - uses: actions/checkout@v4
+        with: { repository: stave-dsp/stave, path: stave }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: stave-plugins }
+      - uses: taiki-e/install-action@nextest
+      - run: scripts/check-file-sizes.sh
+      - run: scripts/check-view-bindings.sh
+      - run: scripts/check-plugin-rules.sh
+      - run: cargo nextest run --workspace --profile ci
+      - run: cargo test --workspace --doc
+
+  lint:
+    name: zero warnings (rustc + clippy)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: stave-plugins }
+      - uses: actions/checkout@v4
+        with: { repository: stave-dsp/stave, path: stave }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: stave-plugins }
+      - run: cargo build --workspace --all-targets
+        env:
+          RUSTFLAGS: -D warnings
+      - run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  clap-validator:
+    name: clap-validator (every plugin)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: stave-plugins }
+      - uses: actions/checkout@v4
+        with: { repository: stave-dsp/stave, path: stave }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: stave-plugins }
+      - name: Install clap-validator
+        run: cargo install --locked --git https://github.com/free-audio/clap-validator.git clap-validator
+      - run: scripts/validate-formats.sh clap
+
+  vst3-validator:
+    # Steinberg's own validator (the SDK is MIT) against every plugin.
+    name: Steinberg VST3 validator (every plugin)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: stave-plugins }
+      - uses: actions/checkout@v4
+        with: { repository: stave-dsp/stave, path: stave }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: stave-plugins }
+      - name: Cache VST3 SDK build
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: stave-plugins/vst3sdk
+          key: vst3sdk-validator-${{ runner.os }}-v1
+      - name: Build Steinberg validator
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --recurse-submodules --shallow-submodules \
+            https://github.com/steinbergmedia/vst3sdk.git vst3sdk
+          cmake -S vst3sdk -B vst3sdk/build -DCMAKE_BUILD_TYPE=Release \
+            -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF \
+            -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+            -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=OFF
+          cmake --build vst3sdk/build --target validator -j3
+      - run: scripts/validate-formats.sh vst3
+        env:
+          VALIDATOR: vst3sdk/build/bin/Release/validator

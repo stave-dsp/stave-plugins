@@ -1,0 +1,25 @@
+[package]
+name = "stave-plugins-conformance"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cross-plugin conformance: plugin engines measured against the framework's alias, zipper, invariance and preset contracts."
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+stave-core.workspace = true
+stave-dsp.workspace = true
+stave-host.workspace = true
+stave-measure.workspace = true
+stave-anvil-vst3 = { path = "../plugins/anvil" }
+stave-forge-vst3 = { path = "../plugins/forge" }
+stave-multiband-comp-vst3 = { path = "../plugins/multiband-comp" }
+
+[lints]
+workspace = true
