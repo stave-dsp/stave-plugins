@@ -4,7 +4,7 @@
 
 use stave::prelude::*;
 
-use super::{glow, label, print, unlit, Anchor, Feed, SLOTS};
+use super::{glow, label, print, unlit, Feed, SLOTS};
 
 /// The window's screen width (its height is [`super::SCREEN_H`]).
 pub const W: f64 = 238.0;
@@ -65,7 +65,7 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let off = unlit(th);
 
     // MEMORY: the bank, cell by cell — held, and attended.
-    label(f, s, (r.x + PAD + grid_w() / 2.0, r.y + 18.0), "MEMORY", 0.6, Anchor::Middle);
+    label(f, s, (r.x + PAD + grid_w() / 2.0, r.y + 18.0), "MEMORY", 0.6, TextAlign::Center);
     for k in 0..SLOTS {
         let c = cell(r, k);
         if !feed.held(k) {
@@ -82,7 +82,7 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // HEARING: the query's twelve pitch classes, dimmed as what you play
     // turns percussive (harmony then counts for less); PULSE on a hit.
     let h0 = hear_slot(r, 0);
-    label(f, s, (h0.x - 10.0, r.y + 18.0), "HEARING", 0.6, Anchor::Start);
+    label(f, s, (h0.x - 10.0, r.y + 18.0), "HEARING", 0.6, TextAlign::Left);
     let p = pulse_at(r);
     let p = pt(p.0, p.1);
     s.solid(Path::circle(p, 2.2), super::amber(0.08));
@@ -98,12 +98,12 @@ pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
         if v > 0.02 {
             rect(s, Rect { w: slot.w * v, ..slot }, glow(th, (0.35 + 0.65 * v) * tonal));
         }
-        print(th, s, (slot.x - 4.0, slot.y + slot.h - 0.5), *note, 5.5, glow(th, 0.45), Anchor::End);
+        print(th, s, (slot.x - 4.0, slot.y + slot.h - 0.5), *note, 5.5, glow(th, 0.45), TextAlign::Right);
     }
 
     // RECALL (how loudly it remembers) and NOVELTY (how new this is).
     for (k, (value, name)) in [(feed.recalling, "RECALL"), (feed.novelty, "NOVELTY")].iter().enumerate() {
-        label(f, s, (r.x + PAD, r.y + STRIP_Y[k] + 2.5), *name, 0.75, Anchor::Start);
+        label(f, s, (r.x + PAD, r.y + STRIP_Y[k] + 2.5), *name, 0.75, TextAlign::Left);
         let e = value * STRIP_SEGS as f64;
         for seg in 0..STRIP_SEGS {
             let at = strip_segment(r, k, seg);

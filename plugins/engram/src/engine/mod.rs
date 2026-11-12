@@ -167,6 +167,8 @@ fn late_t60(a: &Anatomy, decay_s: f32, tone: f32) -> [f32; 3] {
 }
 
 /// The per-frame glides of the knobs the room hears sample by sample.
+#[derive(Smoothers)]
+#[smoothers(params = EngramParams)]
 struct Smoothers {
     size: Smoother,
     decay: Smoother,
@@ -174,25 +176,6 @@ struct Smoothers {
     recall: Smoother,
     mix: Smoother,
     output: Smoother,
-}
-
-impl Smoothers {
-    fn new(p: &EngramParams) -> Self {
-        Self {
-            size: Smoother::new(&p.size),
-            decay: Smoother::new(&p.decay),
-            tone: Smoother::new(&p.tone),
-            recall: Smoother::new(&p.recall),
-            mix: Smoother::new(&p.mix),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        for s in [&mut self.size, &mut self.decay, &mut self.tone, &mut self.recall, &mut self.mix, &mut self.output] {
-            s.prepare(env);
-        }
-    }
 }
 
 /// The sixteen drawn node positions, from the params.
@@ -469,13 +452,21 @@ impl Plugin for Engram {
         let frames = block.frames() as f32;
         self.aim_space(&p, frames);
 
-        let s = &mut self.smoothers;
-        let mut size_ramp = s.size.ramp(block, &p.size);
-        let mut decay_ramp = s.decay.ramp(block, &p.decay);
-        let mut tone_ramp = s.tone.ramp(block, &p.tone);
-        let mut recall_ramp = s.recall.ramp(block, &p.recall);
-        let mut mix_ramp = s.mix.ramp(block, &p.mix);
-        let mut out_ramp = s.output.ramp(block, &p.output);
+        let SmoothersRamps {
+
+            size: mut size_ramp,
+
+            decay: mut decay_ramp,
+
+            tone: mut tone_ramp,
+
+            recall: mut recall_ramp,
+
+            mix: mut mix_ramp,
+
+            output: mut out_ramp,
+
+        } = self.smoothers.ramp(block, &p);
         let (decim, inv, sr) = (self.decim, 1.0 / self.decim as f32, self.sample_rate);
         let (room, geometry, ear, bank) = (&mut self.room, &mut self.geometry, &mut self.ear, &mut self.bank);
         let (phase, acc, fade) = (&mut self.phase, &mut self.acc, &mut self.fade);
@@ -576,7 +567,6 @@ impl Plugin for Engram {
         crate::presets::presets(params)
     }
 }
-
 
 #[cfg(test)]
 mod diag {
@@ -736,7 +726,6 @@ mod calibration {
     }
 }
 
-
 #[cfg(test)]
 mod loudness {
     use stave_test::PluginHarness;
@@ -794,8 +783,6 @@ mod loudness {
         assert!(worst < 3.0, "a map point is {worst:.1} dB off the knobs' room");
     }
 }
-
-
 
 #[cfg(test)]
 mod band_balance {

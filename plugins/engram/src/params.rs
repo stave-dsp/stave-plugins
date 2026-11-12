@@ -112,7 +112,7 @@ impl Default for EngramParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             size: FloatParam::new(ParamId(3), "size", unit()).default(0.5)
                 .unit(Unit::Percent)
                 .group("Room")

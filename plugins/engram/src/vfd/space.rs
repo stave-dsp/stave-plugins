@@ -12,7 +12,7 @@ use stave::face::part::Bake;
 use stave::face::{leaf, Area, Gesture, Grab, Part};
 use stave::prelude::*;
 
-use super::{amber, glow, label, print, Anchor, Feed, SCREEN_H, SLOTS};
+use super::{amber, glow, label, print, Feed, SCREEN_H, SLOTS};
 use crate::engine::space_model::{FAMILIES, MAP_FAMILY, MAP_XY, NAMES, SPACES};
 use crate::EngramTaps;
 
@@ -97,9 +97,9 @@ impl Part for SpaceMap {
             cx.scene.solid(Path::circle(at(room(i)), 0.9), dot);
         }
         for &(x, y, name) in family_labels() {
-            print(th, cx.scene, self::at(m, (x, y)), name, 5.5, glow(th, 0.38), Anchor::Middle);
+            print(th, cx.scene, self::at(m, (x, y)), name, 5.5, glow(th, 0.38), TextAlign::Center);
         }
-        print(th, cx.scene, (sc.x + sc.w / 2.0, sc.y + 17.0), "SPACE  ·  CLICK A ROOM", 7.0, glow(th, 0.6), Anchor::Middle);
+        print(th, cx.scene, (sc.x + sc.w / 2.0, sc.y + 17.0), "SPACE  ·  CLICK A ROOM", 7.0, glow(th, 0.6), TextAlign::Center);
     }
 
     fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {
@@ -156,7 +156,7 @@ impl Part for SpaceMap {
         } else {
             "—".into()
         };
-        label(f, s, (sc.x + sc.w / 2.0, m.y + m.h + 18.0), line, 0.7, Anchor::Middle);
+        label(f, s, (sc.x + sc.w / 2.0, m.y + m.h + 18.0), line, 0.7, TextAlign::Center);
         glass_over(f, s, sc, RADIUS);
     }
 

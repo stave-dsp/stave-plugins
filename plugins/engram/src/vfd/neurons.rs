@@ -15,7 +15,7 @@ use stave::face::part::Bake;
 use stave::face::{leaf, Area, Gesture, Grab, Part};
 use stave::prelude::*;
 
-use super::{glow, print, Anchor, Feed, LINES, SCREEN_H};
+use super::{glow, print, Feed, LINES, SCREEN_H};
 use crate::{EngramTaps, FIELD_ASPECT};
 
 /// The window's screen width (its height is [`SCREEN_H`]).
@@ -102,8 +102,8 @@ impl Part for Network {
         let cross = Stroke::new(glow(th, 0.05), 0.8);
         cx.scene.stroke(Path::new().move_to(pt(fr.x, c.1)).line_to(pt(fr.x + fr.w, c.1)), cross);
         cx.scene.stroke(Path::new().move_to(pt(c.0, fr.y)).line_to(pt(c.0, fr.y + fr.h)), cross);
-        print(th, cx.scene, (sc.x + 12.0, sc.y + 17.0), "NEURONS", 7.0, glow(th, 0.6), Anchor::Start);
-        print(th, cx.scene, (sc.x + sc.w - 12.0, sc.y + 17.0), "DRAG A NEURON TO PLACE IT", 7.0, glow(th, 0.6), Anchor::End);
+        print(th, cx.scene, (sc.x + 12.0, sc.y + 17.0), "NEURONS", 7.0, glow(th, 0.6), TextAlign::Left);
+        print(th, cx.scene, (sc.x + sc.w - 12.0, sc.y + 17.0), "DRAG A NEURON TO PLACE IT", 7.0, glow(th, 0.6), TextAlign::Right);
     }
 
     fn paint(&self, r: Rect, f: &Frame<'_>, s: &mut Scene) {

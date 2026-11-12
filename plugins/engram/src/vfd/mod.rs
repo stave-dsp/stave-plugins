@@ -53,40 +53,15 @@ pub fn unlit(th: &Theme) -> Color {
     glow(th, 0.055)
 }
 
-/// Where a line of text sits on its anchor point.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Anchor {
-    /// The line starts at the anchor.
-    Start,
-    Middle,
-    /// The line ends at the anchor.
-    End,
-}
-
-/// Print `text` in the theme's caption face, `size` pt, anchored at
-/// `(x, y)`. The author API sets text centred on its anchor (`TextAlign`
-/// is stave-ui's, not reachable from `stave`), so a start- or
-/// end-anchored line is centred half an estimated width away.
-pub fn print(th: &Theme, s: &mut Scene, (x, y): (f64, f64), text: impl Into<String>, size: f64, color: Color, anchor: Anchor) {
-    let text = text.into();
-    let half = 0.5 * text_width(&text, size);
-    let x = match anchor {
-        Anchor::Start => x + half,
-        Anchor::Middle => x,
-        Anchor::End => x - half,
-    };
-    s.text_in(pt(x, y), text, size, color, th.typography.caption);
-}
-
-/// A line's estimated width: the caption face's tracked caps run about
-/// 0.68 em a glyph.
-fn text_width(text: &str, size: f64) -> f64 {
-    text.chars().count() as f64 * size * 0.68
+/// Print `text` in the theme's caption face, `size` pt, set `align` on
+/// its anchor `(x, y)`.
+pub fn print(th: &Theme, s: &mut Scene, (x, y): (f64, f64), text: impl Into<String>, size: f64, color: Color, align: TextAlign) {
+    s.text_in(pt(x, y), text, size, color, th.typography.caption.align(align));
 }
 
 /// A label printed in the glass (small tracked caps, in phosphor).
-pub fn label(f: &Frame<'_>, s: &mut Scene, at: (f64, f64), text: impl Into<String>, a: f64, anchor: Anchor) {
-    print(f.theme, s, at, text, 7.0, glow(f.theme, a), anchor);
+pub fn label(f: &Frame<'_>, s: &mut Scene, at: (f64, f64), text: impl Into<String>, a: f64, align: TextAlign) {
+    print(f.theme, s, at, text, 7.0, glow(f.theme, a), align);
 }
 
 /// The display's decoded feed.
