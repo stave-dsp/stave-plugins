@@ -82,7 +82,7 @@ impl Default for HeirloomParams {
                 .unit(Unit::Db)
                 .group("Output")
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            bypass: BoolParam::bypass(ParamId(2), "bypass").group("Output"),
             time: FloatParam::new(ParamId(3), "time", Range::log(50.0, 1200.0))
                 .default(450.0)
                 .unit(Unit::Ms)

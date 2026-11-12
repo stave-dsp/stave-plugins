@@ -178,9 +178,8 @@ fn draw_record(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     s.solid(Path::circle(pivot, 9.0), rgb(0xB8B3AA, 1.0));
     s.solid(Path::circle(pivot, 2.5), rgb(0x2A2826, 1.0));
 
-    // 33⅓ in the screen's phosphor.
-    // (Flush left as a `Title` sets: the face API names no alignment.)
+    // 33⅓ in the screen's phosphor, flush left.
     let ty = &f.theme.typography;
-    let caption = ty.caption.align(Title::new("").align);
+    let caption = ty.caption.align(TextAlign::Left);
     s.text_in(pt(r.x + 12.0, r.y + 18.0), "33⅓", ty.caption_size, f.theme.palette.phosphor, caption);
 }

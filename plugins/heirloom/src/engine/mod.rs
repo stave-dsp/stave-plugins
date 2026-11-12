@@ -72,6 +72,8 @@ fn tone_of_age(age: f32) -> f32 {
 }
 
 /// One `Smoother` per gliding knob.
+#[derive(Smoothers)]
+#[smoothers(params = HeirloomParams)]
 struct Controls {
     time: Smoother,
     repeats: Smoother,
@@ -80,34 +82,6 @@ struct Controls {
     rpm: Smoother,
     age: Smoother,
     output: Smoother,
-}
-
-impl Controls {
-    fn new(p: &HeirloomParams) -> Self {
-        Self {
-            time: Smoother::new(&p.time),
-            repeats: Smoother::new(&p.repeats),
-            mix: Smoother::new(&p.mix),
-            wobble: Smoother::new(&p.wobble),
-            rpm: Smoother::new(&p.rpm),
-            age: Smoother::new(&p.age),
-            output: Smoother::new(&p.output),
-        }
-    }
-
-    fn prepare(&mut self, env: &Environment) {
-        for s in [
-            &mut self.time,
-            &mut self.repeats,
-            &mut self.mix,
-            &mut self.wobble,
-            &mut self.rpm,
-            &mut self.age,
-            &mut self.output,
-        ] {
-            s.prepare(env);
-        }
-    }
 }
 
 /// The plugin: saga's clock and programs, the wet stage, the record.
@@ -199,14 +173,15 @@ impl Plugin for Heirloom {
         self.media.begin_block(p.age.value(), wear);
 
         // 2. The audio block.
-        let c = &mut self.controls;
-        let mut time_ramp = c.time.ramp(block, &p.time);
-        let mut repeats_ramp = c.repeats.ramp(block, &p.repeats);
-        let mut mix_ramp = c.mix.ramp(block, &p.mix);
-        let mut wobble_ramp = c.wobble.ramp(block, &p.wobble);
-        let mut rpm_ramp = c.rpm.ramp(block, &p.rpm);
-        let mut age_ramp = c.age.ramp(block, &p.age);
-        let mut out_ramp = c.output.ramp(block, &p.output);
+        let ControlsRamps {
+            time: mut time_ramp,
+            repeats: mut repeats_ramp,
+            mix: mut mix_ramp,
+            wobble: mut wobble_ramp,
+            rpm: mut rpm_ramp,
+            age: mut age_ramp,
+            output: mut out_ramp,
+        } = self.controls.ramp(block, p);
         let fade_step = 1000.0 / (SWITCH_FADE_MS * self.sample_rate);
         let (motion, clock, programs, wet, media) =
             (&mut self.motion, &mut self.clock, &mut self.programs, &mut self.wet, &mut self.media);
