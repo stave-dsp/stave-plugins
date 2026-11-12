@@ -8,7 +8,8 @@ slow-timeout = { period = "10s", terminate-after = 12 }
 [[profile.default.overrides]]
 filter = '''
     (package(stave-engram-vst3) & (test(/^the_map_/) | test(memory_steers) | test(loudness::) | test(calibration::)))
-    | (package(stave-vault-vst3) & (test(=the_scoreboard) | test(=every_machine_passes_the_metal_meter)))
+    | (package(stave-vault-vst3) & (test(=the_scoreboard) | test(=every_machine_passes_the_metal_meter)
+        | test(=materials_keep_their_promises) | test(=the_band_report)))
     | (package(stave-anvil-vst3) & test(=gain_buys_dirt_not_silence))
     | (package(stave-forge-vst3) & test(=voices_place_energy_differently))
 '''

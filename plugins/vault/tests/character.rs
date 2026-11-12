@@ -12,7 +12,7 @@
 //!   plate's chirp, measured as band onset spread.
 
 mod common;
-use common::{harness, render, run};
+use common::{harness, render, run, side_by_side};
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -103,7 +103,7 @@ const BANDS: [(f32, f32, &str); 6] = [
 #[test]
 fn the_band_report() {
     println!("\n  config                63    125    250    500   1-2k   4-8k  (T30 s)");
-    for (name, set, secs) in [
+    let configs = [
         (
             "ROOM-S plaster",
             vec![
@@ -149,12 +149,18 @@ fn the_band_report() {
             ],
             5.0,
         ),
-    ] {
-        let out = render(&set, &impulse(), (secs * f64::from(FS)) as usize / BLOCK);
+    ];
+    // The four renders run side by side (.config/nextest.toml gives
+    // this test the cores); the rows print in order.
+    let rows = side_by_side(&configs, |(name, set, secs)| {
+        let out = render(set, &impulse(), (secs * f64::from(FS)) as usize / BLOCK);
         let mut row = format!("  {name:<20}");
         for (lo, hi, _) in BANDS {
             row += &format!(" {:>6.2}", band_t30(&band(&out, lo, hi)));
         }
+        row
+    });
+    for row in rows {
         println!("{row}");
     }
 }
@@ -281,12 +287,15 @@ fn materials_keep_their_promises() {
         let hi = band_t30(&band(&out, 2_828.0, 11_314.0));
         (low, hi)
     };
-    let (pl_low, pl_hi) = ratios(1.0);
+    // Every material's render side by side (.config/nextest.toml gives
+    // this test the cores); index 1 is plaster, the baseline.
+    let measured = side_by_side(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], |&mat| ratios(mat));
+    let (pl_low, pl_hi) = measured[1];
     for (i, (bass_mult, hi_mult, name)) in DECL.iter().enumerate() {
         if i == 1 {
             continue;
         }
-        let (low, hi) = ratios(i as f64);
+        let (low, hi) = measured[i];
         // Each band normalized to PLASTER'S SAME BAND — the
         // declaration means "this material's 125 Hz decay vs the
         // baseline's" (a ratio-to-own-mid confounds: drape's
