@@ -29,7 +29,6 @@ use stave::dsp::{
     hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Osc, Steal, Voice, VoiceEvent, VoiceRack, Waveform,
 };
-use stave::params::Watch;
 use stave::prelude::*;
 
 use crate::params::{ChimeParams, LfoTrig, Shape};
@@ -185,7 +184,7 @@ impl Voice for ChimeVoice {
         } else {
             1.0
         };
-        let y = self.osc.tick(0.0) * self.env.tick(0.0) * self.sources.velocity * g;
+        let y = self.osc.next() * self.env.next() * self.sources.velocity * g;
         (y, y)
     }
 }
