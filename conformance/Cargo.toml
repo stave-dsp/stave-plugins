@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Cross-plugin conformance: every plugin's identity pinned, and plugin engines measured against the framework's alias, zipper, invariance and preset contracts."
 publish = false
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
