@@ -1,13 +1,8 @@
 //! Chime's typed parameter table. Ids are FOREVER — pick once,
 //! never reuse or renumber.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, RouteParams, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
+use stave::route::RouteParams;
 
 param_enum! {
     /// The oscillator's shape — pure sine, or the polyBLEP saw.
@@ -84,47 +79,49 @@ pub struct ChimeParams {
     pub bypass: BoolParam,
 }
 
-impl ChimeParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            attack: FloatParam::new(1, "attack", 5.0, Range::new(0.5, 2_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            decay: FloatParam::new(2, "decay", 800.0, Range::new(1.0, 4_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            sustain: FloatParam::new(3, "sustain", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            release: FloatParam::new(4, "release", 1_200.0, Range::new(2.0, 8_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            shape: EnumParam::new(5, "shape", Shape(0)).with_group("Voice"),
-            lfo_rate: FloatParam::new(8, "lfo rate", 1.2, Range::new(0.05, 12.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo_shape: EnumParam::new(9, "lfo shape", LfoShapeP(0)).with_group("Mod"),
-            lfo_sync: EnumParam::new(10, "lfo sync", LfoSync(0)).with_group("Mod"),
-            lfo_rise: FloatParam::new(18, "lfo rise", 0.0, Range::new(0.0, 2_000.0, Taper::Linear))
-                .with_unit(Unit::Ms)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo_trig: EnumParam::new(19, "lfo trig", LfoTrig(0)).with_group("Mod"),
-            routes: core::array::from_fn(|i| RouteParams::new(10 * (i as u32 + 1), i + 1, "Mod")),
-            output: FloatParam::new(6, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(7, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-        })
+impl Default for ChimeParams {
+    fn default() -> Self {
+        Self {
+            attack: FloatParam::new(ParamId(1), "attack", Range::log(0.5, 2_000.0))
+                .default(5.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            decay: FloatParam::new(ParamId(2), "decay", Range::log(1.0, 4_000.0))
+                .default(800.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            sustain: FloatParam::new(ParamId(3), "sustain", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            release: FloatParam::new(ParamId(4), "release", Range::log(2.0, 8_000.0))
+                .default(1_200.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            shape: EnumParam::new(ParamId(5), "shape", Shape(0)).group("Voice"),
+            lfo_rate: FloatParam::new(ParamId(8), "lfo rate", Range::log(0.05, 12.0))
+                .default(1.2)
+                .unit(Unit::Hz)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo_shape: EnumParam::new(ParamId(9), "lfo shape", LfoShapeP(0)).group("Mod"),
+            lfo_sync: EnumParam::new(ParamId(10), "lfo sync", LfoSync(0)).group("Mod"),
+            lfo_rise: FloatParam::new(ParamId(18), "lfo rise", Range::linear(0.0, 2_000.0))
+                .default(0.0)
+                .unit(Unit::Ms)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo_trig: EnumParam::new(ParamId(19), "lfo trig", LfoTrig(0)).group("Mod"),
+            routes: core::array::from_fn(|i| RouteParams::new(ParamId(10 * (i as u32 + 1)), i + 1, "Mod")),
+            output: FloatParam::new(ParamId(6), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(7)).group("Output"),
+        }
     }
 }

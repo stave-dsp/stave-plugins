@@ -7,7 +7,7 @@
 //! TABLE and TARGET arms. Application (the ~5 ms glides) lives
 //! with the voice.
 
-use stave_dsp::RouteSlot;
+use stave::dsp::RouteSlot;
 
 /// Modulation displacement bounds — the DECLARED target semantics.
 pub(super) const PITCH_RANGE_ST: f32 = 12.0;

@@ -9,16 +9,14 @@
 //! * RELEASE rings then dies at the dialed τ;
 //! * the pool never exceeds MAX and a 17th note still sounds.
 
-use std::sync::Arc;
-
-use stave_core::{
-    AudioBuffer, DebugBus, Event, EventKind, NoteEvent, NoteKind, Plugin, ProcessCtx,
-};
+use stave::{Event, EventKind, NoteEvent, NoteKind};
+use stave_chime_vst3::Chime;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
-fn note(frame: u32, on: bool, key: i16, vel: f64, id: i32) -> Event {
+fn note(frame: usize, on: bool, key: i16, vel: f64, id: i32) -> Event {
     Event {
         frame,
         kind: EventKind::Note(NoteEvent {
@@ -34,44 +32,20 @@ fn note(frame: u32, on: bool, key: i16, vel: f64, id: i32) -> Event {
 /// Render `blocks` blocks; `events` are (block_index, event) —
 /// delivered to that block with their intra-block frame offsets.
 fn render(set: &[(&str, f64)], events: &[(usize, Event)], blocks: usize) -> Vec<f32> {
-    let mut plugin = stave_chime_vst3::Chime::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Chime>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let mut out = Vec::with_capacity(blocks * BLOCK);
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
     for b in 0..blocks {
         let evs: Vec<Event> = events
             .iter()
             .filter(|(eb, _)| *eb == b)
             .map(|(_, e)| *e)
             .collect();
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let mut in_ptrs: [*mut f32; 0] = [];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [] as [&mut [f32]; 0], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &evs,
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
+        h.process(&evs);
+        out.extend_from_slice(&h.outputs()[0]);
     }
-    let _ = Arc::strong_count(&bus);
     out
 }
 

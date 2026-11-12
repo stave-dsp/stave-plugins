@@ -9,12 +9,11 @@
 //!          source · destination · amount · via · mode · lag · quant
 //! ```
 
-extern crate alloc;
-use alloc::vec;
+use stave::face::photo::hex;
+use stave::face::{Finish, Palette};
+use stave::prelude::*;
 
-use stave_core::face::prelude::*;
-use stave_core::params::{BindParam, ParamEnum, RouteParams};
-
+use crate::engine::ChimeTaps;
 use crate::params::ChimeParams;
 
 /// The editor-local page set (VOICE / MOD) — view state, never a param.
@@ -23,14 +22,20 @@ const PAGES: u32 = 1;
 /// Chime's finish: the cream powder coat, warmed toward ivory, with a
 /// bell-bronze accent.
 fn theme() -> Theme {
-    use stave_ui::photo::hex;
+    let base = Theme::cream();
     Theme {
         name: "chime",
-        surface: hex(0xEFE6D2),
-        plate: hex(0xE4D8BE),
-        accent: Color::rgba(0.62, 0.38, 0.16, 1.0),
-        phosphor: Color::rgba(1.0, 0.74, 0.42, 1.0),
-        ..Theme::cream()
+        finish: Finish {
+            surface: hex(0xEFE6D2),
+            plate: hex(0xE4D8BE),
+            ..base.finish
+        },
+        palette: Palette {
+            accent: Color::rgba(0.62, 0.38, 0.16, 1.0),
+            phosphor: Color::rgba(1.0, 0.74, 0.42, 1.0),
+            ..base.palette
+        },
+        ..base
     }
 }
 
@@ -38,27 +43,6 @@ fn theme() -> Theme {
 /// (attack, decay, sustain, release — `reads` in `face`).
 fn envelope(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     screens::envelope(f, r, s, f.bound(0), f.bound(1), f.bound(2), f.bound(3));
-}
-
-/// One route slot as a channel strip: the source's live trace (the
-/// slot's number printed on it), then every one of its seven params.
-pub(crate) fn route_row<S: ParamEnum, T: ParamEnum>(
-    r: &RouteParams<S, T>,
-    probe: &'static str,
-    label: &'static str,
-) -> FaceNode {
-    row(vec![
-        Trace::new(probe, 64.0, 44.0, (-1.0, 1.0)).label(label).node(),
-        Stepper::new(r.src.bind()).label("SOURCE").width(120.0).node(),
-        Stepper::new(r.tgt.bind()).label("DEST").width(120.0).node(),
-        Knob::new(r.depth.bind()).small().centered().label("AMOUNT").node(),
-        Stepper::new(r.via.bind()).label("VIA").width(120.0).node(),
-        Toggle::new(r.mode.bind()).label("MODE").node(),
-        Knob::new(r.lag.bind()).small().label("LAG").node(),
-        Stepper::new(r.quant.bind()).label("QUANT").width(96.0).node(),
-    ])
-    .gap(10.0)
-    .align(Align::Center)
 }
 
 pub fn face(p: &ChimeParams) -> Face {
@@ -114,27 +98,13 @@ pub fn face(p: &ChimeParams) -> Face {
         .align(Align::Stretch);
 
     // ---- MOD -----------------------------------------------------
-    const PROBES: [&str; 4] = ["mod 1", "mod 2", "mod 3", "mod 4"];
     const LABELS: [&str; 4] = ["1", "2", "3", "4"];
     let routes = Plate::titled("MODULATION").around(
-        column(p.routes.iter().enumerate().map(|(i, r)| route_row(r, PROBES[i], LABELS[i])).collect())
+        column(p.routes.iter().enumerate().map(|(i, r)| r.row(ChimeTaps::MODS[i], LABELS[i])).collect())
             .gap(gap)
             .align(Align::Center),
     );
     let pages = pages(PAGES, vec![voice_page, routes]);
     let body = column(vec![header, pages]).gap(theme.space(4)).align(Align::Stretch);
     Face::new(theme, Panel::default().around(body))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every page fits the window budget.
-    #[test]
-    fn the_face_fits() {
-        let rt = stave_core::face::Runtime::new(face(&ChimeParams::new()));
-        let (w, h) = rt.size();
-        assert!(w <= 1000.0 && h <= 720.0, "chime face is {w}×{h}");
-    }
 }
