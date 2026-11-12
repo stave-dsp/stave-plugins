@@ -1,4 +1,5 @@
-//! The dynamo ENGINE — sixteen [`DynamoVoice`]s under a
+//! The dynamo ENGINE — [`Dynamo`], the plugin: sixteen
+//! [`DynamoVoice`]s under a
 //! quietest-steal [`VoiceRack`] (the Voice form's first shipping
 //! consumer). The engine's own job is exactly the
 //! BRIDGE the form's layering law prescribes: host note events →
@@ -25,18 +26,14 @@
 //! * SYMP — the OTHER voices' energy bleeding in (sympathetic
 //!   strings; a lone voice hears none).
 
-extern crate alloc;
-use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
-use stave_dsp::Xorshift32;
 
-use stave_core::debug::Tap;
-use stave_core::params::{ContinuousControl, Watch};
-use stave_core::{DebugBus, Environment, EventCursor, EventKind, ProcessCtx, Tail};
-use stave_dsp::{
-    db_to_amp, hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble,
-    ModLfo, ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack,
+use stave::dsp::{
+    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
+    ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack, Xorshift32,
 };
+use stave::params::Watch;
+use stave::prelude::*;
 
 mod rotor;
 mod wire;
@@ -46,6 +43,9 @@ use wire::Wire;
 use crate::params::DynamoParams;
 
 const MAX_VOICES: usize = 16;
+
+/// Every voice's machine-noise generator starts from here.
+const NOISE_SEED: u32 = 0x51DE_CA57;
 
 /// Voice-sum headroom: −12 dB per voice, so a four-voice fortissimo
 /// chord sums to unity and a full 16-voice storm stays inside +12
@@ -74,6 +74,9 @@ pub struct DynamoVoice {
     /// Machine noise into the wires (arcing + bearing).
     grit: f32,
     noise_rng: Xorshift32,
+    /// The seed of this voice's per-note randoms (SPREAD): `reset`
+    /// re-draws from it, so a reset machine plays as it did fresh.
+    seed: u32,
     /// FORCE: how hard the machine is driven (macro; 0.5 = unity).
     force: f32,
     /// Key held? The escapement engages only while held (an EBow
@@ -163,7 +166,8 @@ impl DynamoVoice {
             strike_gate: 0.0,
             strike_decay: 0.999,
             grit: 0.15,
-            noise_rng: Xorshift32::new(0x51DE_CA57),
+            noise_rng: Xorshift32::new(NOISE_SEED),
+            seed: 0x9E37_79B9,
             force: 0.5,
             held: false,
             life: (0.0, 0.0, 0.0, 0.0, 0.0),
@@ -216,6 +220,7 @@ impl DynamoVoice {
 
     fn with_seed(seed: u32, bridge: Arc<AtomicU32>) -> Self {
         let mut v = Self::new(bridge);
+        v.seed = seed;
         v.sources = NoteSources::new(seed);
         v
     }
@@ -234,9 +239,9 @@ impl DynamoVoice {
         }
     }
 
-    fn set_env(&mut self, env: AdsrConfig, sr: f32) {
+    fn set_env(&mut self, env: AdsrConfig) {
         self.base_env = env;
-        self.env.set(&self.scaled_env(), sr);
+        self.env.set(&self.scaled_env());
     }
 
     /// The MACHINE's build sheet — applied EVERY BLOCK (macros
@@ -328,7 +333,7 @@ impl DynamoVoice {
         let scale = d.decay_oct.exp2();
         if (scale - self.decay_scale).abs() > 1e-3 {
             self.decay_scale = scale;
-            self.env.set(&self.scaled_env(), self.sr);
+            self.env.set(&self.scaled_env());
         }
     }
 }
@@ -337,14 +342,22 @@ impl Voice for DynamoVoice {
     fn prepare(&mut self, sample_rate: f32) {
         self.sr = sample_rate;
         // ~5 ms displacement glide (block-rate targets, no zipper).
-        self.glide = 1.0 - (-1.0 / (0.005 * sample_rate)).exp();
-        self.voiced = false;
-        self.wire_voicing = (f32::NAN, f32::NAN);
+        self.glide = tau_coeff(0.005, sample_rate);
+        self.env.prepare(sample_rate);
         self.wires[0].prepare(sample_rate);
         self.wires[1].prepare(sample_rate);
         self.reset();
     }
     fn reset(&mut self) {
+        // Everything a note leaves behind goes, down to the noise and
+        // spread draws: a reset machine plays exactly as it did fresh.
+        self.voiced = false;
+        self.wire_voicing = (f32::NAN, f32::NAN);
+        self.noise_rng = Xorshift32::new(NOISE_SEED);
+        self.sources = NoteSources::new(self.seed);
+        self.lags = [0.0; matrix::SLOTS];
+        self.decay_scale = 1.0;
+        self.env.set(&self.base_env);
         self.env.reset();
         self.rotor.reset();
         self.wires[0].reset();
@@ -465,7 +478,7 @@ impl Voice for DynamoVoice {
         // rings on after the note ends. HOW the exciter touches the
         // wire is the contact mode — a machine that never lets go
         // is a supersaw; one that strikes and listens is not.
-        let env = self.env.tick();
+        let env = self.env.tick(0.0);
         let gate = match self.contact {
             1 => {
                 // STRIKE: ~20 ms of contact, then the body sings.
@@ -622,13 +635,67 @@ impl Voice for DynamoVoice {
     }
 }
 
-pub struct DynamoEngine {
+/// The machine's telemetry: per-slot live SOURCE values (the route
+/// rows' traces — per-voice sources publish the most recent note's
+/// value, the ring dances to what you just played, the Vital feel),
+/// then the DIAGRAM's spin, shaft, glow, boiler and bridge rail.
+#[derive(Taps)]
+pub struct DynamoTaps {
+    pub mod_1: Tap,
+    pub mod_2: Tap,
+    pub mod_3: Tap,
+    pub mod_4: Tap,
+    pub mod_5: Tap,
+    pub mod_6: Tap,
+    pub mod_7: Tap,
+    pub mod_8: Tap,
+    pub mod_9: Tap,
+    pub mod_10: Tap,
+    pub spin: Tap,
+    pub shaft: Tap,
+    pub glow: Tap,
+    pub boiler: Tap,
+    pub rail: Tap,
+}
+
+impl DynamoTaps {
+    /// The route rows' taps, slot order.
+    pub const MODS: [TapId; matrix::SLOTS] = [
+        Self::MOD_1,
+        Self::MOD_2,
+        Self::MOD_3,
+        Self::MOD_4,
+        Self::MOD_5,
+        Self::MOD_6,
+        Self::MOD_7,
+        Self::MOD_8,
+        Self::MOD_9,
+        Self::MOD_10,
+    ];
+
+    fn mods(&self) -> [&Tap; matrix::SLOTS] {
+        [
+            &self.mod_1,
+            &self.mod_2,
+            &self.mod_3,
+            &self.mod_4,
+            &self.mod_5,
+            &self.mod_6,
+            &self.mod_7,
+            &self.mod_8,
+            &self.mod_9,
+            &self.mod_10,
+        ]
+    }
+}
+
+pub struct Dynamo {
     params: Arc<DynamoParams>,
-    output_control: ContinuousControl,
+    output: Smoother,
     sr: f32,
     rack: VoiceRack<DynamoVoice, MAX_VOICES>,
     /// Envelope + shape re-voice only when a knob moved. Reset in
-    /// activate — the ACTIVATION LAW (a re-prepare wipes what the
+    /// prepare — the ACTIVATION LAW (a re-prepare wipes what the
     /// params can't see).
     voicing: Watch<4>,
     /// The matrix clock (global source; per-voice sources live in
@@ -644,25 +711,34 @@ pub struct DynamoEngine {
     global_lags: [f32; matrix::SLOTS],
     /// THE BRIDGE rail (shared with every voice).
     bridge_rail: Arc<AtomicU32>,
-    /// The rings' feed: per-slot live SOURCE values, as
-    /// DECLARED taps. Per-voice sources publish the most
-    /// recent note's value — the ring dances to what you just
-    /// played, the Vital feel.
-    bus: Option<Arc<DebugBus>>,
-    mod_taps: [Tap; 10],
-    /// The DIAGRAM's telemetry: spin, shaft, glow, boiler,
-    /// bridge — the machine seen.
-    machine_taps: [Tap; 5],
+    taps: DynamoTaps,
 }
 
-impl stave_core::Processor for DynamoEngine {
+impl Plugin for Dynamo {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.dynamo.vst3",
+        name: "Stave Dynamo",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "The impossible machine: rotor, wires with memory, shared bridge and boiler.",
+        features: &[Feature::Instrument, Feature::Synthesizer, Feature::Stereo],
+        ..Info::INSTRUMENT
+    };
+    /// An instrument: no audio in, stereo out — stated.
+    const LAYOUTS: &'static [Layout] = &[Layout::INSTRUMENT];
     type Params = DynamoParams;
 
-    fn new(params: Arc<DynamoParams>) -> Self {
+    fn new(params: &Arc<DynamoParams>, telemetry: &Telemetry) -> Self {
         let bridge_rail: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+        let taps = DynamoTaps::new(telemetry);
+        // The diagram's resting state, published before the face
+        // mounts (a picture needs its taps at birth, not after the
+        // first block): idle is at speed, the boiler full.
+        taps.spin.set(1.0);
+        taps.boiler.set(1.0);
         Self {
-            output_control: ContinuousControl::new(&params.output),
-            params,
+            output: Smoother::new(&params.output),
+            params: params.clone(),
             sr: 48_000.0,
             rack: {
                 let bridge = bridge_rail.clone();
@@ -680,49 +756,16 @@ impl stave_core::Processor for DynamoEngine {
             hum_phase: 0.0,
             global_lags: [0.0; matrix::SLOTS],
             bridge_rail,
-            bus: None,
-            mod_taps: [
-                Tap::new("mod 1"),
-                Tap::new("mod 2"),
-                Tap::new("mod 3"),
-                Tap::new("mod 4"),
-                Tap::new("mod 5"),
-                Tap::new("mod 6"),
-                Tap::new("mod 7"),
-                Tap::new("mod 8"),
-                Tap::new("mod 9"),
-                Tap::new("mod 10"),
-            ],
-            machine_taps: [
-                Tap::new("spin"),
-                Tap::new("shaft"),
-                Tap::new("glow"),
-                Tap::new("boiler"),
-                Tap::new("rail"),
-            ],
+            taps,
         }
     }
 
-    fn attach_telemetry(&mut self, bus: Arc<DebugBus>) {
-        // Register the diagram's probes BEFORE the editor mounts:
-        // a Scene binds its probes at mount time, and the first
-        // process() block may come after (the rings learned this
-        // lazily; a picture needs them at birth).
-        self.machine_taps[0].set(&bus, 1.0); // spin: idle = at speed
-        self.machine_taps[1].set(&bus, 0.0); // shaft
-        self.machine_taps[2].set(&bus, 0.0); // glow
-        self.machine_taps[3].set(&bus, 1.0); // boiler: full
-        self.machine_taps[4].set(&bus, 0.0); // rail
-        self.bus = Some(bus);
-    }
-
-    fn activate(&mut self, env: Environment) {
-        let rate = f64::from(env.sample_rate);
-        self.output_control.prepare(rate, &self.params.output);
+    fn prepare(&mut self, env: &Environment) {
+        self.output.prepare(env);
         self.sr = env.sample_rate;
         self.rack.prepare(env.sample_rate);
-        self.lfo
-            .prepare(env.sample_rate, self.params.lfo_rate.value());
+        self.lfo.prepare(env.sample_rate);
+        self.lfo.reset();
         self.ensemble.reset();
         self.pressure = 1.0;
         self.global_lags = [0.0; matrix::SLOTS];
@@ -740,10 +783,10 @@ impl stave_core::Processor for DynamoEngine {
         self.hum_phase = 0.0;
         self.global_lags = [0.0; matrix::SLOTS];
         self.bridge_rail.store(0, AtomicOrdering::Relaxed);
-        self.lfo.prepare(self.sr, self.params.lfo_rate.value());
+        self.lfo.reset();
     }
 
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
+    fn process(&mut self, block: &mut Block<'_>) {
         let p = self.params.clone();
         // 1. Param changes become structure.
         if self
@@ -756,24 +799,25 @@ impl stave_core::Processor for DynamoEngine {
                 sustain: p.sustain.value(),
                 release_ms: p.release.value(),
             };
-            let sr = self.sr;
             for v in self.rack.voices_mut() {
-                v.set_env(env, sr);
+                v.set_env(env);
             }
         }
 
         // 1b. The matrix: snapshot the route params (7 per slot),
         //     advance the global clocks, then evaluate per voice.
-        let block_s = ctx.frames as f32 / self.sr;
-        let tempo = ctx
-            .transport
-            .as_ref()
+        let frames = block.frames();
+        let block_s = frames as f32 / self.sr;
+        let tempo = block
+            .transport()
             .and_then(|t| t.tempo_bpm)
             .unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.index(), tempo);
-        self.lfo
-            .set(hz, ModLfoShape::from_index(p.lfo_shape.index()), self.sr);
-        let global_lfo = self.lfo.advance(ctx.frames);
+        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        self.lfo.set(
+            hz,
+            ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize),
+        );
+        let global_lfo = self.lfo.tick_frames(frames);
         self.ensemble.leak(block_s);
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
@@ -809,10 +853,16 @@ impl stave_core::Processor for DynamoEngine {
         // The machine's build sheet, applied EVERY block (macros
         // are live; setters are cheap and idempotent).
         {
-            let poles = rotor::POLE_COUNTS[p.poles.index().min(6)];
-            let wheel = rotor::WHEEL_BITS[p.wheel.index().min(7)];
+            let poles = rotor::POLE_COUNTS[(p.poles.value().to_index() as usize).min(6)];
+            let wheel = rotor::WHEEL_BITS[(p.wheel.value().to_index() as usize).min(7)];
             let wires = (p.ring.value(), p.stiff.value(), memory, p.width.value());
-            let touch = (p.contact.index(), p.grit.value(), couple, chaos, force);
+            let touch = (
+                p.contact.value().to_index() as usize,
+                p.grit.value(),
+                couple,
+                chaos,
+                force,
+            );
             let sr = self.sr;
             // One supply, one hum: the master phase advances per
             // block; voices integrate the same increment locally,
@@ -820,7 +870,7 @@ impl stave_core::Processor for DynamoEngine {
             let hum_inc = core::f32::consts::TAU * 53.0 / sr;
             let hum_phase = self.hum_phase;
             self.hum_phase =
-                (self.hum_phase + hum_inc * ctx.frames as f32) % core::f32::consts::TAU;
+                (self.hum_phase + hum_inc * frames as f32) % core::f32::consts::TAU;
             let life = (
                 p.hum.value(),
                 p.bearing.value(),
@@ -837,7 +887,7 @@ impl stave_core::Processor for DynamoEngine {
         }
         if routes.any() {
             let rise_ms = p.lfo_rise.value();
-            let note_trig = p.lfo_trig.index() == 1;
+            let note_trig = p.lfo_trig.value() == crate::params::LfoTrig(1);
             let ensemble = &self.ensemble;
             let sr = self.sr;
             let lfo = &self.lfo;
@@ -861,7 +911,7 @@ impl stave_core::Processor for DynamoEngine {
                 v.apply_routes(&routes, &sv);
             }
         }
-        if let Some(bus) = &self.bus {
+        if self.taps.spin.is_attached() {
             // THE DIAGRAM's telemetry: the machine, seen. The
             // showcase voice is the loudest living one.
             let mut spin = 1.0f32;
@@ -878,12 +928,12 @@ impl stave_core::Processor for DynamoEngine {
                     shaft = v.rotor.shaft();
                 }
             }
-            self.machine_taps[0].set(bus, f64::from(spin));
-            self.machine_taps[1].set(bus, f64::from(shaft));
-            self.machine_taps[2].set(bus, f64::from((glow * 0.6).clamp(0.0, 1.0)));
-            self.machine_taps[3].set(bus, f64::from(self.pressure));
+            self.taps.spin.set(f64::from(spin));
+            self.taps.shaft.set(f64::from(shaft));
+            self.taps.glow.set(f64::from((glow * 0.6).clamp(0.0, 1.0)));
+            self.taps.boiler.set(f64::from(self.pressure));
             let rail = f32::from_bits(self.bridge_rail.load(AtomicOrdering::Relaxed)).abs();
-            self.machine_taps[4].set(bus, f64::from(rail.min(1.0)));
+            self.taps.rail.set(f64::from(rail.min(1.0)));
             // The rings' feed: each slot's live SOURCE value (±1).
             // Per-voice sources publish the most recent note's or an
             // ensemble view — the ring is an indicator, not a meter.
@@ -892,21 +942,19 @@ impl stave_core::Processor for DynamoEngine {
                 total_level += v.level();
             }
             let shown = self.ensemble.sources(global_lfo, total_level);
-            for (i, slot) in routes.slots.iter().enumerate() {
-                let value = slot.source(&shown).unwrap_or(0.0);
-                self.mod_taps[i].set(bus, f64::from(value));
+            for (slot, tap) in routes.slots.iter().zip(self.taps.mods()) {
+                tap.set(f64::from(slot.source(&shown).unwrap_or(0.0)));
             }
         }
 
         // 2. The audio block: the BRIDGE (host events → VoiceEvent,
         //    at their frame offsets) around the rack's tick.
-        let mut out_ramp = self.output_control.begin_block(ctx.params, &p.output);
+        let mut out_ramp = self.output.ramp(block, &p.output);
         let bridge_rail = self.bridge_rail.clone();
         let rack = &mut self.rack;
-        let mut notes = EventCursor::new(ctx.events);
+        let mut notes = EventCursor::new(block.events());
         let ensemble = &mut self.ensemble;
-        let lanes = ctx.lanes::<2>();
-        lanes.run(|fr| {
+        block.lanes::<2>().run(|fr| {
             for event in notes.due(fr.index()) {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
@@ -921,14 +969,10 @@ impl stave_core::Processor for DynamoEngine {
             // clipped (the nonlinear junction), read next sample.
             let sum = 0.5 * (l + r);
             let rail = sum / (1.0 + sum.abs());
-            bridge_rail.store(rail.to_bits(), core::sync::atomic::Ordering::Relaxed);
+            bridge_rail.store(rail.to_bits(), AtomicOrdering::Relaxed);
             fr.write(0, l * g);
             fr.write(1, r * g);
         });
-    }
-
-    fn latency_samples(&self) -> u32 {
-        0
     }
 
     /// Honest from the knobs: the longest a released note can ring
@@ -936,5 +980,9 @@ impl stave_core::Processor for DynamoEngine {
     fn tail(&self) -> Tail {
         let r_s = self.params.release.value() * 0.001 * 9.3;
         Tail::Samples((r_s * self.sr) as u32)
+    }
+
+    fn face(params: &DynamoParams) -> Option<Face> {
+        Some(crate::editor::face(params))
     }
 }

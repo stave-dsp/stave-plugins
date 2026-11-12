@@ -9,16 +9,14 @@
 //! * RELEASE rings then dies at the dialed τ;
 //! * the pool never exceeds MAX and a 17th note still sounds.
 
-use std::sync::Arc;
-
-use stave_core::{
-    AudioBuffer, DebugBus, Event, EventKind, NoteEvent, NoteKind, Plugin, ProcessCtx,
-};
+use stave::{Event, EventKind, NoteEvent, NoteKind};
+use stave_dynamo_vst3::Dynamo;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
-fn note(frame: u32, on: bool, key: i16, vel: f64, id: i32) -> Event {
+fn note(frame: usize, on: bool, key: i16, vel: f64, id: i32) -> Event {
     Event {
         frame,
         kind: EventKind::Note(NoteEvent {
@@ -31,121 +29,48 @@ fn note(frame: u32, on: bool, key: i16, vel: f64, id: i32) -> Event {
     }
 }
 
-/// Render `blocks` blocks; `events` are (block_index, event) —
-/// delivered to that block with their intra-block frame offsets.
-fn render(set: &[(&str, f64)], events: &[(usize, Event)], blocks: usize) -> Vec<f32> {
-    let mut plugin = stave_dynamo_vst3::Dynamo::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    // THE BENCH: laws measure a CLEAN machine unless they dial a
-    // subsystem in themselves — the shipping defaults are lively
-    // the measurements are surgical.
-    for (n, v) in [
-        ("hum", 0.0),
-        ("bearing", 0.0),
-        ("clank", 0.0),
-        ("crackle", 0.0),
-        ("tension", 0.0),
-    ] {
-        table.by_name(n).unwrap().set_plain(v);
-    }
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let mut out = Vec::with_capacity(blocks * BLOCK);
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
-    for b in 0..blocks {
-        let evs: Vec<Event> = events
-            .iter()
-            .filter(|(eb, _)| *eb == b)
-            .map(|(_, e)| *e)
-            .collect();
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let mut in_ptrs: [*mut f32; 0] = [];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [] as [&mut [f32]; 0], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &evs,
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&out_l);
-    }
-    let _ = Arc::strong_count(&bus);
-    out
-}
-
-/// Both channels (the width law needs the field).
+/// Render `blocks` blocks of both channels; `events` are
+/// (block_index, event) — delivered to that block with their
+/// intra-block frame offsets.
 fn render_stereo(
     set: &[(&str, f64)],
     events: &[(usize, Event)],
     blocks: usize,
 ) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_dynamo_vst3::Dynamo::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
     // THE BENCH: laws measure a CLEAN machine unless they dial a
     // subsystem in themselves — the shipping defaults are lively
     // the measurements are surgical.
-    for (n, v) in [
+    let bench = [
         ("hum", 0.0),
         ("bearing", 0.0),
         ("clank", 0.0),
         ("crackle", 0.0),
         ("tension", 0.0),
-    ] {
-        table.by_name(n).unwrap().set_plain(v);
-    }
-    for (n, v) in set {
-        table
-            .by_name(n)
-            .unwrap_or_else(|| panic!("param '{n}'"))
-            .set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    ];
+    let mut h = bench
+        .iter()
+        .chain(set)
+        .fold(
+            PluginHarness::<Dynamo>::builder().sample_rate(FS).block_size(BLOCK),
+            |b, (n, v)| b.set(n, *v),
+        )
+        .build();
     let mut left = Vec::with_capacity(blocks * BLOCK);
     let mut right = Vec::with_capacity(blocks * BLOCK);
-    let mut out_l = vec![0.0f32; BLOCK];
-    let mut out_r = vec![0.0f32; BLOCK];
+    let mut evs: Vec<Event> = Vec::new();
     for b in 0..blocks {
-        let evs: Vec<Event> = events
-            .iter()
-            .filter(|(eb, _)| *eb == b)
-            .map(|(_, e)| *e)
-            .collect();
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let mut in_ptrs: [*mut f32; 0] = [];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [] as [&mut [f32]; 0], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut out_l, &mut out_r], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &evs,
-        };
-        plugin.process(&mut ctx);
-        left.extend_from_slice(&out_l);
-        right.extend_from_slice(&out_r);
+        evs.clear();
+        evs.extend(events.iter().filter(|(eb, _)| *eb == b).map(|(_, e)| *e));
+        h.process(&evs);
+        left.extend_from_slice(&h.outputs()[0]);
+        right.extend_from_slice(&h.outputs()[1]);
     }
-    let _ = Arc::strong_count(&bus);
     (left, right)
+}
+
+/// The left channel.
+fn render(set: &[(&str, f64)], events: &[(usize, Event)], blocks: usize) -> Vec<f32> {
+    render_stereo(set, events, blocks).0
 }
 
 /// Single-bin correlation magnitude at `hz`.
@@ -1307,12 +1232,15 @@ fn motion_animates_the_macro() {
         ("depth 5", -1.0),
         ("mode 5", 1.0), // UNI: the square's high half kills FORCE
     ];
-    let out = render(&set, &[(0, note(0, true, 57, 1.0, 1))], 520);
-    // Square at 0.5 Hz from phase 0: low half first (force intact),
-    // high half 1–2 s (force displaced to zero).
-    let loud = rms(&out[19_200..43_200]); // 0.4–0.9 s
-    let gated = rms(&out[67_200..91_200]); // 1.4–1.9 s
-    let back = rms(&out[105_600..129_600]); // 2.2–2.7 s
+    let out = render(&set, &[(0, note(0, true, 57, 1.0, 1))], 740);
+    // Square at 0.5 Hz from phase 0: the framework's square
+    // (`Waveform::Square`) is HIGH first — displaced 0–1 s — then
+    // low (intact) 1–2 s, high again 2–3 s, low 3–4 s. (The
+    // pre-overhaul LFO square ran low-first; the law's windows moved
+    // one half-cycle with it.)
+    let loud = rms(&out[67_200..91_200]); // 1.4–1.9 s
+    let gated = rms(&out[115_200..139_200]); // 2.4–2.9 s
+    let back = rms(&out[163_200..187_200]); // 3.4–3.9 s
     assert!(
         loud > 5.0 * gated.max(1e-9) && back > 5.0 * gated.max(1e-9),
         "motion must gate the machine in time: loud {loud:.4} gated {gated:.4} back {back:.4}"

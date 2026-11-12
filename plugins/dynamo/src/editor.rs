@@ -12,13 +12,13 @@
 //! MOTION   the six motion slots in full (rows 5–10)
 //! ```
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
+use stave::face::photo::hex;
+use stave::face::{Finish, Hardware, Palette};
+use stave::params::AnyParam;
+use stave::prelude::*;
+use stave::route::RouteParams;
 
-use stave_core::face::prelude::*;
-use stave_core::params::{AnyParam, BindParam, ParamEnum, RouteParams};
-
+use crate::engine::DynamoTaps;
 use crate::params::DynamoParams;
 
 /// The editor-local page set — view state, never a param.
@@ -27,21 +27,29 @@ const PAGES: u32 = 1;
 /// Dynamo's finish: machine-green hammertone, black bakelite knobs,
 /// brass accent, amber gauges.
 fn theme() -> Theme {
-    use stave_ui::photo::hex;
+    let base = Theme::hammertone();
     Theme {
         name: "dynamo",
-        surface: hex(0x4B5546),
-        plate: hex(0x3E473A),
-        desk: hex(0x1F201C),
-        ink: Color::rgba(0.93, 0.90, 0.80, 1.0),
-        ink_soft: Color::rgba(0.93, 0.90, 0.80, 0.58),
-        accent: Color::rgba(0.96, 0.69, 0.27, 1.0),
-        lamp: [1.8, 0.62, 0.14],
-        cap: hex(0x141412),
-        pointer: Color::rgba(0.95, 0.93, 0.86, 1.0),
-        screen: Color::rgba(0.05, 0.04, 0.02, 1.0),
-        phosphor: Color::rgba(1.0, 0.72, 0.32, 1.0),
-        ..Theme::hammertone()
+        finish: Finish {
+            surface: hex(0x4B5546),
+            plate: hex(0x3E473A),
+            desk: hex(0x1F201C),
+            ..base.finish
+        },
+        palette: Palette {
+            ink: Color::rgba(0.93, 0.90, 0.80, 1.0),
+            ink_soft: Color::rgba(0.93, 0.90, 0.80, 0.58),
+            accent: Color::rgba(0.96, 0.69, 0.27, 1.0),
+            screen: Color::rgba(0.05, 0.04, 0.02, 1.0),
+            phosphor: Color::rgba(1.0, 0.72, 0.32, 1.0),
+        },
+        hardware: Hardware {
+            lamp: [1.8, 0.62, 0.14],
+            cap: hex(0x141412),
+            pointer: Color::rgba(0.95, 0.93, 0.86, 1.0),
+            ..base.hardware
+        },
+        ..base
     }
 }
 
@@ -49,23 +57,6 @@ fn theme() -> Theme {
 /// (attack, decay, sustain, release — `reads` in `face`).
 fn envelope(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     screens::envelope(f, r, s, f.bound(0), f.bound(1), f.bound(2), f.bound(3));
-}
-
-/// One route slot as a channel strip: the source's live trace (the
-/// slot's number printed on it), then every one of its seven params.
-fn route_row<S: ParamEnum, T: ParamEnum>(r: &RouteParams<S, T>, probe: &'static str, label: &'static str) -> FaceNode {
-    row(vec![
-        Trace::new(probe, 64.0, 44.0, (-1.0, 1.0)).label(label).node(),
-        Stepper::new(r.src.bind()).label("SOURCE").width(120.0).node(),
-        Stepper::new(r.tgt.bind()).label("DEST").width(120.0).node(),
-        Knob::new(r.depth.bind()).small().centered().label("AMOUNT").node(),
-        Stepper::new(r.via.bind()).label("VIA").width(120.0).node(),
-        Toggle::new(r.mode.bind()).label("MODE").node(),
-        Knob::new(r.lag.bind()).small().label("LAG").node(),
-        Stepper::new(r.quant.bind()).label("QUANT").width(96.0).node(),
-    ])
-    .gap(10.0)
-    .align(Align::Center)
 }
 
 /// One MACRO column (the Atoms lesson): the macro knob with its
@@ -81,11 +72,10 @@ fn macro_col<S: ParamEnum, T: ParamEnum>(knob: &dyn AnyParam, motion: &RoutePara
     .align(Align::Center)
 }
 
-const PROBES: [&str; 10] = ["mod 1", "mod 2", "mod 3", "mod 4", "mod 5", "mod 6", "mod 7", "mod 8", "mod 9", "mod 10"];
 const LABELS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
 
 fn routes_plate(p: &DynamoParams, title: &'static str, slots: core::ops::Range<usize>, gap: f64) -> FaceNode {
-    let rows: Vec<FaceNode> = slots.map(|i| route_row(&p.routes[i], PROBES[i], LABELS[i])).collect();
+    let rows: Vec<FaceNode> = slots.map(|i| p.routes[i].row(DynamoTaps::MODS[i], LABELS[i])).collect();
     Plate::titled(title).around(column(rows).gap(gap).align(Align::Center))
 }
 
@@ -105,7 +95,7 @@ pub fn face(p: &DynamoParams) -> Face {
     let macros: [&dyn AnyParam; 6] = [&p.force, &p.mass, &p.memory, &p.couple, &p.steam, &p.chaos];
     let machine = Plate::titled("MACHINE").around(
         column(vec![
-            Display::new(820.0, 132.0, crate::machine::draw).probes(crate::machine::PROBES).animated().node(),
+            Display::new(820.0, 132.0, crate::machine::draw).taps(&crate::machine::TAPS).animated().node(),
             row(macros.iter().enumerate().map(|(i, k)| macro_col(*k, &p.routes[4 + i])).collect())
                 .gap(gap + 8.0)
                 .align(Align::Start),
@@ -192,17 +182,4 @@ pub fn face(p: &DynamoParams) -> Face {
     let pages = pages(PAGES, vec![machine, voice_page, routes_page, motion_page]);
     let body = column(vec![header, pages]).gap(theme.space(4)).align(Align::Stretch);
     Face::new(theme, Panel::default().around(body))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Every page fits the window budget.
-    #[test]
-    fn the_face_fits() {
-        let rt = stave_core::face::Runtime::new(face(&DynamoParams::new()));
-        let (w, h) = rt.size();
-        assert!(w <= 1000.0 && h <= 720.0, "dynamo face is {w}×{h}");
-    }
 }

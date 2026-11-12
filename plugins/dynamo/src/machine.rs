@@ -1,50 +1,52 @@
 //! THE MACHINE DIAGRAM — the living center:
 //! dynamo's OWN picture through the open scene kind, a
-//! pure function of five probes. The boiler's needle droops under
+//! pure function of five taps. The boiler's needle droops under
 //! chords, the rotor's spoke strobes with the shaft, the wires
 //! wave with their energy, the bridge block glows with rail load.
-//! Nothing here is decoration: every moving part IS a probe the
-//! engine publishes as declared taps (never name-sniffed).
+//! Nothing here is decoration: every moving part IS a tap the
+//! engine publishes ([`DynamoTaps`]).
 //!
 //! Drawn into a face `Display` (see `draw`).
 //!
-//! Probe order: spin (rate/commanded 0..1), shaft (revolutions
+//! Tap order: spin (rate/commanded 0..1), shaft (revolutions
 //! 0..1), glow (ensemble wire energy 0..1), boiler (pressure
 //! 0..1), rail (bridge |load| 0..1).
 
-use stave_core::face::Frame;
-use stave_ui::layout::Rect;
-use stave_ui::scene::{pt, Font, Op, Path, Pt, Scene, Stroke, TextAlign};
-use stave_ui::style::Color;
+use stave::face::Typography;
+use stave::prelude::*;
 
-extern crate alloc;
-use alloc::vec::Vec;
+use crate::engine::DynamoTaps;
 
-/// The probes the picture reads, in [`MachineState`] order.
-pub const PROBES: &[&str] = &["spin", "shaft", "glow", "boiler", "rail"];
+/// The taps the picture reads, in [`MachineState`] order.
+pub const TAPS: [TapId; 5] = [
+    DynamoTaps::SPIN,
+    DynamoTaps::SHAFT,
+    DynamoTaps::GLOW,
+    DynamoTaps::BOILER,
+    DynamoTaps::RAIL,
+];
 
 /// The display's draw fn: the machine in the theme's phosphor, live
 /// from the five taps.
 pub fn draw(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let ph = f.theme.phosphor;
+    let ph = f.theme.palette.phosphor;
     let st = MachineState {
-        spin: f.probe("spin") as f32,
-        shaft: f.probe("shaft") as f32,
-        glow: f.probe("glow") as f32,
-        boiler: f.probe("boiler") as f32,
-        rail: f.probe("rail") as f32,
+        spin: f.tap(DynamoTaps::SPIN) as f32,
+        shaft: f.tap(DynamoTaps::SHAFT) as f32,
+        glow: f.tap(DynamoTaps::GLOW) as f32,
+        boiler: f.tap(DynamoTaps::BOILER) as f32,
+        rail: f.tap(DynamoTaps::RAIL) as f32,
         x0: r.x,
         y0: r.y,
         w: r.w,
         h: r.h,
     };
-    stave_core::face::screens::grid(f, r, s, 12, 4);
+    screens::grid(f, r, s, 12, 4);
     let style = MachineStyle {
         accent: ph,
         ink: dim(ph, 0.7),
         line: dim(ph, 0.35),
-        font: f.theme.type_.caption.align(TextAlign::Center),
-        label_size: f.theme.type_.caption_size,
+        typography: f.theme.typography,
     };
     s.ops.extend(scene(&st, &style).ops);
 }
@@ -66,30 +68,54 @@ pub(crate) struct MachineStyle {
     pub accent: Color,
     pub ink: Color,
     pub line: Color,
-    pub font: Font,
-    pub label_size: f64,
+    /// Labels set in its caption (centred on their anchor).
+    pub typography: Typography,
 }
 
 fn dim(c: Color, a: f64) -> Color {
     Color::rgba(c.r, c.g, c.b, a)
 }
 
-/// The picture, pure (the laws read its ops).
+/// The drawing's frame: the scale on the 80-pt-tall design, the
+/// centre line, and a horizontal fraction of the screen.
+fn frame(st: &MachineState) -> (f64, f64, impl Fn(f64) -> f64 + '_) {
+    let k = (st.h / 80.0).max(0.5);
+    let cy = st.y0 + st.h * 0.44;
+    (k, cy, move |frac: f64| st.x0 + st.w * frac)
+}
+
+/// The boiler gauge's pivot and needle tip: full pressure points
+/// up-right, a drooping boiler swings left.
+pub(crate) fn needle(st: &MachineState) -> ((f64, f64), (f64, f64)) {
+    let (k, cy, at) = frame(st);
+    let bx = at(0.08);
+    let angle = core::f64::consts::PI * (0.8 + 1.4 * f64::from(st.boiler));
+    ((bx, cy), (bx + 12.0 * k * angle.cos(), cy + 12.0 * k * angle.sin()))
+}
+
+/// The two wires' polylines: amplitude is the ensemble's ring.
+pub(crate) fn wires(st: &MachineState) -> [[(f64, f64); 25]; 2] {
+    let (k, cy, at) = frame(st);
+    let (wx0, wx1) = (at(0.36), at(0.70));
+    let amp = 7.0 * k * f64::from(st.glow);
+    [(-6.0 * k, 0.0), (6.0 * k, core::f64::consts::PI)].map(|(dy, phase)| {
+        core::array::from_fn(|i| {
+            let t = i as f64 / 24.0;
+            let x = wx0 + (wx1 - wx0) * t;
+            (x, cy + dy + amp * (t * core::f64::consts::TAU * 2.0 + phase).sin())
+        })
+    })
+}
+
+/// The picture, pure (the laws read its geometry: `needle`, `wires`).
 pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
     let mut sc = Scene::new();
     // Drawn on an 80-pt-tall design, scaled to the screen.
-    let k = (st.h / 80.0).max(0.5);
-    let cy = st.y0 + st.h * 0.44;
+    let (k, cy, at) = frame(st);
     let label_y = st.y0 + st.h - 8.0;
-    let at = |frac: f64| st.x0 + st.w * frac;
+    let ty = &style.typography;
     let label = |sc: &mut Scene, x: f64, text: &str| {
-        sc.ops.push(Op::Text {
-            at: pt(x, label_y),
-            text: alloc::string::String::from(text),
-            size: style.label_size,
-            color: style.ink,
-            font: style.font,
-        });
+        sc.text_in(pt(x, label_y), text, ty.caption_size, style.ink, ty.caption);
     };
 
     // THE BOILER — a gauge whose needle IS the pressure: full
@@ -105,10 +131,9 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
         ),
         Stroke::round(style.line, 1.4),
     );
-    let angle = core::f64::consts::PI * (0.8 + 1.4 * f64::from(st.boiler));
-    let needle = pt(bx + 12.0 * k * angle.cos(), cy + 12.0 * k * angle.sin());
+    let ((px, py), (nx, ny)) = needle(st);
     sc.stroke(
-        Path::polyline(&[pt(bx, cy), needle]),
+        Path::polyline(&[pt(px, py), pt(nx, ny)]),
         Stroke::round(style.accent, 1.6),
     );
     label(&mut sc, bx, "BOILER");
@@ -131,16 +156,9 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
     // THE WIRES — the pair waves with its energy: amplitude and
     // glow are the ensemble's ring.
     let (wx0, wx1) = (at(0.36), at(0.70));
-    let amp = 7.0 * k * f64::from(st.glow);
     let wire_glow = dim(style.accent, 0.3 + 0.65 * f64::from(st.glow));
-    for (dy, phase) in [(-6.0 * k, 0.0), (6.0 * k, core::f64::consts::PI)] {
-        let mut pts: Vec<Pt> = Vec::with_capacity(25);
-        for i in 0..=24 {
-            let t = i as f64 / 24.0;
-            let x = wx0 + (wx1 - wx0) * t;
-            let y = cy + dy + amp * (t * core::f64::consts::TAU * 2.0 + phase).sin();
-            pts.push(pt(x, y));
-        }
+    for wire in wires(st) {
+        let pts = wire.map(|(x, y)| pt(x, y));
         sc.stroke(Path::polyline(&pts), Stroke::round(wire_glow, 1.5));
     }
     label(&mut sc, (wx0 + wx1) * 0.5, "WIRES");
@@ -177,7 +195,6 @@ pub(crate) fn scene(st: &MachineState, style: &MachineStyle) -> Scene {
 #[cfg(test)]
 mod properties {
     use super::*;
-    use stave_ui::scene::Seg;
 
     fn st(boiler: f32, glow: f32) -> MachineState {
         MachineState {
@@ -198,8 +215,7 @@ mod properties {
             accent: Color::rgba(0.5, 0.7, 0.9, 1.0),
             ink: Color::rgba(0.6, 0.6, 0.7, 1.0),
             line: Color::rgba(0.3, 0.3, 0.4, 1.0),
-            font: Font::default(),
-            label_size: 7.5,
+            typography: stave::face::theme::TYPE,
         }
     }
 
@@ -207,17 +223,7 @@ mod properties {
     /// declared gauge extremes.
     #[test]
     fn the_needle_is_the_pressure() {
-        let needle_x = |b: f32| {
-            let sc = scene(&st(b, 0.0), &style());
-            // Second stroke = the needle polyline; its endpoint.
-            let Op::Stroke { path, .. } = &sc.ops[1] else {
-                panic!("needle")
-            };
-            let Seg::LineTo(p) = path.segs[1] else {
-                panic!("needle end")
-            };
-            p.x
-        };
+        let needle_x = |b: f32| needle(&st(b, 0.0)).1 .0;
         let full = needle_x(1.0);
         let empty = needle_x(0.0);
         // Full pressure points RIGHT of the pivot; empty swings
@@ -233,21 +239,8 @@ mod properties {
     #[test]
     fn the_wires_wave_with_energy() {
         let spread_of = |glow: f32| {
-            let sc = scene(&st(1.0, glow), &style());
-            let mut min = f64::MAX;
-            let mut max = f64::MIN;
-            for op in &sc.ops {
-                if let Op::Stroke { path, .. } = op {
-                    if path.segs.len() > 10 {
-                        for seg in &path.segs {
-                            if let Seg::LineTo(p) | Seg::MoveTo(p) = seg {
-                                min = min.min(p.y);
-                                max = max.max(p.y);
-                            }
-                        }
-                    }
-                }
-            }
+            let ys = wires(&st(1.0, glow)).into_iter().flatten().map(|(_, y)| y);
+            let (min, max) = ys.fold((f64::MAX, f64::MIN), |(lo, hi), y| (lo.min(y), hi.max(y)));
             max - min
         };
         let quiet = spread_of(0.0);

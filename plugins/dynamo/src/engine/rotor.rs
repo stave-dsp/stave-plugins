@@ -10,6 +10,8 @@
 //! inside one metaphor. Hard wheel edges alias ON PURPOSE: that IS
 //! the digital domain of the machine's voice.
 
+use stave::dsp::tau_coeff;
+
 /// Declared sag depth: full load at sag=1 flattens this much.
 pub(super) const SAG_RANGE_ST: f32 = 3.0;
 
@@ -74,10 +76,10 @@ impl Rotor {
     }
 
     /// Block-rate voicing: the MASS knob is the spin-up time.
-    pub fn set(&mut self, mass_ms: f32, poles: f32, wheel: u16, sr: f32) {
-        let tau = (mass_ms.max(0.1)) * 0.001 * sr;
-        self.k_up = 1.0 - (-1.0 / tau).exp();
-        self.k_down = 1.0 - (-1.0 / (3.0 * tau)).exp();
+    pub fn set(&mut self, mass_ms: f32, poles: f32, wheel: u16, sample_rate: f32) {
+        let tau = mass_ms.max(0.1) * 0.001;
+        self.k_up = tau_coeff(tau, sample_rate);
+        self.k_down = tau_coeff(3.0 * tau, sample_rate);
         self.poles = poles;
         self.wheel = wheel;
     }

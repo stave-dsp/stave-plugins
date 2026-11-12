@@ -51,15 +51,15 @@ card, a pure Scene of five DECLARED taps (spin, shaft, glow,
 boiler, rail): the boiler needle droops under chords, the rotor's
 spokes strobe with the shaft, the wires wave with ensemble energy,
 the bridge glows with rail load. Taps register in
-attach_telemetry, BEFORE the editor mounts (a Scene binds probes
-at mount; first-process was too late — the diagram mounted blank,
+`Plugin::new` (`DynamoTaps::new(telemetry)`), BEFORE the editor
+mounts (first-process was too late — the diagram mounted blank,
 measured). Scene laws: needle-is-pressure, wires-wave-with-energy,
 purity. FIELD FIXES shipped with it: (1) the escapement's tooth
 now re-opens the machine's OWN exciter (a raw wire push sounded
 like a second oscillator — the sustained tone must wear the
 commutation's timbre); (2) the escapement engages only while the
 key is HELD (chaotic voices never died; transport stop/start
-layered old drones — the lift-off law pins it) and Processor::
+layered old drones — the lift-off law pins it) and Plugin::
 reset() powers the WHOLE machine down (heat, pressure, lags, rail,
 clocks); (3) the face tightened to 1000-wide with no bottom
 overflow.

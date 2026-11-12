@@ -1,13 +1,8 @@
 //! Dynamo's typed parameter table. Ids are FOREVER — pick once,
 //! never reuse or renumber.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, RouteParams, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
+use stave::route::RouteParams;
 
 param_enum! {
     /// THE ROTOR's pole count — commutation harmonics without
@@ -154,108 +149,126 @@ pub struct DynamoParams {
     pub bypass: BoolParam,
 }
 
-impl DynamoParams {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            attack: FloatParam::new(1, "attack", 5.0, Range::new(0.5, 2_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            decay: FloatParam::new(2, "decay", 800.0, Range::new(1.0, 4_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            sustain: FloatParam::new(3, "sustain", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            release: FloatParam::new(4, "release", 1_200.0, Range::new(2.0, 8_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Envelope")
-                .with_smooth(Smooth::Off),
-            mass: FloatParam::new(5, "mass", 60.0, Range::new(1.0, 2_000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Rotor")
-                .with_smooth(Smooth::Off),
-            sag: FloatParam::new(20, "sag", 0.25, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Rotor")
-                .with_smooth(Smooth::Off),
-            poles: EnumParam::new(48, "poles", PoleCount(3)).with_group("Rotor"),
-            wheel: EnumParam::new(49, "wheel", Wheel(0)).with_group("Rotor"),
-            ring: FloatParam::new(50, "ring", 0.8, Range::new(0.05, 10.0, Taper::Log))
-                .with_group("Wires")
-                .with_smooth(Smooth::Off),
-            stiff: FloatParam::new(52, "stiff", 0.15, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Wires")
-                .with_smooth(Smooth::Off),
-            memory: FloatParam::new(53, "memory", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Wires")
-                .with_smooth(Smooth::Off),
-            width: FloatParam::new(55, "width", 0.8, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Wires")
-                .with_smooth(Smooth::Off),
-            contact: EnumParam::new(56, "contact", Contact(0)).with_group("Rotor"),
-            grit: FloatParam::new(57, "grit", 0.15, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Rotor")
-                .with_smooth(Smooth::Off),
-            couple: FloatParam::new(58, "couple", 0.15, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Machine")
-                .with_smooth(Smooth::Off),
-            steam: FloatParam::new(59, "steam", 0.75, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Machine")
-                .with_smooth(Smooth::Off),
-            chaos: FloatParam::new(60, "chaos", 0.0, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Machine")
-                .with_smooth(Smooth::Off),
-            force: FloatParam::new(61, "force", 0.5, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Machine")
-                .with_smooth(Smooth::Off),
-            hum: FloatParam::new(62, "hum", 0.1, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Life")
-                .with_smooth(Smooth::Off),
-            bearing: FloatParam::new(63, "bearing", 0.12, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Life")
-                .with_smooth(Smooth::Off),
-            clank: FloatParam::new(64, "clank", 0.15, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Life")
-                .with_smooth(Smooth::Off),
-            crackle: FloatParam::new(65, "crackle", 0.05, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Life")
-                .with_smooth(Smooth::Off),
-            tension: FloatParam::new(66, "tension", 0.1, Range::new(0.0, 1.0, Taper::Linear))
-                .with_group("Life")
-                .with_smooth(Smooth::Off),
-            lfo_rate: FloatParam::new(8, "lfo rate", 1.2, Range::new(0.05, 12.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo_shape: EnumParam::new(9, "lfo shape", LfoShapeP(0)).with_group("Mod"),
-            lfo_sync: EnumParam::new(10, "lfo sync", LfoSync(0)).with_group("Mod"),
-            lfo_rise: FloatParam::new(18, "lfo rise", 0.0, Range::new(0.0, 2_000.0, Taper::Linear))
-                .with_unit(Unit::Ms)
-                .with_group("Mod")
-                .with_smooth(Smooth::Off),
-            lfo_trig: EnumParam::new(19, "lfo trig", LfoTrig(0)).with_group("Mod"),
+impl Default for DynamoParams {
+    fn default() -> Self {
+        Self {
+            attack: FloatParam::new(ParamId(1), "attack", Range::log(0.5, 2_000.0))
+                .default(5.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            decay: FloatParam::new(ParamId(2), "decay", Range::log(1.0, 4_000.0))
+                .default(800.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            sustain: FloatParam::new(ParamId(3), "sustain", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            release: FloatParam::new(ParamId(4), "release", Range::log(2.0, 8_000.0))
+                .default(1_200.0)
+                .unit(Unit::Ms)
+                .group("Envelope")
+                .smooth(Smooth::Off),
+            mass: FloatParam::new(ParamId(5), "mass", Range::log(1.0, 2_000.0))
+                .default(60.0)
+                .unit(Unit::Ms)
+                .group("Rotor")
+                .smooth(Smooth::Off),
+            sag: FloatParam::new(ParamId(20), "sag", Range::linear(0.0, 1.0))
+                .default(0.25)
+                .group("Rotor")
+                .smooth(Smooth::Off),
+            poles: EnumParam::new(ParamId(48), "poles", PoleCount(3)).group("Rotor"),
+            wheel: EnumParam::new(ParamId(49), "wheel", Wheel(0)).group("Rotor"),
+            ring: FloatParam::new(ParamId(50), "ring", Range::log(0.05, 10.0))
+                .default(0.8)
+                .group("Wires")
+                .smooth(Smooth::Off),
+            stiff: FloatParam::new(ParamId(52), "stiff", Range::linear(0.0, 1.0))
+                .default(0.15)
+                .group("Wires")
+                .smooth(Smooth::Off),
+            memory: FloatParam::new(ParamId(53), "memory", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Wires")
+                .smooth(Smooth::Off),
+            width: FloatParam::new(ParamId(55), "width", Range::linear(0.0, 1.0))
+                .default(0.8)
+                .group("Wires")
+                .smooth(Smooth::Off),
+            contact: EnumParam::new(ParamId(56), "contact", Contact(0)).group("Rotor"),
+            grit: FloatParam::new(ParamId(57), "grit", Range::linear(0.0, 1.0))
+                .default(0.15)
+                .group("Rotor")
+                .smooth(Smooth::Off),
+            couple: FloatParam::new(ParamId(58), "couple", Range::linear(0.0, 1.0))
+                .default(0.15)
+                .group("Machine")
+                .smooth(Smooth::Off),
+            steam: FloatParam::new(ParamId(59), "steam", Range::linear(0.0, 1.0))
+                .default(0.75)
+                .group("Machine")
+                .smooth(Smooth::Off),
+            chaos: FloatParam::new(ParamId(60), "chaos", Range::linear(0.0, 1.0))
+                .default(0.0)
+                .group("Machine")
+                .smooth(Smooth::Off),
+            force: FloatParam::new(ParamId(61), "force", Range::linear(0.0, 1.0))
+                .default(0.5)
+                .group("Machine")
+                .smooth(Smooth::Off),
+            hum: FloatParam::new(ParamId(62), "hum", Range::linear(0.0, 1.0))
+                .default(0.1)
+                .group("Life")
+                .smooth(Smooth::Off),
+            bearing: FloatParam::new(ParamId(63), "bearing", Range::linear(0.0, 1.0))
+                .default(0.12)
+                .group("Life")
+                .smooth(Smooth::Off),
+            clank: FloatParam::new(ParamId(64), "clank", Range::linear(0.0, 1.0))
+                .default(0.15)
+                .group("Life")
+                .smooth(Smooth::Off),
+            crackle: FloatParam::new(ParamId(65), "crackle", Range::linear(0.0, 1.0))
+                .default(0.05)
+                .group("Life")
+                .smooth(Smooth::Off),
+            tension: FloatParam::new(ParamId(66), "tension", Range::linear(0.0, 1.0))
+                .default(0.1)
+                .group("Life")
+                .smooth(Smooth::Off),
+            lfo_rate: FloatParam::new(ParamId(8), "lfo rate", Range::log(0.05, 12.0))
+                .default(1.2)
+                .unit(Unit::Hz)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo_shape: EnumParam::new(ParamId(9), "lfo shape", LfoShapeP(0)).group("Mod"),
+            lfo_sync: EnumParam::new(ParamId(10), "lfo sync", LfoSync(0)).group("Mod"),
+            lfo_rise: FloatParam::new(ParamId(18), "lfo rise", Range::linear(0.0, 2_000.0))
+                .default(0.0)
+                .unit(Unit::Ms)
+                .group("Mod")
+                .smooth(Smooth::Off),
+            lfo_trig: EnumParam::new(ParamId(19), "lfo trig", LfoTrig(0)).group("Mod"),
             routes: core::array::from_fn(|i| {
                 RouteParams::new(
-                    if i < 4 {
+                    ParamId(if i < 4 {
                         10 * (i as u32 + 1)
                     } else {
                         100 + 10 * (i as u32 - 3)
-                    },
+                    }),
                     i + 1,
                     "Mod",
                 )
             }),
-            output: FloatParam::new(6, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(7, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags {
-                    bypass: true,
-                    ..Default::default()
-                }),
-        })
+            output: FloatParam::new(ParamId(6), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(7)).group("Output"),
+        }
     }
 }

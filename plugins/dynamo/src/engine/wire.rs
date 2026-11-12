@@ -25,7 +25,8 @@
 //! The wire keeps RINGING after the envelope closes (a struck body,
 //! not a VCA) — the voice stays alive while any wire holds energy.
 
-use stave_dsp::{t60_gain, DelayLine};
+use stave::dsp::{t60_gain, tau_coeff};
+use stave::prelude::*;
 
 /// Detune between the pair, in cents (SPREAD-adjacent chorus).
 pub(super) const PAIR_CENTS: f32 = 4.0;
@@ -37,12 +38,14 @@ const ALIVE_FLOOR: f32 = 1e-4;
 pub(super) struct Wire {
     delay: DelayLine,
     damp_z: f32,
-    /// Loop DC blocker (~20 Hz): a lowpass-damped loop is RESONANT
-    /// AT 0 Hz — a unipolar strike left a decaying displacement
+    /// Loop DC blocker (~20 Hz at 48 kHz): a lowpass-damped loop is
+    /// RESONANT AT 0 Hz — a unipolar strike left a decaying displacement
     /// hump that never crossed zero (measured: the escapement's
     /// crossing detector starved; the 'ring' was partly a DC sag).
     /// A real string cannot hold displacement — the bridge
-    /// terminates it.
+    /// terminates it. Kept inline, not `DcBlocker`: the escapement
+    /// laws were measured on this f32 pole, and the f64 rate-exact
+    /// one moved `chaos_breaks_the_clock` past its margin.
     dc_x1: f32,
     dc_y1: f32,
     ap_z: [f32; 4],
@@ -82,8 +85,8 @@ impl Wire {
     /// Allocate for the lowest playable note (20 Hz). Prepare-time
     /// only — the audio path never allocates (the no-alloc check).
     pub fn prepare(&mut self, sr: f32) {
-        self.delay.prepare((sr / 20.0) as usize + 8);
-        self.mag_rise = 1.0 - (-1.0 / (0.8 * sr)).exp();
+        self.delay.allocate((sr / 20.0) as usize + 8);
+        self.mag_rise = tau_coeff(0.8, sr);
         self.demag = (-1.0 / (4.0 * sr)).exp();
         self.reset();
     }
@@ -158,10 +161,10 @@ impl Wire {
         // Damping one-pole: the string loses brightness per trip.
         self.damp_z += (1.0 - DAMP) * (r - self.damp_z);
         // The bridge terminates displacement: DC out of the loop.
+        // The stiffness cascade: dispersion, partials stretch sharp.
         let dc = self.damp_z - self.dc_x1 + 0.9974 * self.dc_y1;
         self.dc_x1 = self.damp_z;
         self.dc_y1 = dc;
-        // The stiffness cascade: dispersion, partials stretch sharp.
         let mut x = dc;
         for z in self.ap_z.iter_mut() {
             let ap = -self.stiff_a * x + *z;

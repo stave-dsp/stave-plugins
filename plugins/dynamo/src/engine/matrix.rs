@@ -7,7 +7,7 @@
 //! ensemble source values (one motion animates the machine, not
 //! sixteen private copies).
 
-use stave_dsp::RouteSlot;
+use stave::dsp::RouteSlot;
 
 /// Modulation displacement bounds — the DECLARED target semantics.
 pub(super) const PITCH_RANGE_ST: f32 = 12.0;
