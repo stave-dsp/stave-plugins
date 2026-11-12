@@ -9,14 +9,13 @@
 use core::f64::consts::TAU;
 use std::sync::OnceLock;
 
-use stave_core::face::material;
-use stave_core::face::prelude::*;
-use stave_core::params::BindParam;
-use stave_ui::photo::{hex, mix, mul, Rgb};
-use stave_ui::scene::{Brush, Pt, TextAlign};
+use stave::face::material;
+use stave::face::part::sprite_key;
+use stave::face::photo::{hex, mix, mul, Rgb};
+use stave::prelude::*;
 
 use crate::params::RevenantParams;
-use crate::{FACE_TAPS, NEURON_TAPS, SURPRISE_TAP};
+use crate::RevenantTaps;
 
 pub fn face(p: &RevenantParams) -> Face {
     let theme = Theme::hammertone();
@@ -29,8 +28,8 @@ pub fn face(p: &RevenantParams) -> Face {
     .gap(theme.space(3))
     .align(Align::Start);
     let screens = row(vec![
-        Display::new(300.0, 210.0, draw_porthole).probes(&FACE_TAPS).node(),
-        Display::new(300.0, 210.0, draw_meter).probes(&[SURPRISE_TAP]).node(),
+        Display::new(300.0, 210.0, draw_porthole).taps(&RevenantTaps::NEURONS).node(),
+        Display::new(300.0, 210.0, draw_meter).taps(&[RevenantTaps::SURPRISE]).node(),
     ])
     .gap(gap)
     .justify(Justify::Center);
@@ -62,7 +61,7 @@ pub fn face(p: &RevenantParams) -> Face {
 
 // ------------------------------------------------------------ the porthole
 
-const N: usize = NEURON_TAPS.len();
+const N: usize = RevenantTaps::NEURONS.len();
 const GLOW_LEVELS: usize = 8;
 
 /// Where neuron `i` floats, in units of the porthole's radius: a
@@ -121,7 +120,7 @@ fn neuron_px(dx: f64, dy: f64, color: Rgb, level: usize, scale: f64) -> Option<(
 }
 
 fn act(f: &Frame<'_>, i: usize) -> f64 {
-    let v = f.probe(NEURON_TAPS[i]);
+    let v = f.tap(RevenantTaps::NEURONS[i]);
     if v.is_finite() {
         v.clamp(-1.0, 1.0)
     } else {
@@ -173,13 +172,26 @@ fn draw_porthole(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             f.sprite(s, p, 36.0, key, |sc| material::sprite(36.0, sc, |dx, dy| neuron_px(dx, dy, color, level, sc)));
         }
     }
-    let ty = &f.theme.type_;
-    let ph = f.theme.phosphor;
-    s.text_in(pt(r.x + 12.0, r.y + 18.0), "ORGANISM", ty.caption_size, Color::rgba(ph.r, ph.g, ph.b, 0.7), ty.caption.align(TextAlign::Left));
+    let ty = &f.theme.typography;
+    let ph = f.theme.palette.phosphor;
+    let label = "ORGANISM";
+    s.text_in(
+        pt(r.x + 12.0 + caption_half_width(label, ty.caption_size), r.y + 18.0),
+        label,
+        ty.caption_size,
+        Color::rgba(ph.r, ph.g, ph.b, 0.7),
+        ty.caption,
+    );
+}
+
+/// Half a tracked-caps caption's width, for setting a centred caption
+/// flush to an edge (the author surface has no `TextAlign`).
+fn caption_half_width(text: &str, size: f64) -> f64 {
+    0.5 * text.chars().count() as f64 * size * 0.78
 }
 
 fn material_key(neg: bool, level: usize) -> u64 {
-    stave_core::face::part::sprite_key(("revenant-neuron", neg, level))
+    sprite_key(("revenant-neuron", neg, level))
 }
 
 // --------------------------------------------------------------- the meter
@@ -187,52 +199,94 @@ fn material_key(neg: bool, level: usize) -> u64 {
 /// Needle sweep, y-down degrees (218 = upper left, 322 = upper right).
 const SWEEP: (f64, f64) = (218.0, 322.0);
 
-fn polar(c: Pt, r: f64, deg: f64) -> Pt {
-    let a = deg.to_radians();
-    pt(c.x + r * a.cos(), c.y + r * a.sin())
-}
-
 fn draw_meter(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let ink = Color::rgba(0.12, 0.11, 0.10, 1.0);
     let red = Color::rgba(0.75, 0.13, 0.08, 1.0);
     // The cream card, lamp-lit from above.
     let card = Rect { x: r.x + 8.0, y: r.y + 8.0, w: r.w - 16.0, h: r.h - 16.0 };
-    s.fill(
-        rrect_path(card, 4.0),
-        Brush::Linear {
-            from: pt(card.x, card.y),
-            to: pt(card.x, card.y + card.h),
-            stops: vec![(0.0, Color::rgba(0.95, 0.92, 0.84, 1.0)), (1.0, Color::rgba(0.86, 0.82, 0.72, 1.0))],
-        },
+    vertical_gradient(
+        s,
+        card,
+        4.0,
+        (card.y, card.y + card.h),
+        &[(0.0, Color::rgba(0.95, 0.92, 0.84, 1.0)), (1.0, Color::rgba(0.86, 0.82, 0.72, 1.0))],
     );
     let pivot = pt(card.x + card.w / 2.0, card.y + card.h - 22.0);
+    // The point `r` from the pivot at y-down angle `deg`.
+    let polar = |r: f64, deg: f64| {
+        let a = deg.to_radians();
+        pt(pivot.x + r * a.cos(), pivot.y + r * a.sin())
+    };
     let arc_r = card.h - 64.0;
     let needle = arc_r + 14.0;
     let deg = |t: f64| SWEEP.0 + (SWEEP.1 - SWEEP.0) * t;
     // Scale: the arc, ticks, the red zone past 75%.
     let n = 48;
-    let arc: Vec<Pt> = (0..=n).map(|i| polar(pivot, arc_r, deg(f64::from(i) / f64::from(n)))).collect();
+    let arc: Vec<_> = (0..=n).map(|i| polar(arc_r, deg(f64::from(i) / f64::from(n)))).collect();
     s.stroke(Path::polyline(&arc), Stroke::new(ink, 1.3));
-    let zone: Vec<Pt> = (0..=12).map(|i| polar(pivot, arc_r + 4.0, deg(0.75 + 0.25 * f64::from(i) / 12.0))).collect();
+    let zone: Vec<_> = (0..=12).map(|i| polar(arc_r + 4.0, deg(0.75 + 0.25 * f64::from(i) / 12.0))).collect();
     s.stroke(Path::polyline(&zone), Stroke::new(red, 4.0));
     for k in 0..=20 {
         let d = deg(f64::from(k) / 20.0);
         let len = if k % 5 == 0 { 10.0 } else { 5.0 };
-        s.stroke(Path::new().move_to(polar(pivot, arc_r, d)).line_to(polar(pivot, arc_r + len, d)), Stroke::new(ink, if k % 5 == 0 { 1.4 } else { 0.9 }));
+        s.stroke(Path::new().move_to(polar(arc_r, d)).line_to(polar(arc_r + len, d)), Stroke::new(ink, if k % 5 == 0 { 1.4 } else { 0.9 }));
     }
-    let ty = &f.theme.type_;
-    let lbl = |s: &mut Scene, p: Pt, t: &str, col: Color, align: TextAlign| s.text_in(p, t, ty.caption_size + 1.0, col, ty.caption.align(align));
-    lbl(s, polar(pivot, arc_r + 18.0, deg(0.0)), "calm", ink, TextAlign::Right);
-    lbl(s, polar(pivot, arc_r + 18.0, deg(1.0)), "lost", red, TextAlign::Left);
+    let ty = &f.theme.typography;
+    // "calm" ends at the sweep's start, "lost" begins at its end.
+    let size = ty.caption_size + 1.0;
+    let (calm, lost) = (polar(arc_r + 18.0, deg(0.0)), polar(arc_r + 18.0, deg(1.0)));
+    s.text_in(pt(calm.x - caption_half_width("calm", size), calm.y), "calm", size, ink, ty.caption);
+    s.text_in(pt(lost.x + caption_half_width("lost", size), lost.y), "lost", size, red, ty.caption);
     s.text_in(pt(pivot.x, pivot.y - arc_r * 0.42), "SURPRISE", ty.legend_size + 1.5, ink, ty.legend);
 
     // The needle (its shadow first), a red tip, the pivot boss.
-    let v = Some(f.probe(SURPRISE_TAP)).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+    let v = Some(f.tap(RevenantTaps::SURPRISE)).filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
     let d = deg(v);
-    let tip = polar(pivot, needle, d);
+    let tip = polar(needle, d);
     s.stroke(Path::new().move_to(pt(pivot.x + 2.5, pivot.y + 3.5)).line_to(pt(tip.x + 2.5, tip.y + 3.5)), Stroke::round(Color::rgba(0.0, 0.0, 0.0, 0.22), 2.0));
     s.stroke(Path::new().move_to(pivot).line_to(tip), Stroke::round(Color::rgba(0.08, 0.07, 0.06, 1.0), 1.6));
-    s.stroke(Path::new().move_to(polar(pivot, needle - 16.0, d)).line_to(tip), Stroke::round(red, 1.6));
+    s.stroke(Path::new().move_to(polar(needle - 16.0, d)).line_to(tip), Stroke::round(red, 1.6));
     s.solid(Path::circle(pivot, 7.0), Color::rgba(0.18, 0.18, 0.19, 1.0));
     s.solid(Path::circle(pt(pivot.x - 1.5, pivot.y - 1.5), 3.0), Color::rgba(0.55, 0.55, 0.57, 1.0));
+}
+
+/// A vertical linear gradient (`stops` over `y0..y1`) filling the
+/// rounded rect `r` (corner `radius`; a square with half-side radius is
+/// a circle). The face's author surface has no gradient brush, so it is
+/// painted as 1 pt bands of solid colour, each overlapping the next by a
+/// band so no seam shows.
+fn vertical_gradient(s: &mut Scene, r: Rect, radius: f64, (y0, y1): (f64, f64), stops: &[(f64, Color)]) {
+    const BAND: f64 = 1.0;
+    let rad = radius.min(r.w / 2.0).min(r.h / 2.0);
+    // The outline's horizontal inset at height y.
+    let inset = |y: f64| {
+        let dy = (r.y + rad - y).max(y - (r.y + r.h - rad)).clamp(0.0, rad);
+        rad - (rad * rad - dy * dy).sqrt()
+    };
+    let colour = |t: f64| {
+        let t = t.clamp(0.0, 1.0);
+        let i = stops.iter().position(|(at, _)| *at >= t).unwrap_or(stops.len() - 1);
+        if i == 0 {
+            return stops[0].1;
+        }
+        let ((ta, a), (tb, b)) = (stops[i - 1], stops[i]);
+        let u = if tb > ta { (t - ta) / (tb - ta) } else { 1.0 };
+        let mix = |x: f64, y: f64| x + (y - x) * u;
+        Color::rgba(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), mix(a.a, b.a))
+    };
+    let bands = (r.h / BAND).ceil().max(1.0) as usize;
+    for i in 0..bands {
+        let top = r.y + i as f64 * BAND;
+        let bot = (top + 2.0 * BAND).min(r.y + r.h);
+        let ys = [top, (top + bot) / 2.0, bot];
+        let mut path = Path::new().move_to(pt(r.x + inset(top), top));
+        for &y in &ys[1..] {
+            path = path.line_to(pt(r.x + inset(y), y));
+        }
+        for &y in ys.iter().rev() {
+            path = path.line_to(pt(r.x + r.w - inset(y), y));
+        }
+        let mid = (top + BAND / 2.0).min(r.y + r.h);
+        s.solid(path.close(), colour((mid - y0) / (y1 - y0)));
+    }
 }

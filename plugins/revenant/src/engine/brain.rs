@@ -27,11 +27,8 @@
 //! Allocation happens only in `new`/`prepare`; the tick is fixed-size
 //! arithmetic over preallocated buffers.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
 
-use stave_dsp::Xorshift32;
+use stave::dsp::Xorshift32;
 
 pub(super) const NEURONS: usize = 96;
 /// Incoming connections per neuron.
@@ -87,6 +84,9 @@ fn tanh(x: f32) -> f32 {
     let x2 = x * x;
     x * (27.0 + x2) / (27.0 + 9.0 * x2)
 }
+
+/// The training jitter's seed: a reset brain jitters as a fresh one.
+const JITTER_SEED: u32 = 0xD12E_A3F1;
 
 pub(super) struct Brain {
     /// Sparse wiring: for neuron i, `src[i*FAN_IN + k]` feeds it with
@@ -173,7 +173,7 @@ impl Brain {
             dc_x: 0.0,
             dc_y: 0.0,
             y: 0.0,
-            rng: Xorshift32::new(0xD12E_A3F1),
+            rng: Xorshift32::new(JITTER_SEED),
         };
         b.normalise();
         b
@@ -221,6 +221,7 @@ impl Brain {
         self.dc_x = 0.0;
         self.dc_y = 0.0;
         self.y = 0.0;
+        self.rng = Xorshift32::new(JITTER_SEED);
     }
 
     /// One brain step: hear `u`, think, learn, guess. Returns (the

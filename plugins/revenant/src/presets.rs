@@ -1,10 +1,6 @@
 //! Factory presets — each states the FULL face.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::editor_kit::preset;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::RevenantParams;
 
@@ -18,17 +14,17 @@ struct Face {
 }
 
 fn face(name: &'static str, p: &RevenantParams, f: Face) -> Preset {
-    preset(
+    Preset::from_pairs(
         name,
         &[
-            (&p.learn, f.learn), (&p.memory, f.memory), (&p.chaos, f.chaos), (&p.horizon, f.horizon),
-            (&p.dream, f.dream), (&p.mix, f.mix), (&p.sleep, 0.0), (&p.output, 0.0),
+            (p.learn.id(), f.learn), (p.memory.id(), f.memory), (p.chaos.id(), f.chaos), (p.horizon.id(), f.horizon),
+            (p.dream.id(), f.dream), (p.mix.id(), f.mix), (p.sleep.id(), 0.0), (p.output.id(), 0.0),
         ],
     )
 }
 
 pub fn presets(p: &RevenantParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         face("INIT", p, Face { learn: 0.6, memory: 0.6, chaos: 0.45, horizon: 3.0, dream: 0.0, mix: 0.5 }),
         // A close shadow: it learns fast and guesses only a hair ahead.
         face("SHADOW", p, Face { learn: 0.85, memory: 0.3, chaos: 0.4, horizon: 0.6, dream: 0.0, mix: 0.45 }),

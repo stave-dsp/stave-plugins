@@ -22,7 +22,8 @@
 //!   DREAM are — only SLEEP keeps it going.
 //! * Maxed CHAOS + DREAM + LEARN under noise stays bounded.
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx, Tap};
+use stave_revenant_vst3::{Revenant, RevenantTaps};
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -33,45 +34,30 @@ struct Run {
     activity: Vec<f64>,
 }
 
+/// Render `input` with params `set` from the start and `at` = (seconds,
+/// name, value) moves during the run.
 fn render(set: &[(&str, f64)], at: &[(f32, &str, f64)], input: &[f32]) -> Run {
-    let mut plugin = stave_revenant_vst3::Revenant::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    let find = |n: &str| table.by_name(n).unwrap_or_else(|| panic!("param '{n}'"));
-    for (n, v) in set {
-        find(n).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
-    let taps: Vec<Tap> = stave_revenant_vst3::NEURON_TAPS.iter().map(|n| Tap::new(n)).collect();
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Revenant>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let mut out = Vec::with_capacity(input.len());
     let mut activity = Vec::new();
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
     for (b, chunk) in input.chunks(BLOCK).enumerate() {
         let t = (b * BLOCK) as f32 / FS;
         for (s, n, v) in at {
             if t >= *s && t < *s + BLOCK as f32 / FS {
-                find(n).set_plain(*v);
+                h.set(*n, *v);
             }
         }
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out.extend_from_slice(&ol[..chunk.len()]);
-        let a: f64 = taps.iter().map(|t| t.get(&bus).unwrap_or(0.0).abs()).sum::<f64>() / taps.len() as f64;
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        out.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+        let taps = RevenantTaps::NEURONS;
+        let a: f64 = taps.iter().map(|&t| h.telemetry().value(t).unwrap_or(0.0).abs()).sum::<f64>() / taps.len() as f64;
         activity.push(a);
     }
     Run { out, activity }

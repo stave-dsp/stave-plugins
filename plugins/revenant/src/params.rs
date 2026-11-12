@@ -7,10 +7,7 @@
 //!   (bypass)        revenant              (sleep)
 //! ```
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::{BoolParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit};
+use stave::prelude::*;
 
 #[derive(Params)]
 pub struct RevenantParams {
@@ -39,43 +36,48 @@ pub struct RevenantParams {
     pub sleep: BoolParam,
 }
 
-impl RevenantParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            learn: FloatParam::new(3, "learn", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Mind")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            memory: FloatParam::new(4, "memory", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Mind")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            chaos: FloatParam::new(5, "chaos", 0.45, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Mind")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            horizon: FloatParam::new(6, "horizon", 3.0, Range::new(0.25, 25.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Mind"),
-            dream: FloatParam::new(7, "dream", 0.0, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Mind")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            mix: FloatParam::new(8, "mix", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            sleep: BoolParam::new(9, "sleep", false)
-                .with_group("Mind")
-                .with_names("AWAKE", "ASLEEP"),
-        })
+impl Default for RevenantParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            learn: FloatParam::new(ParamId(3), "learn", unit())
+                .default(0.6)
+                .unit(Unit::Percent)
+                .group("Mind")
+                .smooth(Smooth::ms(50.0)),
+            memory: FloatParam::new(ParamId(4), "memory", unit())
+                .default(0.6)
+                .unit(Unit::Percent)
+                .group("Mind")
+                .smooth(Smooth::ms(50.0)),
+            chaos: FloatParam::new(ParamId(5), "chaos", unit())
+                .default(0.45)
+                .unit(Unit::Percent)
+                .group("Mind")
+                .smooth(Smooth::ms(50.0)),
+            horizon: FloatParam::new(ParamId(6), "horizon", Range::log(0.25, 25.0))
+                .default(3.0)
+                .unit(Unit::Ms)
+                .group("Mind"),
+            dream: FloatParam::new(ParamId(7), "dream", unit())
+                .default(0.0)
+                .unit(Unit::Percent)
+                .group("Mind")
+                .smooth(Smooth::ms(50.0)),
+            mix: FloatParam::new(ParamId(8), "mix", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Output")
+                .smooth(Smooth::ms(10.0)),
+            sleep: BoolParam::new(ParamId(9), "sleep", false)
+                .group("Mind")
+                .names("AWAKE", "ASLEEP"),
+        }
     }
 }
