@@ -5,13 +5,7 @@
 //! Tap/Shift footswitch's hold as DIVE, and host sync where the
 //! pedal has tap tempo.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// The five programs — each pairs two machines in series, each
@@ -40,7 +34,7 @@ param_enum! {
 pub struct SagaParams {
     /// Output trim. Smoothing is DECLARED here (table-owned ramp).
     pub output: FloatParam,
-    /// The framework gate owns click-free bypass; this carries the flag.
+    /// The host's bypass switch; the framework runs it (click-free).
     pub bypass: BoolParam,
     /// Which program runs.
     pub mode: EnumParam<Mode>,
@@ -81,65 +75,72 @@ pub struct SagaParams {
     pub sync: EnumParam<Sync>,
 }
 
-impl SagaParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            mode: EnumParam::new(3, "mode", Mode(0)).with_group("Program"),
-            feedback: FloatParam::new(4, "feedback", 0.45, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            regen: FloatParam::new(5, "regen", 0.4, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            mod_depth: FloatParam::new(6, "mod", 0.25, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            mix: FloatParam::new(7, "mix", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            x: FloatParam::new(8, "x", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 60.0 }),
-            time: FloatParam::new(9, "time", 450.0, Range::new(50.0, 1200.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 150.0 }),
-            tone: FloatParam::new(10, "tone", 0.75, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Program")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            width: FloatParam::new(11, "width", 0.6, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Tweak")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            mod_rate: FloatParam::new(12, "mod rate", 0.6, Range::new(0.1, 5.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Tweak")
-                .with_smooth(Smooth::Exp { ms: 50.0 }),
-            mod_shape: EnumParam::new(13, "mod shape", ModShape(0)).with_group("Tweak"),
-            shift: FloatParam::new(14, "shift", 0.5, Range::new(0.5, 2.0, Taper::Log))
-                .with_unit(Unit::Plain { decimals: 2 })
-                .with_group("Tweak"),
-            ramp: FloatParam::new(15, "ramp", 600.0, Range::new(50.0, 5000.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Tweak"),
-            dive: BoolParam::new(16, "dive", false)
-                .with_group("Tweak")
-                .with_names("OFF", "HELD"),
-            sync: EnumParam::new(17, "sync", Sync(0)).with_group("Program"),
-        })
+impl Default for SagaParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            mode: EnumParam::new(ParamId(3), "mode", Mode(0)).group("Program"),
+            feedback: FloatParam::new(ParamId(4), "feedback", unit())
+                .default(0.45)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(30.0)),
+            regen: FloatParam::new(ParamId(5), "regen", unit())
+                .default(0.4)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(30.0)),
+            mod_depth: FloatParam::new(ParamId(6), "mod", unit())
+                .default(0.25)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(50.0)),
+            mix: FloatParam::new(ParamId(7), "mix", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(10.0)),
+            x: FloatParam::new(ParamId(8), "x", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(60.0)),
+            time: FloatParam::new(ParamId(9), "time", Range::log(50.0, 1200.0))
+                .default(450.0)
+                .unit(Unit::Ms)
+                .group("Program")
+                .smooth(Smooth::ms(150.0)),
+            tone: FloatParam::new(ParamId(10), "tone", unit())
+                .default(0.75)
+                .unit(Unit::Percent)
+                .group("Program")
+                .smooth(Smooth::ms(20.0)),
+            width: FloatParam::new(ParamId(11), "width", unit())
+                .default(0.6)
+                .unit(Unit::Percent)
+                .group("Tweak")
+                .smooth(Smooth::ms(20.0)),
+            mod_rate: FloatParam::new(ParamId(12), "mod rate", Range::log(0.1, 5.0))
+                .default(0.6)
+                .unit(Unit::Hz)
+                .group("Tweak")
+                .smooth(Smooth::ms(50.0)),
+            mod_shape: EnumParam::new(ParamId(13), "mod shape", ModShape(0)).group("Tweak"),
+            shift: FloatParam::new(ParamId(14), "shift", Range::log(0.5, 2.0))
+                .default(0.5)
+                .unit(Unit::Plain { decimals: 2 })
+                .group("Tweak"),
+            ramp: FloatParam::new(ParamId(15), "ramp", Range::log(50.0, 5000.0))
+                .default(600.0)
+                .unit(Unit::Ms)
+                .group("Tweak"),
+            dive: BoolParam::new(ParamId(16), "dive", false).group("Tweak").names("OFF", "HELD"),
+            sync: EnumParam::new(ParamId(17), "sync", Sync(0)).group("Program"),
+        }
     }
 }

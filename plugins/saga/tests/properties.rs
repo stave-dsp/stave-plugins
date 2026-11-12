@@ -12,9 +12,8 @@
 //!   buffers plays an octave lower.
 //! * The reverse line plays BACKWARD (a rising chirp's repeat falls).
 
-use std::sync::Arc;
-
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave_saga_vst3::Saga;
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -55,48 +54,25 @@ fn rms(x: &[f32]) -> f32 {
 /// front and `at` = (sample, name, value) automation applied at the
 /// block containing that sample. Returns (left, right).
 pub fn render(set: &[(&str, f64)], at: &[(usize, &str, f64)], input: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mut plugin = stave_saga_vst3::Saga::new();
-    let bus = DebugBus::new();
-    plugin.debug_attach(bus.clone());
-    let table = plugin.param_table();
-    let find = |n: &str| table.by_name(n).unwrap_or_else(|| panic!("param '{n}'"));
-    for (n, v) in set {
-        find(n).set_plain(*v);
-    }
-    plugin.activate(FS, BLOCK);
+    let mut h = set
+        .iter()
+        .fold(PluginHarness::<Saga>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, *v))
+        .build();
     let (mut out_l, mut out_r) = (Vec::with_capacity(input.len()), Vec::with_capacity(input.len()));
-    let mut in_l = vec![0.0f32; BLOCK];
-    let mut in_r = vec![0.0f32; BLOCK];
-    let mut ol = vec![0.0f32; BLOCK];
-    let mut or = vec![0.0f32; BLOCK];
     for (b, chunk) in input.chunks(BLOCK).enumerate() {
         for (s, n, v) in at {
             if s / BLOCK == b {
-                find(n).set_plain(*v);
+                h.set(*n, *v);
             }
         }
-        in_l[..chunk.len()].copy_from_slice(chunk);
-        in_l[chunk.len()..].fill(0.0);
-        in_r.copy_from_slice(&in_l);
-        let mut in_ptrs = [core::ptr::null_mut(); 2];
-        let mut out_ptrs = [core::ptr::null_mut(); 2];
-        let inb = AudioBuffer::from_slices(&mut in_ptrs, [&mut in_l, &mut in_r], BLOCK);
-        let outb = AudioBuffer::from_slices(&mut out_ptrs, [&mut ol, &mut or], BLOCK);
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: inb,
-            output: outb,
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        out_l.extend_from_slice(&ol[..chunk.len()]);
-        out_r.extend_from_slice(&or[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        out_l.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+        out_r.extend_from_slice(&h.outputs()[1][..chunk.len()]);
     }
-    let _ = Arc::strong_count(&bus);
     (out_l, out_r)
 }
 

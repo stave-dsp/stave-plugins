@@ -5,7 +5,7 @@
 //! never wander the image. Ratio may change every tick — program V
 //! steps it through its interval sequence.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 use super::reverse::sin2;
 
@@ -24,7 +24,7 @@ impl Transposer {
 
     pub(super) fn prepare(&mut self) {
         for l in &mut self.lines {
-            l.prepare(self.window as usize + 8);
+            l.allocate(self.window as usize + 8);
         }
         self.phase = 0.0;
     }

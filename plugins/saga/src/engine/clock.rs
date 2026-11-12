@@ -15,12 +15,12 @@
 //!   reconstruction filter) — at clock 1× that is the pedal's ~14 kHz
 //!   wet bandwidth; dived to 0.5×, the wet goes dark with it.
 
-use stave_dsp::Svf;
+use stave::dsp::{Stage, Svf};
 
 use super::programs::CORE_HZ;
 
-/// Butterworth-4 as two SVF sections (Q 0.54 and 1.31 → Svf resonance).
-const RES: [f32; 2] = [0.076, 0.617];
+/// Butterworth-4 as two SVF sections.
+const Q: [f32; 2] = [0.541_196, 1.306_563];
 
 pub(super) struct ClockDomain {
     host_hz: f32,
@@ -29,8 +29,9 @@ pub(super) struct ClockDomain {
     prev_in: [f32; 2],
     /// Last four core outputs per lane, oldest first.
     hist: [[f32; 4]; 2],
-    aa_in: [Svf; 2],
-    aa_out: [Svf; 2],
+    /// The converter filters, per lane: two sections each.
+    aa_in: [[Svf; 2]; 2],
+    aa_out: [[Svf; 2]; 2],
 }
 
 impl ClockDomain {
@@ -40,14 +41,14 @@ impl ClockDomain {
             acc: 0.0,
             prev_in: [0.0; 2],
             hist: [[0.0; 4]; 2],
-            aa_in: [Svf::new(), Svf::new()],
-            aa_out: [Svf::new(), Svf::new()],
+            aa_in: [[Svf::default(); 2]; 2],
+            aa_out: [[Svf::default(); 2]; 2],
         }
     }
 
     pub(super) fn prepare(&mut self, host_hz: f32) {
         self.host_hz = host_hz;
-        for f in self.aa_in.iter_mut().chain(self.aa_out.iter_mut()) {
+        for f in self.aa_in.iter_mut().chain(&mut self.aa_out).flatten() {
             f.prepare(host_hz);
         }
         self.reset();
@@ -58,7 +59,7 @@ impl ClockDomain {
         self.acc = 0.0;
         self.prev_in = [0.0; 2];
         self.hist = [[0.0; 4]; 2];
-        for f in self.aa_in.iter_mut().chain(self.aa_out.iter_mut()) {
+        for f in self.aa_in.iter_mut().chain(&mut self.aa_out).flatten() {
             f.reset();
         }
     }
@@ -66,11 +67,10 @@ impl ClockDomain {
     /// Re-voice the converter filters for a clock (block rate).
     pub(super) fn set_clock(&mut self, clock: f32) {
         let corner = 0.45 * (CORE_HZ * clock).min(self.host_hz);
-        for (i, f) in self.aa_in.iter_mut().enumerate() {
-            f.set(corner, RES[i]);
-        }
-        for (i, f) in self.aa_out.iter_mut().enumerate() {
-            f.set(corner, RES[i]);
+        for lane in self.aa_in.iter_mut().chain(&mut self.aa_out) {
+            for (f, q) in lane.iter_mut().zip(Q) {
+                f.set(corner, q);
+            }
         }
     }
 
@@ -85,8 +85,8 @@ impl ClockDomain {
     ) -> [f32; 2] {
         let mut xi = [0.0; 2];
         for c in 0..2 {
-            let s = self.aa_in[0].process_lp(x[c], c);
-            xi[c] = self.aa_in[1].process_lp(s, c);
+            let [a, b] = &mut self.aa_in[c];
+            xi[c] = b.tick(a.tick(x[c]));
         }
         let ratio = CORE_HZ * clock / self.host_hz;
         let start = self.acc;
@@ -115,8 +115,8 @@ impl ClockDomain {
         for c in 0..2 {
             let h = self.hist[c];
             let y = hermite(h[0], h[1], h[2], h[3], t);
-            let s = self.aa_out[0].process_lp(y, c);
-            out[c] = self.aa_out[1].process_lp(s, c);
+            let [a, b] = &mut self.aa_out[c];
+            out[c] = b.tick(a.tick(y));
         }
         out
     }
