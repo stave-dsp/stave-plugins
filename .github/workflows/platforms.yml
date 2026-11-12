@@ -1,11 +1,6 @@
 # Linux and Windows: every plugin builds, lints and passes its tests
 # there too (the framework's ledger X: docs/overhaul.md in
 # stave-dsp/stave). macOS, the validators and the bundles are ci.yml's.
-#
-# The framework supports Linux and Windows from overhaul X (X1–X16); until
-# Cargo.toml's framework rev includes it, these jobs report without
-# failing the run (`continue-on-error`). Remove that line once the rev is
-# bumped past it.
 name: platforms
 
 on:
@@ -32,7 +27,6 @@ jobs:
   test:
     name: build + clippy + test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
