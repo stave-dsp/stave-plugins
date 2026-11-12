@@ -4,7 +4,9 @@
 //! wet-only levels printed (the wet-balance record). Run with
 //! `cargo test --release -p stave-heirloom-vst3 --test listen -- --ignored --nocapture`.
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave::prelude::*;
+use stave_heirloom_vst3::{Heirloom, HeirloomParams};
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -39,33 +41,19 @@ fn phrase() -> Vec<f32> {
     out
 }
 
-fn render(plugin: &mut stave_heirloom_vst3::Heirloom, input: &[f32], dive_at: usize) -> (Vec<f32>, Vec<f32>) {
-    let table = plugin.param_table();
-    let dive = table.by_name("hold").expect("hold");
+fn render(h: &mut PluginHarness<Heirloom>, input: &[f32], hold_at: usize) -> (Vec<f32>, Vec<f32>) {
     let (mut l, mut r) = (Vec::new(), Vec::new());
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0; BLOCK], vec![0.0; BLOCK], vec![0.0; BLOCK], vec![0.0; BLOCK]);
     for (b, chunk) in input.chunks(BLOCK).enumerate() {
-        if b * BLOCK >= dive_at {
-            dive.set_plain(1.0);
+        if b * BLOCK >= hold_at {
+            h.set("hold", 1.0);
         }
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        l.extend_from_slice(&ol[..chunk.len()]);
-        r.extend_from_slice(&or[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        l.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+        r.extend_from_slice(&h.outputs()[1][..chunk.len()]);
     }
     (l, r)
 }
@@ -77,22 +65,18 @@ fn audition_every_preset() {
     let dry = rms(&input[..(FS * 4.0) as usize]);
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/listen");
     std::fs::create_dir_all(dir).unwrap();
-    let names: Vec<_> = stave_heirloom_vst3::Heirloom::new().presets().into_iter().map(|p| p.name).collect();
+    let params = HeirloomParams::default();
+    let presets = Heirloom::presets(&params);
     println!("dry rms {:.1} dBFS", 20.0 * dry.log10());
-    for (i, name) in names.iter().enumerate() {
+    for preset in &presets {
+        let name = preset.name;
         let run = |wet_only: bool| {
-            let mut plugin = stave_heirloom_vst3::Heirloom::new();
-            plugin.debug_attach(DebugBus::new());
-            let table = plugin.param_table();
-            for (id, v) in &plugin.presets()[i].values {
-                table.by_id(*id).unwrap().set_plain(*v);
-            }
-            if wet_only {
-                let mix = table.by_name("mix").expect("mix");
-                mix.set_plain(1.0);
-            }
-            plugin.activate(FS, BLOCK);
-            render(&mut plugin, &input, (FS * 8.0) as usize)
+            let named = preset.values.iter().map(|(id, v)| (params.by_id(*id).expect("preset id").meta().name, *v));
+            let mut h = named
+                .chain(wet_only.then_some(("mix", 1.0)))
+                .fold(PluginHarness::<Heirloom>::builder().sample_rate(FS).block_size(BLOCK), |b, (n, v)| b.set(n, v))
+                .build();
+            render(&mut h, &input, (FS * 8.0) as usize)
         };
         let (wl, _) = run(true);
         let (l, r) = run(false);
@@ -104,7 +88,7 @@ fn audition_every_preset() {
             peak
         );
         let file = format!("{dir}/heirloom-{}.wav", name.replace(" / ", "-").replace(' ', "_").to_lowercase());
-        let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: vec![l, r] };
-        stave_measure::wav::write(std::path::Path::new(&file), &audio).unwrap();
+        let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: vec![l, r] };
+        stave_host::wav::write(std::path::Path::new(&file), &audio).unwrap();
     }
 }

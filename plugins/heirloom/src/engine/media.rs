@@ -19,7 +19,7 @@
 
 use core::f32::consts::TAU;
 
-use stave_dsp::{DelayLine, Svf, Xorshift32};
+use stave::dsp::{DelayLine, Stage, Svf, Xorshift32};
 
 /// The longest excursion either side, ms (WOBBLE 1, slowest RPM).
 const WOBBLE_MS: f32 = 6.0;
@@ -109,7 +109,7 @@ const VOICES: [Voice; 3] = [
 /// Per-block settings (AGE and MEDIA move the filter corners, which
 /// are set once a block — the knob is smoothed, the steps are tiny).
 #[derive(Copy, Clone)]
-pub(super) struct Block {
+pub(super) struct Wear {
     pub(super) media: usize,
     pub(super) warp: usize,
 }
@@ -127,10 +127,12 @@ pub(super) struct Media {
     flutter: f32,
     /// Slow random wander riding the flutter (no transport is a clock).
     jitter: f32,
-    lp: Svf,
-    hp: Svf,
-    /// Shapes hiss (tilts it toward the top) and rumble (a low band).
-    hiss_tilt: Svf,
+    /// The medium's band, per lane.
+    lp: [Svf; 2],
+    hp: [Svf; 2],
+    /// Shapes hiss (tilts it toward the top, per lane) and rumble (a
+    /// low band, mono).
+    hiss_tilt: [Svf; 2],
     rumble_lp: Svf,
     /// A crackle in flight: amplitude, decay per sample, its pan.
     click: f32,
@@ -146,6 +148,13 @@ pub(super) struct Media {
     last_d: f32,
     speed_sum: f32,
     speed_n: u32,
+}
+
+/// The Q of a resonance in 0..1 (damping `k = 2 − 2·res`): 0 is
+/// Q 0.5, the voicing's knob-feel scale.
+#[inline]
+fn q_of(res: f32) -> f32 {
+    1.0 / (2.0 - 2.0 * res.clamp(0.0, 0.999))
 }
 
 #[inline]
@@ -167,10 +176,10 @@ impl Media {
             rev: 0.0,
             flutter: 0.0,
             jitter: 0.0,
-            lp: Svf::new(),
-            hp: Svf::new(),
-            hiss_tilt: Svf::new(),
-            rumble_lp: Svf::new(),
+            lp: [Svf::default(); 2],
+            hp: [Svf::default(); 2],
+            hiss_tilt: [Svf::default(); 2],
+            rumble_lp: Svf::default(),
             click: 0.0,
             click_decay: 0.0,
             click_pan: 0.5,
@@ -188,13 +197,16 @@ impl Media {
         self.host_hz = host_hz;
         let n = (LINE_MS * 0.001 * host_hz) as usize + 8;
         for l in &mut self.line {
-            l.prepare(n);
+            l.allocate(n);
         }
-        for f in [&mut self.lp, &mut self.hp, &mut self.hiss_tilt, &mut self.rumble_lp] {
+        let lanes = self.lp.iter_mut().chain(&mut self.hp).chain(&mut self.hiss_tilt);
+        for f in lanes.chain([&mut self.rumble_lp]) {
             f.prepare(host_hz);
         }
-        self.hiss_tilt.set(2_500.0, 0.0);
-        self.rumble_lp.set(60.0, 0.4);
+        for f in &mut self.hiss_tilt {
+            f.set(2_500.0, q_of(0.0));
+        }
+        self.rumble_lp.set(60.0, q_of(0.4));
         self.rng = Xorshift32::new(0x51A6_E10F);
         self.phase = 0.0;
         self.drift_from = 0.0;
@@ -222,12 +234,15 @@ impl Media {
     }
 
     /// Move the filter corners to this block's AGE.
-    pub(super) fn begin_block(&mut self, age: f32, b: Block) {
+    pub(super) fn begin_block(&mut self, age: f32, b: Wear) {
         let v = &VOICES[b.media];
         let nyq = 0.45 * self.host_hz;
         let lp = 20_000.0f32.min(nyq) * (v.lp_hz / 20_000.0).powf(age);
-        self.lp.set(lp, 0.15 * age);
-        self.hp.set(10.0 * (v.hp_hz / 10.0).powf(age), 0.1);
+        let hp = 10.0 * (v.hp_hz / 10.0).powf(age);
+        for ch in 0..2 {
+            self.lp[ch].set(lp, q_of(0.15 * age));
+            self.hp[ch].set(hp, q_of(0.1));
+        }
     }
 
     /// The wobble LFO, −1…1, advanced one frame at `rpm` Hz.
@@ -260,7 +275,7 @@ impl Media {
 
     /// One frame. `wobble`, `rpm`, `age` are the smoothed knobs.
     #[inline]
-    pub(super) fn process(&mut self, x: [f32; 2], wobble: f32, rpm: f32, age: f32, b: Block) -> [f32; 2] {
+    pub(super) fn process(&mut self, x: [f32; 2], wobble: f32, rpm: f32, age: f32, b: Wear) -> [f32; 2] {
         let v = &VOICES[b.media];
         let ms = 0.001 * self.host_hz;
 
@@ -312,10 +327,10 @@ impl Media {
         let hiss_amt = v.hiss * a2;
         let white = [self.rng.next_bipolar(), self.rng.next_bipolar()];
         let hiss = [
-            hiss_amt * self.hiss_tilt.process(white[0], 0).hp,
-            hiss_amt * self.hiss_tilt.process(white[1], 1).hp,
+            hiss_amt * self.hiss_tilt[0].taps(white[0]).hp,
+            hiss_amt * self.hiss_tilt[1].taps(white[1]).hp,
         ];
-        let rum = v.rumble * a2 * 6.0 * self.rumble_lp.process_lp(self.rng.next_bipolar(), 0);
+        let rum = v.rumble * a2 * 6.0 * self.rumble_lp.tick(self.rng.next_bipolar());
         if self.click.abs() < 1e-4 && self.rng.next_unit() < v.crackle_hz * age / self.host_hz {
             let big = self.rng.next_unit();
             self.click = (0.02 + 0.25 * big * big * big) * age * self.rng.next_bipolar().signum();
@@ -330,8 +345,8 @@ impl Media {
         let mut out = [0.0; 2];
         for ch in 0..2 {
             let s = soft(y[ch] * drive) / drive.clamp(1.0, 2.0);
-            let s = self.lp.process_lp(s, ch);
-            let s = self.hp.process(s, ch).hp;
+            let s = self.lp[ch].tick(s);
+            let s = self.hp[ch].taps(s).hp;
             let pan = if ch == 0 { 1.0 - self.click_pan } else { self.click_pan };
             let worn = s * self.drop_gain + hiss[ch] + rum + self.click * (0.4 + 0.6 * pan) + whine;
             out[ch] = y[ch] + blend * (worn - y[ch]);

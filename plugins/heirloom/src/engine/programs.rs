@@ -20,7 +20,7 @@
 //! everything in the buffers changes pitch and every time scales —
 //! the pedal's DIVE/RISE and program IV's stretch are the same act.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 use super::path::{soft, AnalogPath};
 use super::reverse::ReverseLine;
@@ -103,7 +103,7 @@ impl Programs {
             l.prepare(max, c as f32 * 0.25);
         }
         for l in &mut self.b {
-            l.prepare(max);
+            l.allocate(max);
         }
         self.tank_a.prepare(CORE_HZ);
         self.tank_b.prepare(CORE_HZ);

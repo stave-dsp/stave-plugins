@@ -6,7 +6,7 @@
 //! serves a plain forward tap — the X knob of program I blends the
 //! two, and program V uses it as an ordinary delay.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 pub(super) struct ReverseLine {
     line: DelayLine,
@@ -24,7 +24,7 @@ impl ReverseLine {
     /// sweep (the right lane runs a quarter segment off the left, so
     /// the two ears splice at different instants — width for free).
     pub(super) fn prepare(&mut self, max_len: usize, offset: f32) {
-        self.line.prepare(2 * max_len + 8);
+        self.line.allocate(2 * max_len + 8);
         self.phase = offset;
     }
 

@@ -2,15 +2,14 @@
 //! (TIME / REPEATS / MIX, large), the worn record under it (WOBBLE /
 //! RPM / AGE), and between the footswitches the record itself, rising
 //! like a sun behind glass, its label turning at the engine's platter
-//! angle (the `spin` probe — wobble lurches, HOLD sags, bypass brakes).
+//! angle (the `spin` tap — wobble lurches, HOLD sags, bypass brakes).
 
-use core::f64::consts::{PI, TAU};
+use std::f64::consts::{PI, TAU};
 
-use stave_core::face::prelude::*;
-use stave_core::params::BindParam;
-use stave_ui::scene::{Pt, TextAlign};
+use stave::prelude::*;
 
-use crate::clip;
+use crate::clip::{self, P};
+use crate::engine::HeirloomTaps;
 use crate::params::HeirloomParams;
 
 pub fn face(p: &HeirloomParams) -> Face {
@@ -45,7 +44,7 @@ pub fn face(p: &HeirloomParams) -> Face {
         .gap(gap)
         .align(Align::Center),
     );
-    let platter = Display::new(340.0, 150.0, draw_record).probes(&["spin"]).node();
+    let platter = Display::new(340.0, 150.0, draw_record).taps(&[HeirloomTaps::SPIN]).node();
     let feet = row(vec![
         Footswitch::bypass(p.bypass.bind()).node(),
         spacer(),
@@ -64,12 +63,12 @@ fn rgb(h: u32, a: f64) -> Color {
 }
 
 /// Points round `c` at radius `rad(a)` from angle `a0` to `a1`.
-fn arc_pts(c: Pt, a0: f64, a1: f64, n: usize, rad: impl Fn(f64) -> f64) -> Vec<Pt> {
+fn arc_pts(c: P, a0: f64, a1: f64, n: usize, rad: impl Fn(f64) -> f64) -> Vec<P> {
     (0..=n)
         .map(|i| {
             let a = a0 + (a1 - a0) * i as f64 / n as f64;
             let r = rad(a);
-            pt(c.x + r * a.cos(), c.y + r * a.sin())
+            (c.0 + r * a.cos(), c.1 + r * a.sin())
         })
         .collect()
 }
@@ -86,16 +85,16 @@ fn hash(i: u32) -> f64 {
 /// its grooves catching the studio light in two still bands (light
 /// doesn't turn), and the printed label turning by `spin`.
 fn draw_record(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let spin = Some(f.probe("spin")).filter(|a| a.is_finite()).unwrap_or(0.0);
-    let c = pt(r.x + r.w / 2.0, r.y + r.h - 6.0);
+    let spin = Some(f.tap(HeirloomTaps::SPIN)).filter(|a| a.is_finite()).unwrap_or(0.0);
+    let c: P = (r.x + r.w / 2.0, r.y + r.h - 6.0);
     let rad = r.h - 20.0;
     let lab = rad * 0.37;
-    let fill = |s: &mut Scene, pts: &[Pt], col: Color| {
+    let fill = |s: &mut Scene, pts: &[P], col: Color| {
         if let Some(p) = clip::polygon(pts, r) {
             s.solid(p, col);
         }
     };
-    let line = |s: &mut Scene, pts: &[Pt], st: Stroke| {
+    let line = |s: &mut Scene, pts: &[P], st: Stroke| {
         for p in clip::polyline(pts, r) {
             s.stroke(p, st);
         }
@@ -142,13 +141,13 @@ fn draw_record(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     for i in 0..24 {
         let a = spin + TAU * f64::from(i) / 24.0;
         let d = lab - 12.0;
-        let p = pt(c.x + d * a.cos(), c.y + d * a.sin());
+        let p = pt(c.0 + d * a.cos(), c.1 + d * a.sin());
         if p.y < r.y + r.h - 1.5 {
             s.solid(Path::circle(p, 1.4), rgb(0x3A1C10, 1.0));
         }
     }
     let sa = spin + 0.9;
-    let spoke = [pt(c.x + 10.0 * sa.cos(), c.y + 10.0 * sa.sin()), pt(c.x + (lab - 19.0) * sa.cos(), c.y + (lab - 19.0) * sa.sin())];
+    let spoke = [(c.0 + 10.0 * sa.cos(), c.1 + 10.0 * sa.sin()), (c.0 + (lab - 19.0) * sa.cos(), c.1 + (lab - 19.0) * sa.sin())];
     line(s, &spoke, Stroke::new(rgb(0xEADFC6, 1.0), 2.4));
     // A soft light falling across the paper, then the spindle.
     let mut lit = arc_pts(c, az - 1.2, az + 1.2, 24, |_| lab);
@@ -160,7 +159,7 @@ fn draw_record(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     // The tonearm, resting in the outer grooves from the right.
     let pivot = pt(r.x + r.w - 28.0, r.y + 28.0);
     let ta = -0.72_f64;
-    let tip = pt(c.x + rad * 0.88 * ta.cos(), c.y + rad * 0.88 * ta.sin());
+    let tip = pt(c.0 + rad * 0.88 * ta.cos(), c.1 + rad * 0.88 * ta.sin());
     let shadow = [pt(pivot.x + 2.0, pivot.y + 4.0), pt(tip.x + 2.0, tip.y + 4.0)];
     s.stroke(Path::polyline(&shadow), Stroke::round(Color::rgba(0.0, 0.0, 0.0, 0.5), 3.6));
     s.stroke(Path::polyline(&[pivot, tip]), Stroke::round(rgb(0xC9C5BC, 1.0), 2.6));
@@ -180,6 +179,8 @@ fn draw_record(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     s.solid(Path::circle(pivot, 2.5), rgb(0x2A2826, 1.0));
 
     // 33⅓ in the screen's phosphor.
-    let ty = &f.theme.type_;
-    s.text_in(pt(r.x + 12.0, r.y + 18.0), "33⅓", ty.caption_size, f.theme.phosphor, ty.caption.align(TextAlign::Left));
+    // (Flush left as a `Title` sets: the face API names no alignment.)
+    let ty = &f.theme.typography;
+    let caption = ty.caption.align(Title::new("").align);
+    s.text_in(pt(r.x + 12.0, r.y + 18.0), "33⅓", ty.caption_size, f.theme.palette.phosphor, caption);
 }

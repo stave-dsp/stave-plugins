@@ -5,7 +5,7 @@
 //! clock stretches the space stretches with it — program IV's TIME
 //! is exactly that.
 
-use stave_dsp::DelayLine;
+use stave::dsp::DelayLine;
 
 use super::path::flush;
 
@@ -70,11 +70,11 @@ impl Tank {
     /// Allocate at the nominal tick rate `fs`.
     pub(super) fn prepare(&mut self, fs: f32) {
         for (i, l) in self.lines.iter_mut().enumerate() {
-            l.prepare((LENGTHS[i] + WOBBLE_TICKS) as usize + 8);
+            l.allocate((LENGTHS[i] + WOBBLE_TICKS) as usize + 8);
         }
         for chain in &mut self.diffuse {
             for ap in chain.iter_mut() {
-                ap.line.prepare(ap.len + 2);
+                ap.line.allocate(ap.len + 2);
             }
         }
         for i in 0..LINES {

@@ -8,7 +8,7 @@
 //! * MOD: the LFO (sine / square / smoothed random) wobbling the
 //!   clock — the whole wet image detunes together, tape-like.
 
-use stave_dsp::Lag;
+use stave::dsp::{Lag, Stage};
 
 /// Program IV's TIME → clock span: the knob's travel maps 2× … 0.5×.
 const IV_OCTAVES: f32 = 1.0;

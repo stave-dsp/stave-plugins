@@ -9,13 +9,7 @@
 //!   (bypass)           (hold)     ← footswitches
 //! ```
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// Which reverse machine runs the wet core (saga programs I, II, IV):
@@ -51,7 +45,8 @@ param_enum! {
 pub struct HeirloomParams {
     /// Output trim (host-side; not on the face).
     pub output: FloatParam,
-    /// Left footswitch. The framework gate owns click-free bypass.
+    /// Left footswitch: the host's bypass switch; the framework runs it
+    /// (click-free).
     pub bypass: BoolParam,
     /// Delay time (REVERSE, OCTAVE); the time-stretch of the space (BLOOM).
     pub time: FloatParam,
@@ -79,48 +74,50 @@ pub struct HeirloomParams {
     pub sync: EnumParam<Sync>,
 }
 
-impl HeirloomParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            time: FloatParam::new(3, "time", 450.0, Range::new(50.0, 1200.0, Taper::Log))
-                .with_unit(Unit::Ms)
-                .with_group("Machine")
-                .with_smooth(Smooth::Exp { ms: 150.0 }),
-            repeats: FloatParam::new(4, "repeats", 0.5, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Machine")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            mix: FloatParam::new(5, "mix", 0.45, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Machine")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            wobble: FloatParam::new(6, "wobble", 0.3, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Media")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            rpm: FloatParam::new(7, "rpm", 0.8, Range::new(0.1, 8.0, Taper::Log))
-                .with_unit(Unit::Hz)
-                .with_group("Media")
-                .with_smooth(Smooth::Exp { ms: 60.0 }),
-            age: FloatParam::new(8, "age", 0.0, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Media")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            machine: EnumParam::new(9, "machine", Machine(0)).with_group("Machine"),
-            warp: EnumParam::new(10, "warp", Warp(0)).with_group("Media"),
-            media: EnumParam::new(11, "media", Media(0)).with_group("Media"),
-            hold: BoolParam::new(12, "hold", false)
-                .with_group("Machine")
-                .with_names("OFF", "HELD"),
-            sync: EnumParam::new(13, "sync", Sync(0)).with_group("Machine"),
-        })
+impl Default for HeirloomParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            time: FloatParam::new(ParamId(3), "time", Range::log(50.0, 1200.0))
+                .default(450.0)
+                .unit(Unit::Ms)
+                .group("Machine")
+                .smooth(Smooth::ms(150.0)),
+            repeats: FloatParam::new(ParamId(4), "repeats", unit())
+                .default(0.5)
+                .unit(Unit::Percent)
+                .group("Machine")
+                .smooth(Smooth::ms(30.0)),
+            mix: FloatParam::new(ParamId(5), "mix", unit())
+                .default(0.45)
+                .unit(Unit::Percent)
+                .group("Machine")
+                .smooth(Smooth::ms(10.0)),
+            wobble: FloatParam::new(ParamId(6), "wobble", unit())
+                .default(0.3)
+                .unit(Unit::Percent)
+                .group("Media")
+                .smooth(Smooth::ms(40.0)),
+            rpm: FloatParam::new(ParamId(7), "rpm", Range::log(0.1, 8.0))
+                .default(0.8)
+                .unit(Unit::Hz)
+                .group("Media")
+                .smooth(Smooth::ms(60.0)),
+            age: FloatParam::new(ParamId(8), "age", unit())
+                .default(0.0)
+                .unit(Unit::Percent)
+                .group("Media")
+                .smooth(Smooth::ms(40.0)),
+            machine: EnumParam::new(ParamId(9), "machine", Machine(0)).group("Machine"),
+            warp: EnumParam::new(ParamId(10), "warp", Warp(0)).group("Media"),
+            media: EnumParam::new(ParamId(11), "media", Media(0)).group("Media"),
+            hold: BoolParam::new(ParamId(12), "hold", false).group("Machine").names("OFF", "HELD"),
+            sync: EnumParam::new(ParamId(13), "sync", Sync(0)).group("Machine"),
+        }
     }
 }

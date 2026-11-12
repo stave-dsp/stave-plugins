@@ -9,16 +9,12 @@
 //! * `wet.rs` — `Wet`: tone, width, the soft ceiling.
 //! * `media.rs` — `Media`: WOBBLE + AGE — the record the wet path
 //!   (dry + machine) plays off; MIX blends it against the clean dry.
-//! * `telemetry.rs` — `Telemetry`: clock + tail out.
+//! * `telemetry.rs` — `HeirloomTaps`: clock, tail and spin out.
 //!
 //! The face is six knobs; the core's other controls are VOICED from
 //! them (`voicing` below) — the pedal decides, the player plays.
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::params::ContinuousControl;
-use stave_core::{DebugBus, Environment, ProcessCtx, Tail};
+use stave::prelude::*;
 
 use crate::params::HeirloomParams;
 
@@ -34,11 +30,12 @@ mod transpose;
 mod wet;
 
 use self::clock::ClockDomain;
-use self::media::{Block, Media};
+use self::media::{Media, Wear};
 use self::motion::Motion;
 use self::programs::{ms_to_ticks, Knobs, Programs, MAX_TIME_MS};
-use self::telemetry::Telemetry;
 use self::wet::Wet;
+
+pub use self::telemetry::HeirloomTaps;
 
 /// TIME's floor in ms (params.rs) — BLOOM reads the knob's position
 /// between the two.
@@ -59,7 +56,7 @@ const CORE_MOD_OF_WOBBLE: f32 = 0.15;
 const WIDTH: f32 = 0.7;
 /// The dry and the machine meet on the record at −3 dB each, so a
 /// full-wet pedal sits near the dry's level.
-const WET_SUM: f32 = core::f32::consts::FRAC_1_SQRT_2;
+const WET_SUM: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// HOLD sags the clock an octave over this long (a tape stop's glide).
 const HOLD_SHIFT: f32 = 0.5;
 const HOLD_RAMP_MS: f32 = 700.0;
@@ -68,57 +65,56 @@ const PLATTER_REV_HZ: f64 = 33.333 / 60.0;
 const PLATTER_START_S: f64 = 0.5;
 const PLATTER_BRAKE_S: f64 = 1.4;
 
-#[inline]
-fn db_to_amp(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
-}
-
 /// The wet's tone darkens as the record ages.
 #[inline]
 fn tone_of_age(age: f32) -> f32 {
     0.85 - 0.3 * age
 }
 
-/// The render state of every gliding knob — smoothing is the
-/// processor's (one `ContinuousControl` per declared glide).
+/// One `Smoother` per gliding knob.
 struct Controls {
-    time: ContinuousControl,
-    repeats: ContinuousControl,
-    mix: ContinuousControl,
-    wobble: ContinuousControl,
-    rpm: ContinuousControl,
-    age: ContinuousControl,
-    output: ContinuousControl,
+    time: Smoother,
+    repeats: Smoother,
+    mix: Smoother,
+    wobble: Smoother,
+    rpm: Smoother,
+    age: Smoother,
+    output: Smoother,
 }
 
 impl Controls {
     fn new(p: &HeirloomParams) -> Self {
         Self {
-            time: ContinuousControl::new(&p.time),
-            repeats: ContinuousControl::new(&p.repeats),
-            mix: ContinuousControl::new(&p.mix),
-            wobble: ContinuousControl::new(&p.wobble),
-            rpm: ContinuousControl::new(&p.rpm),
-            age: ContinuousControl::new(&p.age),
-            output: ContinuousControl::new(&p.output),
+            time: Smoother::new(&p.time),
+            repeats: Smoother::new(&p.repeats),
+            mix: Smoother::new(&p.mix),
+            wobble: Smoother::new(&p.wobble),
+            rpm: Smoother::new(&p.rpm),
+            age: Smoother::new(&p.age),
+            output: Smoother::new(&p.output),
         }
     }
 
-    fn prepare(&mut self, sr: f64, p: &HeirloomParams) {
-        self.time.prepare(sr, &p.time);
-        self.repeats.prepare(sr, &p.repeats);
-        self.mix.prepare(sr, &p.mix);
-        self.wobble.prepare(sr, &p.wobble);
-        self.rpm.prepare(sr, &p.rpm);
-        self.age.prepare(sr, &p.age);
-        self.output.prepare(sr, &p.output);
+    fn prepare(&mut self, env: &Environment) {
+        for s in [
+            &mut self.time,
+            &mut self.repeats,
+            &mut self.mix,
+            &mut self.wobble,
+            &mut self.rpm,
+            &mut self.age,
+            &mut self.output,
+        ] {
+            s.prepare(env);
+        }
     }
 }
 
-pub struct HeirloomEngine {
+/// The plugin: saga's clock and programs, the wet stage, the record.
+pub struct Heirloom {
     params: Arc<HeirloomParams>,
     controls: Controls,
-    sr: f32,
+    sample_rate: f32,
     /// The machine the core is wired as (lags `machine` across a switch).
     machine: usize,
     /// Wet fade 0..1 around machine switches.
@@ -128,21 +124,30 @@ pub struct HeirloomEngine {
     programs: Programs,
     wet: Wet,
     media: Media,
-    telemetry: Telemetry,
+    taps: HeirloomTaps,
     last_clock: f32,
     /// The record the face shows: angle (radians) and speed (1 = 33⅓).
     spin: f64,
     spin_speed: f64,
 }
 
-impl stave_core::Processor for HeirloomEngine {
+impl Plugin for Heirloom {
+    const INFO: Info = Info {
+        id: "com.ryanbahan.stave.heirloom.vst3",
+        name: "Stave Heirloom",
+        vendor: "Ryan Bahan",
+        url: "https://github.com/stave-dsp/stave",
+        description: "Reverse machines played back off a worn record.",
+        features: &[Feature::AudioEffect, Feature::Reverb, Feature::Delay, Feature::Stereo],
+        ..Info::EFFECT
+    };
     type Params = HeirloomParams;
 
-    fn new(params: Arc<HeirloomParams>) -> Self {
+    fn new(params: &Arc<HeirloomParams>, telemetry: &Telemetry) -> Self {
         Self {
-            controls: Controls::new(&params),
-            params,
-            sr: 48_000.0,
+            controls: Controls::new(params),
+            params: params.clone(),
+            sample_rate: 48_000.0,
             machine: 0,
             fade: 1.0,
             motion: Motion::new(),
@@ -150,17 +155,17 @@ impl stave_core::Processor for HeirloomEngine {
             programs: Programs::new(),
             wet: Wet::new(),
             media: Media::new(),
-            telemetry: Telemetry::new(),
+            taps: HeirloomTaps::new(telemetry),
             last_clock: 1.0,
             spin: 0.0,
             spin_speed: 0.0,
         }
     }
 
-    fn activate(&mut self, env: Environment) {
-        self.sr = env.sample_rate;
-        self.controls.prepare(f64::from(env.sample_rate), &self.params);
-        self.machine = self.params.machine.index();
+    fn prepare(&mut self, env: &Environment) {
+        self.sample_rate = env.sample_rate;
+        self.controls.prepare(env);
+        self.machine = self.params.machine.value().0 as usize;
         self.fade = 1.0;
         self.last_clock = 1.0;
         self.motion.prepare(env.sample_rate);
@@ -170,50 +175,47 @@ impl stave_core::Processor for HeirloomEngine {
         self.media.prepare(env.sample_rate);
     }
 
-    fn attach_telemetry(&mut self, bus: Arc<DebugBus>) {
-        self.telemetry.attach(bus);
-    }
-
-    fn process(&mut self, ctx: &mut ProcessCtx<'_>) {
+    fn process(&mut self, block: &mut Block<'_>) {
         let p = self.params.clone();
         // 1. Bind: the machine, its voicing, the converter filters at
         //    the clock the last block ended on, where TIME comes from
         //    (the knob, or the host tempo), and the medium's corners.
-        let wanted = p.machine.index();
+        let wanted = p.machine.value().0 as usize;
         let (program, x) = MACHINES[self.machine];
         self.programs.voice(program, x);
         self.clock.set_clock(self.last_clock);
-        let synced_ms = match (p.sync.index(), ctx.transport.as_ref().and_then(|t| t.tempo_bpm)) {
+        let synced_ms = match (p.sync.value().0 as usize, block.transport().and_then(|t| t.tempo_bpm)) {
             (0, _) | (_, None) => None,
             (div, Some(bpm)) => Some(
                 (60_000.0 / bpm as f32 * SYNC_BEATS[div]).clamp(MIN_TIME_MS, MAX_TIME_MS),
             ),
         };
-        let warp = p.warp.index();
+        let warp = p.warp.value().0 as usize;
         // DRIFT wanders the core clock at random too; the other two
         // shapes are the media stage's own — the core takes a sine.
         let core_shape = if warp == 2 { 2 } else { 0 };
         let held = p.hold.value();
-        let block = Block { media: p.media.index(), warp };
-        self.media.begin_block(p.age.value(), block);
+        let wear = Wear { media: p.media.value().0 as usize, warp };
+        self.media.begin_block(p.age.value(), wear);
 
         // 2. The audio block.
         let c = &mut self.controls;
-        let mut time_ramp = c.time.begin_block(ctx.params, &p.time);
-        let mut repeats_ramp = c.repeats.begin_block(ctx.params, &p.repeats);
-        let mut mix_ramp = c.mix.begin_block(ctx.params, &p.mix);
-        let mut wobble_ramp = c.wobble.begin_block(ctx.params, &p.wobble);
-        let mut rpm_ramp = c.rpm.begin_block(ctx.params, &p.rpm);
-        let mut age_ramp = c.age.begin_block(ctx.params, &p.age);
-        let mut out_ramp = c.output.begin_block(ctx.params, &p.output);
-        let fade_step = 1000.0 / (SWITCH_FADE_MS * self.sr);
+        let mut time_ramp = c.time.ramp(block, &p.time);
+        let mut repeats_ramp = c.repeats.ramp(block, &p.repeats);
+        let mut mix_ramp = c.mix.ramp(block, &p.mix);
+        let mut wobble_ramp = c.wobble.ramp(block, &p.wobble);
+        let mut rpm_ramp = c.rpm.ramp(block, &p.rpm);
+        let mut age_ramp = c.age.ramp(block, &p.age);
+        let mut out_ramp = c.output.ramp(block, &p.output);
+        let fade_step = 1000.0 / (SWITCH_FADE_MS * self.sample_rate);
         let (motion, clock, programs, wet, media) =
             (&mut self.motion, &mut self.clock, &mut self.programs, &mut self.wet, &mut self.media);
         let (machine, fade) = (&mut self.machine, &mut self.fade);
         let mut clk = self.last_clock;
         let mut wet_peak = 0.0f32;
 
-        let lanes = ctx.lanes::<2>();
+        let frames = block.frames();
+        let lanes = block.lanes::<2>();
         let active = lanes.active();
         lanes.run(|fr| {
             let knob_ms = time_ramp.next();
@@ -267,9 +269,9 @@ impl stave_core::Processor for HeirloomEngine {
                 (dry[0] + w[0] * *fade) * WET_SUM,
                 (dry[1] + w[1] * *fade) * WET_SUM,
             ];
-            let worn = media.process(rec, wobble, rpm, age, block);
+            let worn = media.process(rec, wobble, rpm, age, wear);
             wet_peak = wet_peak.max(w[0].abs()).max(w[1].abs());
-            let m = mix_ramp.next() * core::f32::consts::FRAC_PI_2;
+            let m = mix_ramp.next() * std::f32::consts::FRAC_PI_2;
             let (dry_g, wet_g) = (m.cos(), m.sin());
             // MIX 0 is bit-exact: cos(0) = 1 exactly and a wet gain of
             // exactly 0 contributes exactly 0 — whatever the media does.
@@ -287,19 +289,15 @@ impl stave_core::Processor for HeirloomEngine {
         // 3. The platter: it turns at the speed the audio PLAYS (the
         //    wobble's lurches, HOLD's sag) and brakes to a stop when
         //    the pedal is bypassed.
-        let dt = ctx.frames as f64 / f64::from(self.sr);
+        let dt = frames as f64 / f64::from(self.sample_rate);
         let target = if p.bypass.value() { 0.0 } else { f64::from(clk * self.media.take_speed()) };
         let tau = if target < self.spin_speed { PLATTER_BRAKE_S } else { PLATTER_START_S };
         self.spin_speed += (target - self.spin_speed) * (1.0 - (-dt / tau).exp());
-        self.spin = (self.spin + self.spin_speed * core::f64::consts::TAU * PLATTER_REV_HZ * dt)
-            .rem_euclid(core::f64::consts::TAU);
+        self.spin = (self.spin + self.spin_speed * std::f64::consts::TAU * PLATTER_REV_HZ * dt)
+            .rem_euclid(std::f64::consts::TAU);
 
         // 4. What happened, reported out.
-        self.telemetry.publish(clk, wet_peak, self.spin);
-    }
-
-    fn latency_samples(&self) -> u32 {
-        0
+        self.taps.publish(clk, wet_peak, self.spin);
     }
 
     /// The loops are soft-clipped, so near-unity repeats sustain
@@ -309,7 +307,15 @@ impl stave_core::Processor for HeirloomEngine {
         if p.repeats.value() > 0.9 || p.age.value() > 0.0 {
             Tail::Infinite
         } else {
-            Tail::Samples((30.0 * self.sr) as u32)
+            Tail::Samples((30.0 * self.sample_rate) as u32)
         }
+    }
+
+    fn face(params: &HeirloomParams) -> Option<Face> {
+        Some(crate::editor::face(params))
+    }
+
+    fn presets(params: &HeirloomParams) -> Vec<Preset> {
+        crate::presets::presets(params)
     }
 }
