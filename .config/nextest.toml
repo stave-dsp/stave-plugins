@@ -1,7 +1,36 @@
 [profile.default]
-# A test past 30 s is reported; one past 2 min has hung and is killed.
-slow-timeout = { period = "30s", terminate-after = 4 }
+# Every test runs in seconds: one past 10 s is reported; one past two
+# minutes (a loaded laptop, not a regression) has hung and is killed.
+slow-timeout = { period = "10s", terminate-after = 12 }
+
+# These tests run their renders side by side, a thread each (every
+# render is its own instance): they get the cores to themselves.
+[[profile.default.overrides]]
+filter = '''
+    (package(stave-engram-vst3) & (test(/^the_map_/) | test(memory_steers) | test(loudness::) | test(calibration::)))
+    | (package(stave-vault-vst3) & (test(=the_scoreboard) | test(=every_machine_passes_the_metal_meter)))
+    | (package(stave-anvil-vst3) & test(=gain_buys_dirt_not_silence))
+    | (package(stave-forge-vst3) & test(=voices_place_energy_differently))
+'''
+threads-required = "num-test-threads"
+
+# Engram's memory properties render with and without the memory side by side.
+[[profile.default.overrides]]
+filter = 'package(stave-engram-vst3) & binary(properties)'
+threads-required = 2
 
 [profile.ci]
 fail-fast = false
-slow-timeout = { period = "30s", terminate-after = 4 }
+# Every test runs in seconds (the slowest a few on CI's runners), so one
+# past 10 s has regressed: it is killed and fails the run, and slowness
+# cannot creep back.
+slow-timeout = { period = "10s", terminate-after = 1 }
+
+# The one exception, until the framework release that mounts validation
+# as a test per check (`passes_validation::*`, the per-param checks in
+# parts): before it, `plugin_checks!` runs the whole suite as this one
+# test, ~10–20 s for the heaviest plugins. Drop this once the framework
+# is bumped past it.
+[[profile.ci.overrides]]
+filter = 'test(=passes_validation)'
+slow-timeout = { period = "30s", terminate-after = 2 }
