@@ -7,13 +7,7 @@
 //!   (bypass)                 ribbon                        (brake)
 //! ```
 
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::param_enum;
-use stave_core::params::{
-    BoolParam, EnumParam, FloatParam, ParamFlags, Params, Range, Smooth, Taper, Unit,
-};
+use stave::prelude::*;
 
 param_enum! {
     /// Which playback heads are live. The heads sit 1 : 2 : 3 down the
@@ -53,48 +47,54 @@ pub struct RibbonParams {
     pub brake: BoolParam,
 }
 
-impl RibbonParams {
-    pub fn new() -> Arc<Self> {
-        let unit = || Range::new(0.0, 1.0, Taper::Linear);
-        Arc::new(Self {
-            output: FloatParam::new(1, "output", 0.0, Range::new(-24.0, 24.0, Taper::Linear))
-                .with_unit(Unit::Db { floor_db: None })
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 5.0 }),
-            bypass: BoolParam::new(2, "bypass", false)
-                .with_group("Output")
-                .with_flags(ParamFlags { bypass: true, ..Default::default() }),
-            rate: FloatParam::new(3, "rate", 1.0, Range::new(0.35, 1.6, Taper::Log))
-                .with_unit(Unit::Plain { decimals: 2 })
-                .with_group("Tape"),
-            intensity: FloatParam::new(4, "intensity", 0.4, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Tape")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            drive: FloatParam::new(5, "drive", 0.25, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Tape")
-                .with_smooth(Smooth::Exp { ms: 30.0 }),
-            heads: EnumParam::new(6, "heads", Heads(6)).with_group("Tape"),
-            wear: FloatParam::new(7, "wear", 0.0, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Tape")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            erase: FloatParam::new(8, "erase", 1.0, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Tape")
-                .with_smooth(Smooth::Exp { ms: 40.0 }),
-            spring: FloatParam::new(9, "spring", 0.3, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Spring")
-                .with_smooth(Smooth::Exp { ms: 20.0 }),
-            mix: FloatParam::new(10, "mix", 0.4, unit())
-                .with_unit(Unit::Percent)
-                .with_group("Output")
-                .with_smooth(Smooth::Exp { ms: 10.0 }),
-            brake: BoolParam::new(11, "brake", false)
-                .with_group("Tape")
-                .with_names("RUN", "BRAKE"),
-        })
+impl Default for RibbonParams {
+    fn default() -> Self {
+        let unit = || Range::linear(0.0, 1.0);
+        Self {
+            output: FloatParam::new(ParamId(1), "output", Range::linear(-24.0, 24.0))
+                .default(0.0)
+                .unit(Unit::Db)
+                .group("Output")
+                .smooth(Smooth::ms(5.0)),
+            bypass: BoolParam::bypass(ParamId(2)).group("Output"),
+            rate: FloatParam::new(ParamId(3), "rate", Range::log(0.35, 1.6))
+                .default(1.0)
+                .unit(Unit::Plain { decimals: 2 })
+                .group("Tape"),
+            intensity: FloatParam::new(ParamId(4), "intensity", unit())
+                .default(0.4)
+                .unit(Unit::Percent)
+                .group("Tape")
+                .smooth(Smooth::ms(30.0)),
+            drive: FloatParam::new(ParamId(5), "drive", unit())
+                .default(0.25)
+                .unit(Unit::Percent)
+                .group("Tape")
+                .smooth(Smooth::ms(30.0)),
+            heads: EnumParam::new(ParamId(6), "heads", Heads(6)).group("Tape"),
+            wear: FloatParam::new(ParamId(7), "wear", unit())
+                .default(0.0)
+                .unit(Unit::Percent)
+                .group("Tape")
+                .smooth(Smooth::ms(40.0)),
+            erase: FloatParam::new(ParamId(8), "erase", unit())
+                .default(1.0)
+                .unit(Unit::Percent)
+                .group("Tape")
+                .smooth(Smooth::ms(40.0)),
+            spring: FloatParam::new(ParamId(9), "spring", unit())
+                .default(0.3)
+                .unit(Unit::Percent)
+                .group("Spring")
+                .smooth(Smooth::ms(20.0)),
+            mix: FloatParam::new(ParamId(10), "mix", unit())
+                .default(0.4)
+                .unit(Unit::Percent)
+                .group("Output")
+                .smooth(Smooth::ms(10.0)),
+            brake: BoolParam::new(ParamId(11), "brake", false)
+                .group("Tape")
+                .names("RUN", "BRAKE"),
+        }
     }
 }

@@ -1,10 +1,6 @@
 //! Factory presets — each states the FULL face.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::editor_kit::preset;
-use stave_core::Preset;
+use stave::prelude::*;
 
 use crate::params::RibbonParams;
 
@@ -20,18 +16,18 @@ struct Face {
 }
 
 fn face(name: &'static str, p: &RibbonParams, f: Face) -> Preset {
-    preset(
+    Preset::from_pairs(
         name,
         &[
-            (&p.rate, f.rate), (&p.intensity, f.intensity), (&p.drive, f.drive), (&p.heads, f.heads),
-            (&p.wear, f.wear), (&p.erase, f.erase), (&p.spring, f.spring), (&p.mix, f.mix),
-            (&p.brake, 0.0), (&p.output, 0.0),
+            (p.rate.id(), f.rate), (p.intensity.id(), f.intensity), (p.drive.id(), f.drive), (p.heads.id(), f.heads),
+            (p.wear.id(), f.wear), (p.erase.id(), f.erase), (p.spring.id(), f.spring), (p.mix.id(), f.mix),
+            (p.brake.id(), 0.0), (p.output.id(), 0.0),
         ],
     )
 }
 
 pub fn presets(p: &RibbonParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         face("INIT", p, Face {
             rate: 1.0, intensity: 0.4, drive: 0.25, heads: 6.0, wear: 0.0, erase: 1.0, spring: 0.3, mix: 0.4,
         }),

@@ -4,7 +4,8 @@
 //! coupling capacitor, at unity small-signal gain. At DRIVE 0 the stage is bypassed outright, so a
 //! clean machine stays exactly clean.
 
-use stave_dsp::{Bias, Coupler, Koren, Stage, Triode};
+use stave::dsp::{Bias, Coupler, Koren, Triode};
+use stave::prelude::*;
 
 /// Grid volts per unit of input: clean at 0, saturated past ~30%.
 const CLEAN_VOLTS: f64 = 0.4;
@@ -25,12 +26,12 @@ impl Preamp {
         Self { tubes: [tube(), tube()], couplers: [Coupler::new(12.0), Coupler::new(12.0)], drive: 0.0 }
     }
 
-    pub(super) fn prepare(&mut self, sr: f32) {
+    pub(super) fn prepare(&mut self, sample_rate: f32) {
         for (t, c) in self.tubes.iter_mut().zip(self.couplers.iter_mut()) {
-            t.prepare(sr);
+            t.prepare(sample_rate);
             let bypass_farads = 22e-3 / t.cathode_ohms();
             t.set_bias(Bias::Cathode { bypass_farads });
-            c.prepare(sr);
+            c.prepare(sample_rate);
         }
     }
 
@@ -50,7 +51,7 @@ impl Preamp {
         }
         let mut y = [0.0; 2];
         for ch in 0..2 {
-            let warm = self.couplers[ch].tick(self.tubes[ch].process_sample(x[ch]));
+            let warm = self.couplers[ch].tick(self.tubes[ch].tick(x[ch]));
             // Blend in over the knob's first few percent: no step.
             y[ch] = x[ch] + (warm - x[ch]) * (self.drive * 10.0).min(1.0);
         }

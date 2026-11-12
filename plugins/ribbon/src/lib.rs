@@ -10,71 +10,28 @@
 //! one click away.
 //!
 //! ```text
-//! lib.rs      ← you are here: identity, ports, params, editor —
-//!               the DECLARATIONS half, no behavior
+//! lib.rs      ← you are here: the crate's map and its export
 //! params.rs   every knob, with its forever-stable id
 //! presets.rs  factory presets
 //! editor.rs   the face: parts on oxblood + the running tape window
 //! engine/     the ENGINE half:
-//!   mod.rs        the spine: bind → render → observe
+//!   mod.rs        the spine: `impl Plugin for Ribbon`, bind → render → observe
 //!   tape.rs       Tape — the loop, the heads, the motor
 //!   preamp.rs     Preamp — the 12AX7 into the record head
 //!   spring.rs     Spring — the dispersive two-spring tank
-//!   telemetry.rs  Telemetry — where the loop is, how fast it runs
+//!   telemetry.rs  RibbonTaps — where the loop is, how fast it runs
 //! tests/      the shared checks + THE PROPERTIES (properties.rs)
 //! ```
-
-extern crate alloc;
-use alloc::sync::Arc;
-
-use stave_core::{PluginDescriptor, PluginFeature, PortConfig, Spec, StavePlugin};
-use stave_vst3::stave_vst3_export;
 
 mod editor;
 mod engine;
 mod params;
 mod presets;
 
-pub use engine::RibbonEngine;
+pub use engine::{Ribbon, RibbonTaps};
 pub use params::RibbonParams;
 
-impl Spec for RibbonEngine {
-    /// Stereo FX, stated — the negotiation surface is a declaration.
-    const CONFIGS: &'static [PortConfig] = &[PortConfig::STEREO_FX];
-
-    const DESCRIPTOR: PluginDescriptor = PluginDescriptor {
-        id: c"com.ryanbahan.stave.ribbon.vst3",
-        name: c"Stave Ribbon",
-        vendor: c"Ryan Bahan",
-        version: c"0.0.1",
-        url: c"https://github.com/stave-dsp/stave",
-        description: c"An impossible tape echo: a real loop, an erase head you can turn down.",
-        features: &[PluginFeature::AudioEffect, PluginFeature::Delay, PluginFeature::Reverb, PluginFeature::Stereo],
-    };
-
-    fn params() -> Arc<RibbonParams> {
-        RibbonParams::new()
-    }
-    fn face(params: &RibbonParams) -> Option<stave_core::face::Face> {
-        Some(editor::face(params))
-    }
-    fn presets(params: &RibbonParams) -> alloc::vec::Vec<stave_core::Preset> {
-        presets::presets(params)
-    }
-}
-
-/// Where the loop is, 0..1 of a turn (the face runs the ribbon by it).
-pub const LOOP_TAP: &str = "tape loop";
-/// The motor's speed (1 = nominal).
-pub const SPEED_TAP: &str = "tape speed";
-
-/// The plugin: engine + declarations under the framework shell.
-pub type Ribbon = StavePlugin<RibbonEngine>;
-
-stave_vst3_export!(
-    RibbonEngine,
-    component_cid: (0x57D986BC, 0x6E8207EB, 0x51A73C99, 0xD1CD583C),
-    controller_cid: (0x78955EAB, 0x3D6B1CFC, 0xE191FB7F, 0xCF075A71),
-);
-
-stave_clap::stave_clap_export!(RibbonEngine); // CLAP build, same cdylib
+stave::export!(Ribbon, vst3_class_ids: {
+    component: [0x57D986BC, 0x6E8207EB, 0x51A73C99, 0xD1CD583C],
+    controller: [0x78955EAB, 0x3D6B1CFC, 0xE191FB7F, 0xCF075A71],
+});

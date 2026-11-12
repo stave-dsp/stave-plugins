@@ -4,7 +4,9 @@
 //! Run with
 //! `cargo test --release -p stave-ribbon-vst3 --test listen -- --ignored --nocapture`.
 
-use stave_core::{AudioBuffer, DebugBus, Plugin, ProcessCtx};
+use stave::Plugin;
+use stave_ribbon_vst3::{Ribbon, RibbonParams};
+use stave_test::PluginHarness;
 
 const FS: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -39,28 +41,16 @@ fn phrase() -> Vec<f32> {
     out
 }
 
-fn render(plugin: &mut stave_ribbon_vst3::Ribbon, input: &[f32]) -> (Vec<f32>, Vec<f32>) {
+fn render(h: &mut PluginHarness<Ribbon>, input: &[f32]) -> (Vec<f32>, Vec<f32>) {
     let (mut l, mut r) = (Vec::new(), Vec::new());
-    let (mut il, mut ir, mut ol, mut or) = (vec![0.0; BLOCK], vec![0.0; BLOCK], vec![0.0; BLOCK], vec![0.0; BLOCK]);
     for chunk in input.chunks(BLOCK) {
-        il[..chunk.len()].copy_from_slice(chunk);
-        il[chunk.len()..].fill(0.0);
-        ir.copy_from_slice(&il);
-        let mut ip = [core::ptr::null_mut(); 2];
-        let mut op = [core::ptr::null_mut(); 2];
-        let mut ctx = ProcessCtx {
-            sample_rate: FS,
-            frames: BLOCK,
-            transport: None,
-            input: AudioBuffer::from_slices(&mut ip, [&mut il, &mut ir], BLOCK),
-            output: AudioBuffer::from_slices(&mut op, [&mut ol, &mut or], BLOCK),
-            aux: &[],
-            params: stave_core::ParamBlock::empty(),
-            events: &[],
-        };
-        plugin.process(&mut ctx);
-        l.extend_from_slice(&ol[..chunk.len()]);
-        r.extend_from_slice(&or[..chunk.len()]);
+        for ch in h.inputs_mut() {
+            ch[..chunk.len()].copy_from_slice(chunk);
+            ch[chunk.len()..].fill(0.0);
+        }
+        h.process(&[]);
+        l.extend_from_slice(&h.outputs()[0][..chunk.len()]);
+        r.extend_from_slice(&h.outputs()[1][..chunk.len()]);
     }
     (l, r)
 }
@@ -72,21 +62,19 @@ fn audition_every_preset() {
     let dry = rms(&input[..(FS * 4.0) as usize]);
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../build/listen");
     std::fs::create_dir_all(dir).unwrap();
-    let names: Vec<_> = stave_ribbon_vst3::Ribbon::new().presets().into_iter().map(|p| p.name).collect();
     println!("dry rms {:.1} dBFS", 20.0 * dry.log10());
-    for (i, name) in names.iter().enumerate() {
+    for preset in Ribbon::presets(&RibbonParams::default()) {
+        let name = preset.name;
         let run = |wet_only: bool| {
-            let mut plugin = stave_ribbon_vst3::Ribbon::new();
-            plugin.debug_attach(DebugBus::new());
-            let table = plugin.param_table();
-            for (id, v) in &plugin.presets()[i].values {
-                table.by_id(*id).unwrap().set_plain(*v);
+            let mut h = PluginHarness::<Ribbon>::new(FS, BLOCK);
+            for (id, v) in &preset.values {
+                h.set(*id, *v);
             }
             if wet_only {
-                table.by_name("mix").expect("mix").set_plain(1.0);
+                h.set("mix", 1.0);
             }
-            plugin.activate(FS, BLOCK);
-            render(&mut plugin, &input)
+            h.prepare(FS, BLOCK); // start at the preset, no glide
+            render(&mut h, &input)
         };
         let (wl, _) = run(true);
         let (l, r) = run(false);
@@ -94,7 +82,7 @@ fn audition_every_preset() {
         let peak = l.iter().chain(&r).fold(0.0f32, |m, x| m.max(x.abs()));
         println!("{name:<14} wet-only {:+5.1} dB re dry   out peak {:5.2}", 20.0 * (wet / dry).log10(), peak);
         let file = format!("{dir}/ribbon-{}.wav", name.replace(' ', "_").to_lowercase());
-        let audio = stave_measure::wav::Audio { sample_rate: FS as u32, channels: vec![l, r] };
-        stave_measure::wav::write(std::path::Path::new(&file), &audio).unwrap();
+        let audio = stave_host::wav::Audio { sample_rate: FS as u32, channels: vec![l, r] };
+        stave_host::wav::write(std::path::Path::new(&file), &audio).unwrap();
     }
 }

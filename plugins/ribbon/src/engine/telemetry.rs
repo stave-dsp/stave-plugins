@@ -1,33 +1,20 @@
-//! Telemetry — where the loop is (0..1 of a turn: the face draws the
+//! The taps — where the loop is (0..1 of a turn: the face draws the
 //! ribbon and its splice there, and turns the rollers by it) and how
-//! fast the motor runs. Zero-cost with no bus attached.
+//! fast the motor runs (1 = nominal).
 
-extern crate alloc;
-use alloc::sync::Arc;
+use stave::prelude::*;
 
-use stave_core::{DebugBus, Tap};
-
-use crate::{LOOP_TAP, SPEED_TAP};
-
-pub(super) struct Telemetry {
-    bus: Option<Arc<DebugBus>>,
-    phase: Tap,
-    speed: Tap,
+#[derive(Taps)]
+pub struct RibbonTaps {
+    /// Where the loop is, 0..1 of a turn.
+    pub tape_loop: Tap,
+    /// The motor's speed (1 = nominal).
+    pub tape_speed: Tap,
 }
 
-impl Telemetry {
-    pub(super) fn new() -> Self {
-        Self { bus: None, phase: Tap::new(LOOP_TAP), speed: Tap::new(SPEED_TAP) }
-    }
-
-    pub(super) fn attach(&mut self, bus: Arc<DebugBus>) {
-        self.bus = Some(bus);
-    }
-
+impl RibbonTaps {
     pub(super) fn publish(&self, phase: f64, speed: f32) {
-        if let Some(bus) = &self.bus {
-            self.phase.set(bus, phase);
-            self.speed.set(bus, f64::from(speed));
-        }
+        self.tape_loop.set(phase);
+        self.tape_speed.set(f64::from(speed));
     }
 }

@@ -25,13 +25,10 @@
 //! to a dead stop, and release spins it back up. WEAR adds wow (a slow
 //! off-centre wobble) and flutter (a fast scrape) to the speed.
 
-extern crate alloc;
-use alloc::vec;
-use alloc::vec::Vec;
 
 use core::f32::consts::TAU;
 
-use stave_dsp::Xorshift32;
+use stave::dsp::Xorshift32;
 
 /// The loop's length in seconds of tape at nominal speed.
 pub(super) const LOOP_S: f32 = 4.0;
@@ -108,21 +105,21 @@ impl Tape {
         }
     }
 
-    pub(super) fn prepare(&mut self, sr: f32, rate: f32) {
-        self.host_hz = sr;
-        self.len = (LOOP_S * sr) as usize;
+    pub(super) fn prepare(&mut self, sample_rate: f32, rate: f32) {
+        self.host_hz = sample_rate;
+        self.len = (LOOP_S * sample_rate) as usize;
         self.cells = [vec![0.0; self.len], vec![0.0; self.len]];
         self.pos = 0.0;
-        self.heads = HEAD_S.map(|s| f64::from(s * sr));
-        self.erase_at = f64::from(ERASE_S * sr);
+        self.heads = HEAD_S.map(|s| f64::from(s * sample_rate));
+        self.erase_at = f64::from(ERASE_S * sample_rate);
         self.speed = rate;
         self.wow_phase = 0.0;
         self.flutter_phase = 0.0;
         self.jitter = 0.0;
         self.rng = Xorshift32::new(0x7A9E_0001);
-        self.inertia = 1.0 - (-1.0 / (INERTIA_S * sr)).exp();
-        self.brake_step = 1.0 / (BRAKE_S * sr);
-        self.start_step = 1.0 / (START_S * sr);
+        self.inertia = 1.0 - (-1.0 / (INERTIA_S * sample_rate)).exp();
+        self.brake_step = 1.0 / (BRAKE_S * sample_rate);
+        self.start_step = 1.0 / (START_S * sample_rate);
     }
 
     /// The motor, one frame: the speed the ribbon moves at now.
