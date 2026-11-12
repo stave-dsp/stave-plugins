@@ -48,11 +48,11 @@ needless_range_loop = "allow"
 # Upgrade with scripts/bump-framework.sh (all together). To co-edit a
 # sibling checkout at ../stave instead, see scripts/link-framework.sh.
 libc = "0.2"
-stave = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
-stave-dsp = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
-stave-host = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
-stave-measure = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
-stave-test = { git = "https://github.com/stave-dsp/stave", rev = "ff69ac855ad20a892411ce5495ba8d0c6689c8bc" }
+stave = { git = "https://github.com/stave-dsp/stave", rev = "eabc8342b26be86567b13200caff2a04186103cd" }
+stave-dsp = { git = "https://github.com/stave-dsp/stave", rev = "eabc8342b26be86567b13200caff2a04186103cd" }
+stave-host = { git = "https://github.com/stave-dsp/stave", rev = "eabc8342b26be86567b13200caff2a04186103cd" }
+stave-measure = { git = "https://github.com/stave-dsp/stave", rev = "eabc8342b26be86567b13200caff2a04186103cd" }
+stave-test = { git = "https://github.com/stave-dsp/stave", rev = "eabc8342b26be86567b13200caff2a04186103cd" }
 thiserror = "2"
 
 [profile.release]

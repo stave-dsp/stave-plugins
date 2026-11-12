@@ -117,7 +117,7 @@ impl Default for ${STRUCT}Params {
             output: FloatParam::new(ParamId(1), "Output", Range::linear(-24.0, 24.0))
                 .unit(Unit::Db)
                 .smooth(Smooth::ms(5.0)),
-            bypass: BoolParam::bypass(ParamId(2)),
+            bypass: BoolParam::bypass(ParamId(2), "Bypass"),
         }
     }
 }
