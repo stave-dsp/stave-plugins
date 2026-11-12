@@ -3,11 +3,8 @@
 //! The framework resolves ids to wire/control names wherever presets
 //! surface. Enum values are their step indices.
 
-extern crate alloc;
-use alloc::vec::Vec;
-
-use stave_core::params::AnyParam;
-use stave_core::Preset;
+use stave::params::AnyParam;
+use stave::prelude::*;
 
 use crate::params::ForgeParams;
 
@@ -20,7 +17,7 @@ fn preset(name: &'static str, pairs: &[(&dyn AnyParam, f64)]) -> Preset {
 }
 
 pub fn presets(p: &ForgeParams) -> Vec<Preset> {
-    alloc::vec![
+    vec![
         preset(
             "INIT",
             &[

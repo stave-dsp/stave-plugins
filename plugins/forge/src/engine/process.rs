@@ -1,18 +1,17 @@
-//! The audio block — the implementation of the framework's
-//! `Processor::process` contract: the M/S strips tick under the
-//! modulation plane, dry paths pad, output trims ramp from the
-//! table's declared smoothing. Channel plumbing (lane slicing,
+//! The audio block: the M/S strips tick under the modulation plane,
+//! dry paths pad, output trims ramp from the table's declared
+//! smoothing. Channel plumbing (lane slicing,
 //! zeroing, peak metering) is the framework's `Lanes` scaffolding;
 //! only the DSP is ours.
 
-use stave_core::ProcessCtx;
-use stave_dsp::{db_to_amp, ms_decode, ms_encode, Frame, PerChannel, Stage, StageKind};
+use stave::dsp::{ms_decode, ms_encode, Frame, StageKind};
+use stave::prelude::*;
 
 use crate::params::{stack, ForgeParams};
 
 use super::modulation::{driver, Modulation};
 use super::strip::Strip;
-use super::telemetry::Telemetry;
+use super::telemetry::Observer;
 
 /// The dry/wet blend, one spelling everywhere.
 #[inline]
@@ -20,9 +19,39 @@ fn mix_dry(dry: f32, wet: f32, mix: f32) -> f32 {
     dry + (wet - dry) * mix
 }
 
-stave_core::continuous_controls! {
-    pub(super) struct Controls<ForgeParams> => Ramps, Values {
-        input, mix, output, drive, bias, width,
+/// One `Smoother` per smoothed knob.
+pub(super) struct Smoothers {
+    input: Smoother,
+    mix: Smoother,
+    output: Smoother,
+    drive: Smoother,
+    bias: Smoother,
+    width: Smoother,
+}
+
+impl Smoothers {
+    pub(super) fn new(p: &ForgeParams) -> Self {
+        Smoothers {
+            input: Smoother::new(&p.input),
+            mix: Smoother::new(&p.mix),
+            output: Smoother::new(&p.output),
+            drive: Smoother::new(&p.drive),
+            bias: Smoother::new(&p.bias),
+            width: Smoother::new(&p.width),
+        }
+    }
+
+    pub(super) fn prepare(&mut self, env: &Environment) {
+        for s in [
+            &mut self.input,
+            &mut self.mix,
+            &mut self.output,
+            &mut self.drive,
+            &mut self.bias,
+            &mut self.width,
+        ] {
+            s.prepare(env);
+        }
     }
 }
 
@@ -52,33 +81,39 @@ fn set_primary(strip: &mut Strip, frame: Frame) {
 }
 
 /// The block: the M/S strips tick under the modulation plane.
-/// Returns the block peaks for the Telemetry. The signature IS the
-/// access list — strips, modulation, telemetry, nothing else.
+/// Returns the block peaks for the observer. The signature IS the
+/// access list — strips, modulation, observer, nothing else.
 pub(super) fn process_block(
-    ctx: &mut ProcessCtx<'_>,
+    block: &mut Block<'_>,
     p: &ForgeParams,
-    controls: &mut Controls,
+    smoothers: &mut Smoothers,
     strips: &mut PerChannel<Strip>,
     modulation: &mut Modulation,
-    telemetry: &mut Telemetry,
+    telemetry: &mut Observer,
 ) -> (f32, f32) {
-    let mut ramps = controls.begin_block(ctx.params, p);
-    let stack = p.stack.index();
+    let s = smoothers;
+    let mut input = s.input.ramp(block, &p.input);
+    let mut mix = s.mix.ramp(block, &p.mix);
+    let mut output = s.output.ramp(block, &p.output);
+    let mut drive = s.drive.ramp(block, &p.drive);
+    let mut bias = s.bias.ramp(block, &p.bias);
+    let mut width = s.width.ramp(block, &p.width);
+    let stack = p.stack.value().0 as usize;
 
     telemetry.begin_block();
 
-    let lanes = ctx.lanes::<2>();
+    let lanes = block.lanes::<2>();
     let peaks = match lanes.active() {
         2 => lanes.run(|fr| {
-            let v = ramps.next();
-            let (in_g, mix, out_g) = (db_to_amp(v.input), v.mix, db_to_amp(v.output));
+            let (in_g, mix, out_g) = (db_to_amp(input.next()), mix.next(), db_to_amp(output.next()));
+            let (drive, bias, width) = (drive.next(), bias.next(), width.next());
             let (l, r) = (fr.input(0), fr.input(1));
             // Lane 0 = mid strip, lane 1 = side strip (M/S domain);
             // each lane's dry line carries its host-domain sample.
             let (mid_strip, side_strip) = strips.pair_mut();
-            let frame = primary_frame(v.drive, v.bias, stack);
+            let frame = primary_frame(drive, bias, stack);
             let side_frame = Frame {
-                drive: (frame.drive * v.width).max(1e-3),
+                drive: (frame.drive * width).max(1e-3),
                 ..frame
             };
             set_primary(mid_strip, frame);
@@ -145,13 +180,14 @@ pub(super) fn process_block(
             // DELIBERATELY simpler: no modulation plane, no sub —
             // forge is a stereo instrument; this path only promises
             // a musical fallback, and its exact behavior is pinned.
-            let v = ramps.next();
-            let (in_g, mix, out_g) = (db_to_amp(v.input), v.mix, db_to_amp(v.output));
-            let input = fr.input(0);
+            let (in_g, mix, out_g) = (db_to_amp(input.next()), mix.next(), db_to_amp(output.next()));
+            let (drive, bias) = (drive.next(), bias.next());
+            width.next(); // kept in step with the stereo path
+            let x = fr.input(0);
             let mid_strip = &mut strips[0];
-            set_primary(mid_strip, primary_frame(v.drive, v.bias, stack));
-            let dry = mid_strip.dry.tick(input);
-            let driven = input * in_g;
+            set_primary(mid_strip, primary_frame(drive, bias, stack));
+            let dry = mid_strip.dry.tick(x);
+            let driven = x * in_g;
             let (vb, vd) = telemetry.scope_reference(mid_strip);
             let wet_raw = mid_strip.region.tick(driven);
             telemetry.capture(fr.index(), vb + vd * driven, wet_raw, mid_strip);

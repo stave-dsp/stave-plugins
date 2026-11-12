@@ -1,23 +1,18 @@
 //! The block-rate binding pass: watches poll, rebuilds fire, routes
 //! and base frames refresh (the Modulation plane's application half).
 
-use stave_dsp::RcClipperConfig;
-use stave_dsp::{shapes, Frame, PerChannel, StageKind};
+use stave::dsp::{shapes, Frame, PerChannel, RcClipperConfig, StageKind};
+use stave::params::{ModalWatch, Watch};
 
 use super::modulation::Modulation;
-
-use stave_core::params::{ModalWatch, Watch};
 
 use crate::engine::voicing::{
     character_shape, conduction_sense, post_spec, stage_b_knee, voice_spec,
 };
 use crate::params::ForgeParams;
 
-extern crate alloc;
-
 use super::strip::Strip;
-use super::strip::OS_FACTOR;
-use super::telemetry::Telemetry;
+use super::telemetry::Observer;
 use crate::params::stack;
 
 /// The binding sets: every watch the engine polls, one place.
@@ -51,7 +46,6 @@ impl Bindings {
 /// for the current STACK. Called only when a selector or shaping
 /// knob actually moved.
 fn rebuild_stages(
-    sr: f32,
     strips: &mut PerChannel<Strip>,
     character: usize,
     stack: usize,
@@ -60,7 +54,6 @@ fn rebuild_stages(
     bias: f32,
 ) {
     let e = edge as f64;
-    let inner = sr * OS_FACTOR;
     let cs_params = character_shape(character, e);
     // PUSH-PULL bakes the pair into ONE antisymmetric table: standing
     // bias cools with EDGE (toward crossover), BIAS is the mismatch.
@@ -90,7 +83,6 @@ fn rebuild_stages(
                 strip.region.inner.inner.as_chain_mut(),
                 primary_id,
                 |s| matches!(s, StageKind::Rc(_)),
-                inner,
             );
             let id_a = strip.amp().primary;
             if let Some(StageKind::Rc(rc)) = strip.amp_mut().as_chain_mut().stage_mut(id_a) {
@@ -109,7 +101,6 @@ fn rebuild_stages(
                 strip.region.inner.inner.as_chain_mut(),
                 primary_id,
                 |s| matches!(s, StageKind::Curve(_)),
-                inner,
             );
             let id_a = strip.amp().primary;
             if let Some(StageKind::Curve(cs)) = strip.amp_mut().as_chain_mut().stage_mut(id_a) {
@@ -127,7 +118,6 @@ fn rebuild_stages(
                     strip.region.inner.inner.as_chain_mut(),
                     second_id,
                     |s| matches!(s, StageKind::Bypass),
-                    inner,
                 );
             }
             2 => {
@@ -138,7 +128,6 @@ fn rebuild_stages(
                     strip.region.inner.inner.as_chain_mut(),
                     second_id,
                     |s| matches!(s, StageKind::Curve(_)),
-                    inner,
                 );
                 let id_b = strip.amp().second;
                 if let Some(StageKind::Curve(cs)) = strip.amp_mut().as_chain_mut().stage_mut(id_b) {
@@ -152,7 +141,6 @@ fn rebuild_stages(
                     strip.region.inner.inner.as_chain_mut(),
                     second_id,
                     |s| matches!(s, StageKind::Curve(_)),
-                    inner,
                 );
                 let id_b = strip.amp().second;
                 if let Some(StageKind::Curve(cs)) = strip.amp_mut().as_chain_mut().stage_mut(id_b) {
@@ -171,22 +159,19 @@ impl Bindings {
     pub(super) fn apply_changes(
         &mut self,
         p: &ForgeParams,
-        sr: f32,
         strips: &mut PerChannel<Strip>,
         modulation: &mut Modulation,
-        telemetry: &mut Telemetry,
-        debug: &Option<alloc::sync::Arc<stave_core::DebugBus>>,
+        telemetry: &mut Observer,
     ) {
-        let inner_rate = sr * OS_FACTOR;
         let drive = p.drive.value();
-        let character = p.character.index();
+        let character = p.character.value().0 as usize;
         let edge = p.edge.value();
         let bias = p.bias.value();
-        let stack = p.stack.index();
-        let voice = p.filter.index();
-        let post = p.post.index();
+        let stack = p.stack.value().0 as usize;
+        let voice = p.filter.value().0 as usize;
+        let post = p.post.value().0 as usize;
         let tone = p.tone.value();
-        let memory = p.memory.index();
+        let memory = p.memory.value().0 as usize;
         let depth = p.depth.value();
         let grit = p.grit.value();
         let iron = p.iron.value();
@@ -203,7 +188,7 @@ impl Bindings {
             [&p.character, &p.stack, &p.edge],
             [&p.drive, &p.bias],
         ) {
-            rebuild_stages(sr, strips, character, stack, edge, drive, bias);
+            rebuild_stages(strips, character, stack, edge, drive, bias);
         }
         if self
             .filters
@@ -246,7 +231,7 @@ impl Bindings {
             for strip in strips.iter_mut() {
                 // 0 = transparent, 1 = heavy (0.3 FS/ms).
                 let r = 125.0 * (1.0 - grit).powf(2.5) + 0.3;
-                strip.amp_mut().grit().set_rates(r, r, inner_rate);
+                strip.amp_mut().grit().set_rates(r, r);
             }
         }
         if self.iron.changed([&p.iron]) {
@@ -258,10 +243,8 @@ impl Bindings {
         }
 
         // Static transfer view + viz reference republish on change —
-        // observation code, so the Telemetry owns it (observe.rs).
-        telemetry.publish_static_viz(
-            debug,
-            super::telemetry::Voicing {
+        // observation code, so the observer owns it (telemetry.rs).
+        telemetry.publish_static_viz(super::telemetry::Voicing {
                 character,
                 stack,
                 edge,

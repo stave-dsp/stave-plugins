@@ -3,7 +3,7 @@
 //! lib.rs: this file is where the sound lives, lib.rs is where the
 //! signal flows. Everything here is pure data → shape/spec; no state.
 
-use stave_dsp::{shapes, FilterSpec};
+use stave::dsp::{shapes, FilterSpec};
 
 // ---------------------------------------------------------------------------
 

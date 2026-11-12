@@ -9,9 +9,6 @@
 //!   its own animal).
 //! * MEMORY — distinct program-dependent gain trajectories.
 
-use std::sync::Mutex;
-
-use stave_core::{DebugBus, Plugin};
 use stave_forge_vst3::Forge;
 use stave_test::PluginHarness;
 
@@ -36,15 +33,6 @@ fn goertzel(buf: &[f32], f: f64) -> f64 {
 
 struct Rig {
     h: PluginHarness<Forge>,
-    table: std::sync::Arc<dyn stave_core::params::Params>,
-}
-
-/// Params are set through Forge's typed table. LOCK stays: the suites are
-/// CPU-heavy and serializing keeps timings comparable.
-static LOCK: Mutex<()> = Mutex::new(());
-
-fn lock() -> std::sync::MutexGuard<'static, ()> {
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Neutral baseline: everything off except the axis under test.
@@ -65,14 +53,13 @@ const BASE: &[(&str, f64)] = &[
     ("input", 0.0),
     ("mix", 1.0),
     ("output", 0.0),
-    ("bypass", 0.0),
+    ("Bypass", 0.0),
 ];
 
 fn rig(overrides: &[(&str, f64)]) -> Rig {
-    let mut h = PluginHarness::<Forge>::new(FS as f32, BLOCK);
-    h.plugin_mut().debug_attach(DebugBus::new());
-    let table = h.plugin_mut().param_table();
-    let r = Rig { h, table };
+    let mut r = Rig {
+        h: PluginHarness::<Forge>::new(FS as f32, BLOCK),
+    };
     for &(k, v) in BASE {
         r.set(k, v);
     }
@@ -83,12 +70,8 @@ fn rig(overrides: &[(&str, f64)]) -> Rig {
 }
 
 impl Rig {
-    fn set(&self, name: &str, v: f64) {
-        let p = self
-            .table
-            .by_name(name)
-            .unwrap_or_else(|| panic!("param '{name}' unknown"));
-        p.set_plain(v);
+    fn set(&mut self, name: &str, v: f64) {
+        self.h.set(name, v);
     }
 
     /// Drive a dual-mono sine (mid path only) and return the LAST
@@ -104,8 +87,8 @@ impl Rig {
             }
             self.h.set_input(0, &buf);
             self.h.set_input(1, &buf);
-            let blocks = self.h.process_block(&[]);
-            out.extend_from_slice(&blocks[0]);
+            self.h.process(&[]);
+            out.extend_from_slice(&self.h.outputs()[0]);
         }
         out.split_off(out.len() - N_FFT.min(out.len()))
     }
@@ -136,8 +119,8 @@ impl Rig {
             }
             self.h.set_input(0, &buf);
             self.h.set_input(1, &buf);
-            let blocks = self.h.process_block(&[]);
-            out.extend_from_slice(&blocks[0]);
+            self.h.process(&[]);
+            out.extend_from_slice(&self.h.outputs()[0]);
         }
         (out, n_quiet)
     }
@@ -163,8 +146,8 @@ fn harmonics(out: &[f32], f0: f64) -> [f64; 8] {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn characters_have_distinct_harmonic_signatures() {
-    let _g = lock();
     let f0 = snap(220.0);
     let names = ["SILK", "TRIODE", "CLASS AB", "TAPE", "DIODE", "FUZZ"];
     let mut sigs: Vec<[f64; 8]> = vec![];
@@ -257,8 +240,8 @@ fn characters_have_distinct_harmonic_signatures() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn voices_place_energy_differently() {
-    let _g = lock();
     let freqs: Vec<f64> = [200.0, 900.0, 1_400.0, 3_000.0, 6_000.0]
         .iter()
         .map(|&f| snap(f))
@@ -309,8 +292,8 @@ fn voices_place_energy_differently() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn stacks_are_distinct_topologies() {
-    let _g = lock();
     let f0 = snap(220.0);
     // Same character/bias for all stacks.
     let h_for = |stack: f64| -> [f64; 8] {
@@ -360,8 +343,8 @@ fn stacks_are_distinct_topologies() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn memory_modes_shape_gain_over_time() {
-    let _g = lock();
     let f0 = snap(220.0);
     let names = ["NONE", "SAG", "BLOCKING", "SQUEEZE"];
     // Settled GIVE: hot-passage steady-state level at depth 0.8 relative
@@ -450,8 +433,8 @@ fn memory_modes_shape_gain_over_time() {
 }
 
 #[test]
+#[cfg_attr(miri, ignore)]
 fn post_filters_are_explicit_eq_moves() {
-    let _g = lock();
     // Measured through the full nonlinear chain at the default stack.
     let gain_at = |post: f64, freq: f64| -> f64 {
         let mut r = rig(&[("stack", 1.0), ("post filter", post)]);
@@ -482,8 +465,8 @@ fn post_filters_are_explicit_eq_moves() {
 /// RIPPLE memory: env-scaled 120 Hz supply wobble → ghost sidebands at
 /// n·f0 ± 120 Hz that ride program heat.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn ripple_memory_makes_ghost_sidebands() {
-    let _g = lock();
     let f0 = snap(220.0);
     let m = (f0 * N_FFT as f64 / FS).round() as usize;
     let render = |memory: f64| -> Vec<f64> {
@@ -553,8 +536,8 @@ fn ripple_memory_makes_ghost_sidebands() {
 /// SUB controls: MIX populates the half-integer comb through the chain;
 /// MOD does it multiplicatively (gain at f0/2 → 1.5/2.5·f0). Off = floor.
 #[test]
+#[cfg_attr(miri, ignore)]
 fn sub_controls_populate_the_half_comb() {
-    let _g = lock();
     // Even FFT bin so the half comb is coherent: bin 160 → 234.375 Hz.
     let f0 = snap(234.0);
     let m = (f0 * N_FFT as f64 / FS).round() as usize;

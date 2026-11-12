@@ -2,23 +2,23 @@
 //! file is the plugin's root; everything below is one click away.
 //!
 //! ```text
-//! lib.rs        ← you are here: identity, ports, params, editor,
-//!                 presets — the DECLARATIONS half, no behavior
+//! lib.rs        ← you are here: the modules and the export
 //! params.rs     every knob, with its forever-stable id
 //! editor.rs     the face, a pure function of params
 //! views.rs      the face's own screens (transfer, harmonics, stages)
 //! presets.rs    factory presets, pure function of params
 //! engine/          the ENGINE half — the realtime processor
-//!   mod.rs         the component struct + `process`, the whole
-//!                  per-block orchestration in three named phases
+//!   mod.rs         `Forge` + its `impl Plugin`: identity, layouts,
+//!                  and `process`, the per-block orchestration in
+//!                  three named phases
 //!   strip.rs       `Strip` — one M/S lane: topology + 4× region
 //!   bindings.rs    `Bindings::apply_changes` — params → structure
 //!   modulation.rs  `Modulation` — drivers, routes, displacement
 //!   process.rs     `process_block` — the audio block
-//!   telemetry.rs   `Telemetry::publish` — taps, scope, editor feeds
+//!   telemetry.rs   `Observer::publish` — taps, capture, editor feeds
 //!   voicing.rs     the sound-design vocabulary (curve recipes)
 //! tests/        this project's properties: voicing suites, taps,
-//!               validation, editor bindings, the no-alloc check
+//!               the face, and every generic check (checks.rs)
 //! ```
 //!
 //! What it sounds like — the breadth axes, exposed as DISCRETE
@@ -51,59 +51,16 @@
 //! constant 84 samples with a compensated dry path. M/S: the mid chain
 //! always gets full drive; WIDTH scales the side chain.
 
-extern crate alloc;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-
-use stave_core::{PluginDescriptor, PluginFeature, Spec, StavePlugin};
-use stave_vst3::stave_vst3_export;
-
 mod editor;
 mod engine;
 mod params;
 mod presets;
 mod views;
 
-pub use engine::ForgeEngine;
-use params::ForgeParams;
+pub use engine::{Forge, ForgeTaps};
+pub use params::ForgeParams;
 
-impl Spec for ForgeEngine {
-    /// Stereo FX, stated (the default is the same — the flagship
-    /// declares its negotiation surface rather than inheriting it).
-    const CONFIGS: &'static [stave_core::PortConfig] = &[stave_core::PortConfig::STEREO_FX];
-
-    const DESCRIPTOR: PluginDescriptor = PluginDescriptor {
-        id: c"com.ryanbahan.stave.forge.vst3",
-        name: c"Stave Forge",
-        vendor: c"Ryan Bahan",
-        version: c"0.0.2",
-        url: c"https://github.com/stave-dsp/stave",
-        description: c"Amp-topology saturation: discrete characters, stacks, voices and memory.",
-        features: &[
-            PluginFeature::AudioEffect,
-            PluginFeature::Distortion,
-            PluginFeature::Stereo,
-        ],
-    };
-
-    fn params() -> Arc<ForgeParams> {
-        ForgeParams::new()
-    }
-    fn face(params: &ForgeParams) -> Option<stave_core::face::Face> {
-        Some(editor::face(params))
-    }
-    fn presets(params: &ForgeParams) -> Vec<stave_core::Preset> {
-        presets::presets(params)
-    }
-}
-
-/// The plugin: engine + declarations under the framework shell.
-pub type Forge = StavePlugin<ForgeEngine>;
-
-stave_vst3_export!(
-    ForgeEngine,
-    component_cid: (0x5A7FE101, 0x6E5E4F88, 0x9D6D7E11, 0x55E82001),
-    controller_cid: (0x5A7FE101, 0x6E5E4F88, 0x9D6D7E11, 0x55E82002),
-);
-
-stave_clap::stave_clap_export!(ForgeEngine); // CLAP build, same cdylib
+stave::export!(Forge, vst3_class_ids: {
+    component: [0x5A7FE101, 0x6E5E4F88, 0x9D6D7E11, 0x55E82001],
+    controller: [0x5A7FE101, 0x6E5E4F88, 0x9D6D7E11, 0x55E82002],
+});

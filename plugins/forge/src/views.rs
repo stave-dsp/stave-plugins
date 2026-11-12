@@ -1,5 +1,5 @@
 //! Forge's own screens — the pictures its displays draw, each a plain
-//! function of the frame (parameters, probes, the published curve and
+//! function of the frame (parameters, taps, the published curve and
 //! the capture wire):
 //!
 //! * `transfer` — the curve stack's static skeleton with the live
@@ -10,24 +10,12 @@
 //!   from the selectors' own step names (screamer renames stage 1,
 //!   push-pull suffixes the character, SINGLE hides stage 2).
 
-extern crate alloc;
-use alloc::format;
-use alloc::string::String;
-use alloc::sync::Arc;
-use alloc::vec::Vec;
-use std::sync::LazyLock;
+use stave::face::step_of;
+use stave::prelude::*;
+use stave::telemetry::CURVE_X_SPAN;
 
-use stave_core::debug::CURVE_X_SPAN;
-use stave_core::face::prelude::*;
-use stave_core::face::{rrect_path, step_of};
-use stave_core::params::BindParam;
-use stave_ui::scene::TextAlign;
-
-use crate::params::{stack, ForgeParams, STACKS};
-
-/// The table, for the binds and step counts the pictures read (ids and
-/// names are forever, so one table serves every instance).
-static P: LazyLock<Arc<ForgeParams>> = LazyLock::new(ForgeParams::new);
+use crate::engine::ForgeTaps;
+use crate::params::{stack, STACKS};
 
 fn alpha(c: Color, a: f64) -> Color {
     Color::rgba(c.r, c.g, c.b, c.a * a)
@@ -46,38 +34,38 @@ fn curve_at(ys: &[f32], u: f64) -> f64 {
 /// The transfer: skeleton curve over the identity, the live cloud on top.
 pub fn transfer(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     screens::curve(f, r, s);
-    let mut a = alloc::vec![0f32; 1024];
-    let mut b = alloc::vec![0f32; 1024];
-    let n = f.host.capture(0, &mut a).min(f.host.capture(1, &mut b));
-    let dot = alpha(f.theme.accent, 0.55);
+    let mut a = vec![0f32; 1024];
+    let mut b = vec![0f32; 1024];
+    let n = f.controller.capture(0, &mut a).min(f.controller.capture(1, &mut b));
+    let dot = alpha(f.theme.palette.accent, 0.55);
     for i in (0..n).step_by(4) {
         let x = r.x + r.w * ((f64::from(a[i]) / CURVE_X_SPAN + 1.0) * 0.5).clamp(0.0, 1.0);
         let y = r.y + r.h / 2.0 - f64::from(b[i]).clamp(-1.2, 1.2) / 1.2 * (r.h / 2.0 - 4.0);
         s.solid(Path::circle(pt(x, y), 1.1), dot);
     }
-    let ty = &f.theme.type_;
+    let ty = &f.theme.typography;
     s.text_in(
-        pt(r.x + 8.0, r.y + 14.0),
+        pt(r.x + r.w / 2.0, r.y + 14.0),
         "TRANSFER",
         ty.caption_size,
-        alpha(f.theme.phosphor, 0.6),
-        ty.caption.align(TextAlign::Left),
+        alpha(f.theme.palette.phosphor, 0.6),
+        ty.caption,
     );
 }
 
 /// The harmonic ladder: coherent Goertzel H1…H8 of one sine cycle at
 /// the reference amplitude through the published curve.
 pub fn harmonics(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let th = f.theme;
-    let ty = &th.type_;
+    let th = &f.theme.palette;
+    let ty = &f.theme.typography;
     let base = r.y + r.h - 18.0;
     let top = r.y + 22.0;
     s.text_in(
-        pt(r.x + 8.0, r.y + 14.0),
+        pt(r.x + r.w / 2.0, r.y + 14.0),
         "HARMONICS",
         ty.caption_size,
         alpha(th.phosphor, 0.6),
-        ty.caption.align(TextAlign::Left),
+        ty.caption,
     );
     s.stroke(
         Path::new()
@@ -85,9 +73,9 @@ pub fn harmonics(f: &Frame<'_>, r: Rect, s: &mut Scene) {
             .line_to(pt(r.x + r.w - 8.0, base)),
         Stroke::new(alpha(th.phosphor, 0.15), 1.0),
     );
-    let ys = f.host.curve();
+    let ys = f.controller.curve();
     let mags = if ys.len() >= 2 {
-        ladder(&ys, f.probe("viz_amp").clamp(0.05, CURVE_X_SPAN))
+        ladder(&ys, f.tap(ForgeTaps::VIZ_AMP).clamp(0.05, CURVE_X_SPAN))
     } else {
         [0.0; 8]
     };
@@ -149,21 +137,21 @@ fn ladder(ys: &[f32], amp: f64) -> [f64; 8] {
     mags
 }
 
-/// The step name a stepped param sits on.
-fn step_name(f: &Frame<'_>, b: Bind) -> String {
-    let n = f.host.steps(b.id);
-    f.host
-        .step_name(b.id, step_of(f.value(b), n))
+/// The step name the `i`th declared bind sits on.
+fn step_name(f: &Frame<'_>, i: usize) -> String {
+    f.param(i)
+        .and_then(|p| p.step_name(step_of(f.bound(i), p.step_count())))
         .unwrap_or_default()
+        .into()
 }
 
 /// The stage strip: pills in signal order, each glowing with its tap.
+/// Reads (in order) character, stack, filter, post.
 pub fn topology(f: &Frame<'_>, r: Rect, s: &mut Scene) {
-    let p = &**P;
-    let th = f.theme;
-    let ty = &th.type_;
-    let stack_i = step_of(f.value(p.stack.bind()), STACKS.len() as u32) as usize;
-    let character = step_name(f, p.character.bind());
+    let th = &f.theme.palette;
+    let ty = &f.theme.typography;
+    let stack_i = step_of(f.bound(1), STACKS.len() as u32) as usize;
+    let character = step_name(f, 0);
     let stage1 = match stack_i {
         stack::SCREAMER => String::from("SCREAM"),
         stack::PUSH_PULL => format!("{character} PP"),
@@ -174,13 +162,14 @@ pub fn topology(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     } else {
         "STAGE 2"
     };
-    let pills: [(&str, Option<String>); 6] = [
-        ("tap0", Some(stage1)),
-        ("tap1", Some(step_name(f, p.filter.bind()))),
-        ("tap2", (stack_i != 0).then(|| String::from(stage2))),
-        ("tap3", Some(step_name(f, p.post.bind()))),
-        ("tap4", Some(String::from("GRIT"))),
-        ("tap5", Some(String::from("IRON"))),
+    let [t0, t1, t2, t3, t4, t5] = ForgeTaps::STAGES;
+    let pills: [(TapId, Option<String>); 6] = [
+        (t0, Some(stage1)),
+        (t1, Some(step_name(f, 2))),
+        (t2, (stack_i != 0).then(|| String::from(stage2))),
+        (t3, Some(step_name(f, 3))),
+        (t4, Some(String::from("GRIT"))),
+        (t5, Some(String::from("IRON"))),
     ];
     let shown: Vec<_> = pills
         .iter()
@@ -194,7 +183,7 @@ pub fn topology(f: &Frame<'_>, r: Rect, s: &mut Scene) {
     let cy = r.y + r.h / 2.0;
     for (i, (tap, label)) in shown.iter().enumerate() {
         let x = r.x + pad + i as f64 * (pw + arrow);
-        let level = f.probe(tap).abs().clamp(0.0, 1.0);
+        let level = f.tap(*tap).abs().clamp(0.0, 1.0);
         let glow = level.sqrt();
         let pill = Rect {
             x,

@@ -1,20 +1,14 @@
 //! One M/S lane, whole: the amp channel (declared as a `chain!`, so
 //! the code's shape IS the signal path) and its region stack.
 
-use stave_dsp::{
-    shapes, Compensator, CurveStage, FilterSpec, FilterStage, Frame, Hysteresis, NonlinearRc,
-    Oversampled2x, Slew, StageKind, SwapPoint,
+use stave::dsp::{
+    shapes, Biquad, Compensator, CurveStage, FilterSpec, Frame, Hysteresis, NonlinearRc,
+    Oversampled2x, RcClipperConfig, Slew, StageKind, SwapPoint,
 };
 
 use crate::engine::voicing::conduction_sense;
-use stave_dsp::RcClipperConfig;
-use stave_dsp::{Oversampler2xFir, Oversampler2xFirInner};
 
-/// The strip's interior clock: the nested region factor. Structure
-/// knowledge lives with the structure that has it.
-pub(super) const OS_FACTOR: f32 = (Oversampler2xFir::FACTOR * Oversampler2xFirInner::FACTOR) as f32;
-
-stave_dsp::chain! {
+stave::dsp::chain! {
     /// The amp channel, in signal order. Slot names are the handles
     /// everything else uses: `.primary` is the StageId (routes,
     /// swaps, senses); `.voicing()` is the typed cell (retuning).
@@ -29,9 +23,9 @@ stave_dsp::chain! {
             shapes::knee(1.0),
             conduction_sense,
         ),
-        voicing: Filter = FilterStage::new(FilterSpec::HighShelf { hz: 900.0, db: 0.0 }),
+        voicing: Filter = Biquad::new(FilterSpec::HighShelf { hz: 900.0, db: 0.0 }),
         second: Curve = CurveStage::from_fn(-4.0, 4.0, 0.0, shapes::knee(2.5)),
-        post: Filter = FilterStage::new(FilterSpec::Peak { hz: 1_000.0, db: 0.0, q: 1.0 }),
+        post: Filter = Biquad::new(FilterSpec::Peak { hz: 1_000.0, db: 0.0, q: 1.0 }),
         grit: Slew = Slew::new(200.0, 200.0),
         iron: Hysteresis = Hysteresis::new(0.4, 0.0),
     }

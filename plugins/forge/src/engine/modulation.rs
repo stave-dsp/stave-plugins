@@ -5,12 +5,15 @@
 //! the knob values that routes displace from, so automation and
 //! modulation never fight.
 
-use stave_dsp::{Driver, EnvelopeFollower, EnvelopeTimes, FilterSpec, ModMatrix, Route, Target};
+use stave::dsp::{
+    Driver, EnvelopeFollower, EnvelopeTimes, FilterSpec, ModMatrix, Route, StageId, StageTarget,
+    Target,
+};
 
 use super::strip::AmpChain;
 
 /// The mod matrix's driver lanes, by NAME (the wiring below and the
-/// per-frame detector feed in render.rs both read these).
+/// per-frame detector feed in process.rs both read these).
 pub(super) mod driver {
     /// Slow supply cell — sag and squeeze follow program level.
     pub(in crate::engine) const LEVEL: usize = 0;
@@ -117,16 +120,23 @@ impl Modulation {
             (strip.amp().primary, strip.primary_base),
             (strip.amp().second, strip.second_base),
         ];
-        let tilt: &[(stave_dsp::StageId, FilterSpec)] = &[(strip.amp().voicing, self.base_tone)];
+        let tilt: &[(StageId, FilterSpec)] = &[(strip.amp().voicing, self.base_tone)];
         self.matrix
             .apply(states, strip.amp_mut().as_chain_mut(), &frames_base, tilt);
     }
-    pub(super) fn prepare(&mut self, rate: f32) {
-        self.matrix.prepare(rate);
+    pub(super) fn prepare(&mut self, sample_rate: f32) {
+        self.matrix.prepare(sample_rate);
     }
 }
 
 impl Modulation {
+    /// Add one route. The table holds 6 and no mode pushes more than
+    /// 4, so a full table is a wiring bug.
+    fn push(&mut self, route: Route<StageTarget>) {
+        let pushed = self.matrix.push_route(route);
+        debug_assert!(pushed.is_ok(), "forge's route table overflowed");
+    }
+
     /// Route table for the current MEMORY mode. Targets follow the
     /// stack: when primary is the screamer RC (no Frame), frame routes
     /// land on second instead.
@@ -144,10 +154,9 @@ impl Modulation {
         // The divider modulates whichever primary stage carries a Frame.
         if sub_mod > 1e-3 {
             let frame_stage = if stack == 2 { amp.second } else { amp.primary };
-            self.matrix.push_route(Route {
-                driver: driver::SUB,
-                stage: frame_stage,
-                target: Target::Gain,
+            self.push(Route {
+                source: driver::SUB,
+                target: StageTarget { stage: frame_stage, target: Target::Gain },
                 amount: 0.5 * sub_mod,
             });
         }
@@ -167,22 +176,19 @@ impl Modulation {
                     release_ms: 220.0,
                     slow_release_ms: None,
                 });
-                self.matrix.push_route(Route {
-                    driver: driver::LEVEL,
-                    stage: frame_stage,
-                    target: Target::Drive,
+                self.push(Route {
+                    source: driver::LEVEL,
+                    target: StageTarget { stage: frame_stage, target: Target::Drive },
                     amount: -0.5 * d,
                 });
-                self.matrix.push_route(Route {
-                    driver: driver::LEVEL,
-                    stage: frame_stage,
-                    target: Target::Gain,
+                self.push(Route {
+                    source: driver::LEVEL,
+                    target: StageTarget { stage: frame_stage, target: Target::Gain },
                     amount: 0.35 * d,
                 });
-                self.matrix.push_route(Route {
-                    driver: driver::LEVEL,
-                    stage: amp.voicing,
-                    target: Target::TiltDb,
+                self.push(Route {
+                    source: driver::LEVEL,
+                    target: StageTarget { stage: amp.voicing, target: Target::TiltDb },
                     amount: -8.0 * d,
                 });
             }
@@ -190,10 +196,9 @@ impl Modulation {
                 // BLOCKING — conduction charge chokes the bias (fast
                 // attack, program-release). Detector = the curve's own
                 // one-sided conduction sense column.
-                self.matrix.push_route(Route {
-                    driver: driver::CONDUCTION,
-                    stage: frame_stage,
-                    target: Target::Bias,
+                self.push(Route {
+                    source: driver::CONDUCTION,
+                    target: StageTarget { stage: frame_stage, target: Target::Bias },
                     amount: -0.6 * d,
                 });
             }
@@ -205,16 +210,14 @@ impl Modulation {
                     release_ms: 180.0,
                     slow_release_ms: None,
                 });
-                self.matrix.push_route(Route {
-                    driver: driver::LEVEL,
-                    stage: frame_stage,
-                    target: Target::Gain,
+                self.push(Route {
+                    source: driver::LEVEL,
+                    target: StageTarget { stage: frame_stage, target: Target::Gain },
                     amount: 0.55 * d,
                 });
-                self.matrix.push_route(Route {
-                    driver: driver::LEVEL,
-                    stage: amp.voicing,
-                    target: Target::TiltDb,
+                self.push(Route {
+                    source: driver::LEVEL,
+                    target: StageTarget { stage: amp.voicing, target: Target::TiltDb },
                     amount: -3.0 * d,
                 });
             }
@@ -222,10 +225,9 @@ impl Modulation {
                 // RIPPLE — env-scaled 120 Hz supply wobble on gain and
                 // operating point: ghost sidebands at n·f0 ± 120 Hz that
                 // ride program heat.
-                self.matrix.push_route(Route {
-                    driver: driver::RIPPLE,
-                    stage: frame_stage,
-                    target: Target::Gain,
+                self.push(Route {
+                    source: driver::RIPPLE,
+                    target: StageTarget { stage: frame_stage, target: Target::Gain },
                     amount: 0.28 * d,
                 });
                 // Small bias wobble: shifts the operating point AND
@@ -233,10 +235,9 @@ impl Modulation {
                 // (bias modulation is additive to first order — real
                 // supply ripple hums the same way). Kept below the
                 // multiplicative sidebands.
-                self.matrix.push_route(Route {
-                    driver: driver::RIPPLE,
-                    stage: frame_stage,
-                    target: Target::Bias,
+                self.push(Route {
+                    source: driver::RIPPLE,
+                    target: StageTarget { stage: frame_stage, target: Target::Bias },
                     amount: 0.05 * d,
                 });
             }

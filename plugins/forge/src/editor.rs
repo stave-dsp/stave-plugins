@@ -4,14 +4,11 @@
 //! stage strip between the I/O meters); the voicing reads below in
 //! signal order: STAGE 1 → TOPOLOGY, then TEXTURE → SUB → OUTPUT.
 
-extern crate alloc;
-use alloc::vec;
+use stave::face::photo::hex;
+use stave::face::{CapStyle, Coat, Finish, Hardware, Palette};
+use stave::prelude::*;
 
-use stave_core::face::prelude::*;
-use stave_core::face::{CapStyle, Finish};
-use stave_core::params::BindParam;
-use stave_ui::photo::hex;
-
+use crate::engine::ForgeTaps;
 use crate::params::ForgeParams;
 use crate::views;
 
@@ -20,27 +17,34 @@ pub fn theme() -> Theme {
     let base = Theme::graphite();
     Theme {
         name: "forge",
-        surface: hex(0x5A3A22),
-        finish: Finish::Hammertone,
-        plate: hex(0x452B19),
-        desk: hex(0x1C1A18),
-        ink: Color::rgba(0.95, 0.89, 0.78, 1.0),
-        ink_soft: Color::rgba(0.95, 0.89, 0.78, 0.58),
-        accent: Color::rgba(1.0, 0.56, 0.22, 1.0),
-        lamp: [1.8, 0.5, 0.1],
-        caps: CapStyle::Dome,
-        cap: hex(0x141210),
-        pointer: Color::rgba(0.98, 0.93, 0.84, 1.0),
-        screen: Color::rgba(0.055, 0.04, 0.03, 1.0),
-        phosphor: Color::rgba(1.0, 0.64, 0.30, 1.0),
+        finish: Finish {
+            coat: Coat::Hammertone,
+            surface: hex(0x5A3A22),
+            plate: hex(0x452B19),
+            desk: hex(0x1C1A18),
+            ..base.finish
+        },
+        palette: Palette {
+            ink: Color::rgba(0.95, 0.89, 0.78, 1.0),
+            ink_soft: Color::rgba(0.95, 0.89, 0.78, 0.58),
+            accent: Color::rgba(1.0, 0.56, 0.22, 1.0),
+            screen: Color::rgba(0.055, 0.04, 0.03, 1.0),
+            phosphor: Color::rgba(1.0, 0.64, 0.30, 1.0),
+        },
+        hardware: Hardware {
+            caps: CapStyle::Dome,
+            cap: hex(0x141210),
+            pointer: Color::rgba(0.98, 0.93, 0.84, 1.0),
+            lamp: [1.8, 0.5, 0.1],
+        },
         ..base
     }
 }
 
 /// Meter + trim knob: one side of the I/O.
-fn io(probe: &'static str, label: &'static str, trim: Bind) -> FaceNode {
+fn io(tap: TapId, label: &'static str, trim: Bind) -> FaceNode {
     column(vec![
-        Meter::db(probe).label(label).height(110.0).node(),
+        Meter::db(tap).label(label).height(110.0).node(),
         Knob::new(trim).small().centered().node(),
     ])
     .gap(8.0)
@@ -74,7 +78,7 @@ pub fn face(p: &ForgeParams) -> Face {
         .node(),
         Display::new(SCREEN_W, SCREEN_H, views::transfer).node(),
         Display::new(SCREEN_W, SCREEN_H, views::harmonics)
-            .probes(&["viz_amp"])
+            .taps(&[ForgeTaps::VIZ_AMP])
             .node(),
     ])
     .gap(gap)
@@ -84,7 +88,7 @@ pub fn face(p: &ForgeParams) -> Face {
         30.0,
         views::topology,
     )
-    .probes(&["tap0", "tap1", "tap2", "tap3", "tap4", "tap5"])
+    .taps(&ForgeTaps::STAGES)
     .reads(&[
         p.character.bind(),
         p.stack.bind(),
@@ -95,9 +99,9 @@ pub fn face(p: &ForgeParams) -> Face {
     let engine = Plate::titled("OPERATING POINT")
         .around(column(vec![screens, strip]).gap(gap).align(Align::Center));
     let top = row(vec![
-        io("io_in", "IN", p.input.bind()),
+        io(ForgeTaps::IO_IN, "IN", p.input.bind()),
         engine,
-        io("io_out", "OUT", p.output.bind()),
+        io(ForgeTaps::IO_OUT, "OUT", p.output.bind()),
     ])
     .gap(row_gap)
     .align(Align::Center);

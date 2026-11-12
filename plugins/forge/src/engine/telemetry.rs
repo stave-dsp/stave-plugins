@@ -1,20 +1,14 @@
-//! Telemetry — everything the engine reports OUT (the framework
-//! attaches the bus via `attach_telemetry`; this component is the
-//! other end of that seam): declared tap handles, the scope
-//! capture, editor-feed caches, and the per-block publish pass.
-//! Zero-cost with no bus attached.
-
-extern crate alloc;
+//! The observer — everything the plugin reports OUT on its
+//! `Telemetry`: declared taps, the capture pairs, the transfer curve,
+//! and the per-block publish pass.
 
 use std::time::Instant;
 
-use stave_core::Tap;
-use stave_dsp::shapes;
+use stave::dsp::{shapes, StageKind};
+use stave::prelude::*;
+use stave::telemetry::{Scope, CURVE_POINTS, CURVE_X_SPAN};
 
 use crate::engine::voicing::{character_shape, stage_b_knee};
-
-use stave_core::{DebugBus, Scope};
-
 use crate::params::ForgeParams;
 
 #[inline]
@@ -22,11 +16,12 @@ fn peak_db(peak: f32) -> f64 {
     20.0 * (peak.max(1e-6) as f64).log10()
 }
 
-/// Everything the engine reports out, as ONE component: declared
+/// Everything the plugin reports out, as ONE component: declared
 /// tap handles, the framework capture scope, and the editor-feed
-/// caches. The engine processes audio; Telemetry publishes what
+/// caches. The strips process audio; the observer publishes what
 /// happened. Nothing here is DSP state.
-pub(super) struct Telemetry {
+pub(super) struct Observer {
+    telemetry: Arc<Telemetry>,
     taps: ForgeTaps,
     /// Framework capture scratch + load meter.
     scope: Scope,
@@ -58,10 +53,15 @@ pub(super) struct Voicing {
     pub drive: f32,
 }
 
-impl Telemetry {
-    pub(super) fn new() -> Self {
+impl Observer {
+    /// Taps registered and the capture claimed: the scope wants
+    /// transfer PAIRS, not output L/R (ch0 = shaper-domain input,
+    /// ch1 = chain output).
+    pub(super) fn new(telemetry: &Telemetry) -> Self {
+        telemetry.claim_capture();
         Self {
-            taps: ForgeTaps::new(),
+            telemetry: telemetry.shared(),
+            taps: ForgeTaps::new(telemetry),
             scope: Scope::new(),
             last_voicing: (-1, -1, -1.0, -1.0),
             sc_gain: 1.0,
@@ -70,14 +70,9 @@ impl Telemetry {
     }
 }
 
-impl Telemetry {
+impl Observer {
     pub(super) fn prepare(&mut self, max_frames: usize) {
         self.scope.prepare(max_frames);
-    }
-    /// The declared observation points — instruments attach here
-    /// (handle in, transport at the wire only).
-    pub(crate) fn taps(&self) -> &ForgeTaps {
-        &self.taps
     }
     /// Start-of-block reset for the per-stage peak accumulators.
     pub(super) fn begin_block(&mut self) {
@@ -89,7 +84,7 @@ impl Telemetry {
     #[inline]
     pub(super) fn scope_reference(&self, strip: &mut super::strip::Strip) -> (f32, f32) {
         let id_a = strip.amp().primary;
-        if let Some(stave_dsp::StageKind::Curve(cs)) =
+        if let Some(StageKind::Curve(cs)) =
             strip.amp_mut().as_chain_mut().stage_mut(id_a)
         {
             let fr = *cs.pending_mut();
@@ -110,59 +105,47 @@ impl Telemetry {
     }
 }
 
-impl Telemetry {
+impl Observer {
     /// The per-block publish pass: block peaks, the scope's capture
-    /// pair, per-stage topology peaks, the load meter. Entirely
-    /// gated on the bus — zero cost unattached.
-    pub(super) fn publish(
-        &mut self,
-        debug: &Option<alloc::sync::Arc<DebugBus>>,
-        p: &ForgeParams,
-        sr: f32,
-        block: BlockReport,
-    ) {
+    /// pair, per-stage topology peaks, the load meter.
+    pub(super) fn publish(&mut self, p: &ForgeParams, sample_rate: f32, block: BlockReport) {
         let BlockReport {
             frames,
             peak_in: peak_in_block,
             peak_out: peak_out_block,
             started: t_block,
         } = block;
-        if let Some(bus) = debug {
-            self.taps.io_in.set(bus, peak_db(peak_in_block));
-            self.taps.io_out.set(bus, peak_db(peak_out_block));
-            // Engine view: transfer pairs for the phosphor scope…
-            self.scope.publish(bus, frames);
-            // …and per-stage tap peaks for the topology strip, on
-            // STABLE wires (values only — the editor's pill
-            // declarations own the labels). Stage 2's pill hides in
-            // SINGLE by not publishing (the strip ages it out).
-            let t = self.tap_peaks;
-            let cur_stack = p.stack.index();
-            for (k, tap) in self.taps.stage.iter().enumerate() {
-                if k == 2 && cur_stack == 0 {
-                    continue;
-                }
-                tap.set(bus, t[k] as f64);
+        let taps = &self.taps;
+        taps.io_in.set(peak_db(peak_in_block));
+        taps.io_out.set(peak_db(peak_out_block));
+        // Plugin view: transfer pairs for the phosphor scope…
+        self.scope.publish(&self.telemetry, frames);
+        // …and per-stage tap peaks for the topology strip, on STABLE
+        // wires (values only — the face's pill declarations own the
+        // labels). Stage 2's pill hides in SINGLE by not publishing
+        // (the strip ages it out).
+        let t = self.tap_peaks;
+        let single = p.stack.value().0 == 0;
+        for (k, tap) in taps.stages().into_iter().enumerate() {
+            if k == 2 && single {
+                continue;
             }
-            if frames > 0 {
-                let budget = frames as f64 / sr as f64;
-                let pct = self.scope.load_pct(t_block.elapsed().as_secs_f64(), budget);
-                self.taps.cpu_pct.set(bus, pct);
-            }
+            tap.set(f64::from(t[k]));
+        }
+        if frames > 0 {
+            let budget = frames as f64 / f64::from(sample_rate);
+            let pct = self.scope.load_pct(t_block.elapsed().as_secs_f64(), budget);
+            taps.cpu_pct.set(pct);
         }
     }
 }
 
-impl Telemetry {
+impl Observer {
     /// Static transfer view: the curve stack's skeleton (the voicing
     /// filters and memory bend it dynamically) plus the pad markers
-    /// and the scope's amplitude reference. Republished only when the
-    /// voicing tuple moves; gated entirely on the debug bus.
-    pub(super) fn publish_static_viz(
-        &mut self,
-        debug: &Option<alloc::sync::Arc<DebugBus>>,
-        voicing: Voicing,
-    ) {
+    /// and the scope's amplitude reference. The curve republishes
+    /// only when the voicing tuple moves.
+    pub(super) fn publish_static_viz(&mut self, voicing: Voicing) {
         let Voicing {
             character,
             stack,
@@ -173,59 +156,51 @@ impl Telemetry {
         } = voicing;
         // Transfer view: static skeleton of the curve stack (the
         // voicing filters and memory bend it dynamically).
-        // (Observability only — gated on the debug bus.)
-        if let Some(bus) = debug {
-            if (character as i32, stack as i32, edge, bias) != self.last_voicing {
-                self.last_voicing = (character as i32, stack as i32, edge, bias);
-                let cs_params = character_shape(character, edge as f64);
-                let shape_single = cs_params.eval();
-                let shape_pp =
-                    cs_params.eval_push_pull(0.7 - 0.45 * edge as f64, bias as f64 * 0.8);
-                let kb = stage_b_knee(character, edge as f64);
-                let post = shapes::knee(if stack == 2 { (1.5 + edge) as f64 } else { kb });
-                let bf = frame_bias as f64;
-                let span = stave_core::debug::CURVE_X_SPAN;
-                let mut ys = [0.0f32; stave_core::debug::CURVE_POINTS];
-                for (i, y) in ys.iter_mut().enumerate() {
-                    let u = -span
-                        + 2.0 * span * i as f64 / (stave_core::debug::CURVE_POINTS - 1) as f64;
-                    let a = if stack == 3 {
-                        shape_pp(u)
-                    } else {
-                        shape_single(u + bf)
-                    };
-                    *y = match stack {
-                        0 => a,
-                        _ => post(a),
-                    } as f32;
-                }
-                bus.publish_curve(&ys);
+        if (character as i32, stack as i32, edge, bias) != self.last_voicing {
+            self.last_voicing = (character as i32, stack as i32, edge, bias);
+            let cs_params = character_shape(character, edge as f64);
+            let shape_single = cs_params.eval();
+            let shape_pp = cs_params.eval_push_pull(0.7 - 0.45 * edge as f64, bias as f64 * 0.8);
+            let kb = stage_b_knee(character, edge as f64);
+            let post = shapes::knee(if stack == 2 { (1.5 + edge) as f64 } else { kb });
+            let bf = frame_bias as f64;
+            let span = CURVE_X_SPAN;
+            let mut ys = [0.0f32; CURVE_POINTS];
+            for (i, y) in ys.iter_mut().enumerate() {
+                let u = -span + 2.0 * span * i as f64 / (CURVE_POINTS - 1) as f64;
+                let a = if stack == 3 {
+                    shape_pp(u)
+                } else {
+                    shape_single(u + bf)
+                };
+                *y = match stack {
+                    0 => a,
+                    _ => post(a),
+                } as f32;
             }
-            {
-                let span = stave_core::debug::CURVE_X_SPAN;
-                let nx = |u: f64| ((u + span) / (2.0 * span)).clamp(0.0, 1.0);
-                self.taps.pad_rest_x.set(bus, nx(frame_bias as f64));
-                self.taps.pad_live_x.set(bus, nx(frame_bias as f64));
-                self.taps.pad_live_g.set(bus, 0.0);
-            }
-            // Engine-view reference: the shaper-domain amplitude a −9 dBFS
-            // tone reaches at the current drive (harmonic-ladder input).
-            self.sc_gain = 1.2 + 0.38 * drive;
-            let viz_amp = if stack == 2 {
-                self.sc_gain * 0.35
-            } else {
-                (1.0 + drive * 0.9) * 0.35
-            };
-            self.taps.viz_amp.set(bus, viz_amp as f64);
+            self.telemetry.publish_curve(&ys);
         }
+        let nx = |u: f64| ((u + CURVE_X_SPAN) / (2.0 * CURVE_X_SPAN)).clamp(0.0, 1.0);
+        self.taps.pad_rest_x.set(nx(frame_bias as f64));
+        self.taps.pad_live_x.set(nx(frame_bias as f64));
+        self.taps.pad_live_g.set(0.0);
+        // Plugin-view reference: the shaper-domain amplitude a −9 dBFS
+        // tone reaches at the current drive (harmonic-ladder input).
+        self.sc_gain = 1.2 + 0.38 * drive;
+        let viz_amp = if stack == 2 {
+            self.sc_gain * 0.35
+        } else {
+            (1.0 + drive * 0.9) * 0.35
+        };
+        self.taps.viz_amp.set(viz_amp as f64);
     }
 }
 
-/// Forge's declared observation points: every wire name the
-/// engine publishes, in ONE place. The engine writes through these
-/// handles only; the stage taps carry stable names — pill labels are
-/// the editor's business (editor.rs pill declarations), never the
-/// wire's.
+/// Forge's declared observation points: every wire the plugin
+/// publishes, in ONE place. The stage taps (`tap0`…`tap5`, one per
+/// chain slot in signal order) carry stable names — pill labels are
+/// the face's business (`views::topology`), never the wire's.
+#[derive(Taps)]
 pub struct ForgeTaps {
     pub io_in: Tap,
     pub io_out: Tap,
@@ -234,27 +209,20 @@ pub struct ForgeTaps {
     pub pad_rest_x: Tap,
     pub pad_live_x: Tap,
     pub pad_live_g: Tap,
-    pub stage: [Tap; 6],
+    pub tap0: Tap,
+    pub tap1: Tap,
+    pub tap2: Tap,
+    pub tap3: Tap,
+    pub tap4: Tap,
+    pub tap5: Tap,
 }
 
 impl ForgeTaps {
-    pub(super) const fn new() -> Self {
-        Self {
-            io_in: Tap::new("io_in"),
-            io_out: Tap::new("io_out"),
-            viz_amp: Tap::new("viz_amp"),
-            cpu_pct: Tap::new("cpu_pct"),
-            pad_rest_x: Tap::new("pad_rest_x"),
-            pad_live_x: Tap::new("pad_live_x"),
-            pad_live_g: Tap::new("pad_live_g"),
-            stage: [
-                Tap::new("tap0"),
-                Tap::new("tap1"),
-                Tap::new("tap2"),
-                Tap::new("tap3"),
-                Tap::new("tap4"),
-                Tap::new("tap5"),
-            ],
-        }
+    /// The per-stage taps' ids, in chain-slot order.
+    pub const STAGES: [TapId; 6] = [Self::TAP0, Self::TAP1, Self::TAP2, Self::TAP3, Self::TAP4, Self::TAP5];
+
+    /// The per-stage taps, in chain-slot order.
+    pub fn stages(&self) -> [&Tap; 6] {
+        [&self.tap0, &self.tap1, &self.tap2, &self.tap3, &self.tap4, &self.tap5]
     }
 }
