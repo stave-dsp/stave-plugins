@@ -34,6 +34,7 @@ use stave::dsp::FilterSpec;
 use stave::dsp::RcClipperConfig;
 use stave::dsp::Xorshift32;
 use stave::dsp::{shapes, Biquad, NonlinearRc, OnePole, PerChannel, Slew, Stage};
+use stave::dsp::units::{db, hz};
 
 use crate::params::EddyParams;
 
@@ -106,7 +107,7 @@ impl Circuit {
         Self {
             stages: PerChannel::new(|_| LaneStages::new()),
             kind: 0,
-            flutter: OnePole::lowpass(6.0),
+            flutter: OnePole::lowpass(hz(6.0)),
             flutter_rng: Xorshift32::new(0x2F6E_2B1D),
             sr: 48_000.0,
         }
@@ -149,20 +150,20 @@ impl Circuit {
                 // stage runs hotter.
                 0 => lane.hi_cut.set(
                     FilterSpec::HighShelf {
-                        hz: 2_800.0,
-                        db: -8.0 * heat,
+                        frequency: hz(2_800.0),
+                        gain: db(-8.0 * heat),
                     }),
                 // SCREAMER: the honk — cuts close in from BOTH sides
                 // with heat until only the mids fight through.
                 1 => {
                     lane.lo_cut.set(
                         FilterSpec::Highpass {
-                            hz: 120.0 + 400.0 * heat,
+                            frequency: hz(120.0 + 400.0 * heat),
                             q: 0.707,
                         });
                     lane.hi_cut.set(
                         FilterSpec::Lowpass {
-                            hz: 7_000.0 - 4_200.0 * heat,
+                            frequency: hz(7_000.0 - 4_200.0 * heat),
                             q: 0.707,
                         });
                 }
@@ -170,10 +171,10 @@ impl Circuit {
                 // end and the deep rumble the transport can't hold.
                 _ => {
                     lane.lo_cut
-                        .set(FilterSpec::Highpass { hz: 55.0, q: 0.707 });
+                        .set(FilterSpec::Highpass { frequency: hz(55.0), q: 0.707 });
                     lane.hi_cut.set(
                         FilterSpec::Lowpass {
-                            hz: 8_500.0 - 5_500.0 * heat,
+                            frequency: hz(8_500.0 - 5_500.0 * heat),
                             q: 0.707,
                         });
                 }

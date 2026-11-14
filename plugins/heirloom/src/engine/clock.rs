@@ -16,6 +16,7 @@
 //!   wet bandwidth; dived to 0.5×, the wet goes dark with it.
 
 use stave::dsp::{Stage, Svf};
+use stave::dsp::units::{hz};
 
 use super::programs::CORE_HZ;
 
@@ -69,7 +70,7 @@ impl ClockDomain {
         let corner = 0.45 * (CORE_HZ * clock).min(self.host_hz);
         for lane in self.aa_in.iter_mut().chain(&mut self.aa_out) {
             for (f, q) in lane.iter_mut().zip(Q) {
-                f.set(corner, q);
+                f.set(hz(corner), q);
             }
         }
     }

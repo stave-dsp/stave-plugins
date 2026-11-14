@@ -8,6 +8,7 @@
 
 use stave::dsp::{Lag, Lfo, Waveform};
 use stave::prelude::{Generator, Stage};
+use stave::dsp::units::{hz, ms};
 
 use crate::params::EddyParams;
 
@@ -78,10 +79,10 @@ fn recipe(motion: usize, flavor: f32, cycle_ms: f32) -> Recipe {
 fn simulate_cycle(r_shape: Waveform, r_lag: Option<(f32, f32)>, cycle_ms: f32, ys: &mut [f32]) {
     let n = ys.len();
     let step_ms = cycle_ms / n as f32;
-    let mut sim = Lag::new(0.0, 0.0);
+    let mut sim = Lag::new(ms(0.0), ms(0.0));
     sim.prepare(1000.0 / step_ms);
     if let Some((rise, fall)) = r_lag {
-        sim.set_times(rise, fall);
+        sim.set_times(ms(f64::from(rise)), ms(f64::from(fall)));
     }
     const PASSES: usize = 4;
     for pass in 0..PASSES {
@@ -110,8 +111,8 @@ pub(super) struct Motion {
 impl Motion {
     pub(super) fn new() -> Self {
         Self {
-            lfo: Lfo::new(1.0),
-            lag: Lag::new(0.0, 0.0),
+            lfo: Lfo::new(hz(1.0)),
+            lag: Lag::new(ms(0.0), ms(0.0)),
             lag_on: false,
             makeup: 1.0,
             last_motion: usize::MAX,
@@ -121,7 +122,7 @@ impl Motion {
     }
 
     pub(super) fn prepare(&mut self, sr: f32, rate_hz: f32) {
-        self.lfo.set_hz(rate_hz);
+        self.lfo.set_frequency(hz(rate_hz));
         self.lfo.prepare(sr);
         self.lag.prepare(sr);
         self.last_motion = usize::MAX; // force recipe re-apply
@@ -155,7 +156,7 @@ impl Motion {
         self.lfo.set_drift(r.drift);
         self.lag_on = r.lag.is_some();
         if let Some((rise, fall)) = r.lag {
-            self.lag.set_times(rise, fall);
+            self.lag.set_times(ms(f64::from(rise)), ms(f64::from(fall)));
         }
         if motion_changed {
             self.lag.reset();
@@ -172,7 +173,7 @@ impl Motion {
     /// (± depth·DEPTH_MS worth of read-head travel).
     #[inline]
     pub(super) fn tick(&mut self, rate_hz: f32, depth: f32, sr: f32) -> f32 {
-        self.lfo.set_hz(rate_hz);
+        self.lfo.set_frequency(hz(rate_hz));
         let raw = self.lfo.next();
         let shaped = if self.lag_on {
             self.lag.tick(raw) * self.makeup

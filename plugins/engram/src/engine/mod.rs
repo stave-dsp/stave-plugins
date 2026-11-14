@@ -240,6 +240,16 @@ pub struct Engram {
     tail_s: f32,
     settle_space: bool,
     taps: EngramTaps,
+    /// What each stage costs a block, for the perf check's hotspot:
+    /// `shape` (the plastic geometry stepped and the room reshaped),
+    /// `attend` (attention over the bank), `space` (the learned space
+    /// aimed: reflections, late decay, voicing) and `field` — the
+    /// per-sample loop, where the ear, the bank's capture and recall,
+    /// the early field and the late room run interleaved, timed as one.
+    cost_shape: CostTaps,
+    cost_attend: CostTaps,
+    cost_space: CostTaps,
+    cost_field: CostTaps,
 }
 
 impl Engram {
@@ -329,6 +339,12 @@ impl Plugin for Engram {
         features: &[Feature::AudioEffect, Feature::Reverb, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Attention over the bank plus the late room per sample: ~3055 ns a
+    /// sample a channel on the x86_64 build host, measured in the
+    /// declared `held` case (HOLD keeps the room lossless and the bank
+    /// full, a state the knob search alone does not reach); twice that
+    /// leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(6_100.0);
     type Params = EngramParams;
 
     fn new(params: &Arc<EngramParams>, telemetry: &Telemetry) -> Self {
@@ -371,6 +387,10 @@ impl Plugin for Engram {
             tail_s: 3.0,
             settle_space: true,
             taps: EngramTaps::new(telemetry),
+            cost_shape: CostTaps::new(telemetry, cost_tap_ids!("shape")),
+            cost_attend: CostTaps::new(telemetry, cost_tap_ids!("attend")),
+            cost_space: CostTaps::new(telemetry, cost_tap_ids!("space")),
+            cost_field: CostTaps::new(telemetry, cost_tap_ids!("field")),
         }
     }
 
@@ -378,13 +398,16 @@ impl Plugin for Engram {
         let sr = env.sample_rate;
         self.sample_rate = sr;
         self.smoothers.prepare(env);
+        for cost in [&mut self.cost_shape, &mut self.cost_attend, &mut self.cost_space, &mut self.cost_field] {
+            cost.prepare(sr);
+        }
         self.decim = ((sr / EAR_HZ).round() as usize).max(1);
         self.bank.prepare(sr);
         for l in &mut self.late_in {
             l.allocate((LATE_GAP_S * sr) as usize + 8);
         }
-        self.recall_env_k = tau_coeff(0.08, sr);
-        self.late_gap_k = tau_coeff(0.05, sr);
+        self.recall_env_k = tau_coeff(ms(80.0), sr);
+        self.late_gap_k = tau_coeff(ms(50.0), sr);
         self.reset();
     }
 
@@ -440,17 +463,28 @@ impl Plugin for Engram {
             self.forget_was = forget;
             self.bank.forget();
         }
+        let n = block.frames();
         // The shape: where the nodes sit now, and the room they make.
-        self.geometry.step(&drawn(&p), p.plasticity.value(), hold);
-        self.room.reshape(&self.geometry.radius(), &self.geometry.distances());
+        let (geometry, room) = (&mut self.geometry, &mut self.room);
+        self.cost_shape.measure(n, || {
+            geometry.step(&drawn(&p), p.plasticity.value(), hold);
+            room.reshape(&geometry.radius(), &geometry.distances());
+        });
         // Attention, once a block: the past moments most like now.
         let min_age = (p.deja.value() * self.sample_rate) as u64;
         let h = self.ear.hearing();
         let now = Key { chroma: h.chroma, timbre: h.timbre, rhythm: self.ear.rhythm(), tonal: h.tonal, percussive: false };
-        self.bank.attend(now, self.ear.present(), p.focus.value(), p.matching.value(), min_age);
+        let (bank, present) = (&mut self.bank, self.ear.present());
+        self.cost_attend.measure(n, || bank.attend(now, present, p.focus.value(), p.matching.value(), min_age));
         let texture = p.texture.value();
         let frames = block.frames() as f32;
+        // `aim_space` borrows the whole engine, so its cost is timed
+        // around the call rather than through `measure`.
+        let started = std::time::Instant::now();
         self.aim_space(&p, frames);
+        if n > 0 {
+            self.cost_space.publish(started.elapsed().as_nanos() as f64 / n as f64);
+        }
 
         let SmoothersRamps {
 
@@ -479,7 +513,8 @@ impl Plugin for Engram {
 
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        let cost_field = &self.cost_field;
+        cost_field.measure(n, || lanes.run(|fr| {
             let shape = Shape { size: size_ramp.next(), decay_s: decay_ramp.next(), tone: tone_ramp.next(), hold, gen };
             let recall = recall_ramp.next();
             let dry = if active >= 2 { [fr.input(0), fr.input(1)] } else { [fr.input(0); 2] };
@@ -542,7 +577,7 @@ impl Plugin for Engram {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dg + 0.5 * (wet[0] + wet[1]) * wg) * g);
             }
-        });
+        }));
 
         let tonal = self.hearing.tonal;
         self.taps.publish(&self.room, &self.geometry, &self.bank, self.recall_env, self.pulse, tonal);

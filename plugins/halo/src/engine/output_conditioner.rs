@@ -1,5 +1,6 @@
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Stage};
+use stave::dsp::units::{hz};
 
 #[derive(Clone)]
 pub struct OutputConditioner {
@@ -24,10 +25,10 @@ impl OutputConditioner {
     pub fn prepare(&mut self, sample_rate: f32) {
         self.direct_current_highpass.prepare(sample_rate);
         self.direct_current_highpass
-            .set(FilterSpec::Highpass { hz: 7.0, q: 0.71 });
+            .set(FilterSpec::Highpass { frequency: hz(7.0), q: 0.71 });
         self.ultrasonic_lowpass.prepare(sample_rate);
         self.ultrasonic_lowpass.set(FilterSpec::Lowpass {
-            hz: 22_000.0,
+            frequency: hz(22_000.0),
             q: 0.71,
         });
     }

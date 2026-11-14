@@ -4,6 +4,7 @@
 //! not a model of a circuit.
 
 use stave::dsp::tau_coeff;
+use stave::dsp::units::{seconds};
 
 #[derive(Clone)]
 pub(super) struct Reservoir {
@@ -58,7 +59,7 @@ impl Reservoir {
     }
 
     fn update(&mut self) {
-        let coefficient = |ms: f32| tau_coeff(ms * 0.001, self.sample_rate);
+        let coefficient = |ms: f32| tau_coeff(seconds(f64::from(ms * 0.001)), self.sample_rate);
         self.fall = coefficient(self.fall_ms);
         self.recovery = coefficient(self.recovery_ms);
         self.draw_smoothing = coefficient(DRAW_SMOOTHING_MS);

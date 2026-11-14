@@ -9,6 +9,7 @@
 //!   clock — the whole wet image detunes together, tape-like.
 
 use stave::dsp::{Lag, Stage};
+use stave::dsp::units::{ms};
 
 /// Program IV's TIME → clock span: the knob's travel maps 2× … 0.5×.
 const IV_OCTAVES: f32 = 1.0;
@@ -36,7 +37,7 @@ impl Motion {
             held: 0.0,
             target: 0.0,
             rng: 0x2545_F491,
-            lag: Lag::new(3.0, 3.0),
+            lag: Lag::new(ms(3.0), ms(3.0)),
         }
     }
 

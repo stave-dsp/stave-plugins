@@ -66,6 +66,12 @@ pub struct Forge {
     /// Everything reported out: taps, capture, editor feeds.
     observer: Observer,
     smoothers: process::Smoothers,
+    /// What each phase costs a block: `rebuild_*` the param-driven
+    /// structure changes (only where knobs moved), `strips_*` the audio
+    /// block — both M/S strips, their 4x regions and the modulation
+    /// plane, interleaved per sample, so they are one stage.
+    cost_rebuild: CostTaps,
+    cost_strips: CostTaps,
 }
 
 impl Plugin for Forge {
@@ -81,6 +87,10 @@ impl Plugin for Forge {
     /// Stereo FX, stated (the default is the same — the flagship
     /// declares its negotiation surface rather than inheriting it).
     const LAYOUTS: &'static [Layout] = &[Layout::STEREO];
+    /// Two strips of 4x-oversampled clipping stages: at the worst knobs
+    /// ~553 ns a sample a channel on the x86_64 build host; twice that
+    /// leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(1_100.0);
     type Params = ForgeParams;
 
     fn new(params: &Arc<ForgeParams>, telemetry: &Telemetry) -> Self {
@@ -92,6 +102,8 @@ impl Plugin for Forge {
             modulation: Modulation::new(),
             observer: Observer::new(telemetry),
             smoothers: process::Smoothers::new(params),
+            cost_rebuild: CostTaps::new(telemetry, cost_tap_ids!("rebuild")),
+            cost_strips: CostTaps::new(telemetry, cost_tap_ids!("strips")),
         }
     }
 
@@ -106,6 +118,8 @@ impl Plugin for Forge {
         self.modulation.prepare(env.sample_rate);
         self.observer.prepare(env.max_block);
         self.smoothers.prepare(env);
+        self.cost_rebuild.prepare(env.sample_rate);
+        self.cost_strips.prepare(env.sample_rate);
         // Force full re-application after (re)preparation.
         self.bindings.reset();
     }
@@ -115,28 +129,33 @@ impl Plugin for Forge {
     fn process(&mut self, block: &mut Block<'_>) {
         let started = Instant::now();
         let p = &*self.params;
+        let frames = block.frames();
         // 1. Param changes become structure (only where knobs moved).
-        self.bindings.apply_changes(
-            p,
-            &mut self.strips,
-            &mut self.modulation,
-            &mut self.observer,
-        );
+        self.cost_rebuild.measure(frames, || {
+            self.bindings.apply_changes(
+                p,
+                &mut self.strips,
+                &mut self.modulation,
+                &mut self.observer,
+            )
+        });
         // 2. The audio block: strips tick under the modulation plane.
-        let (peak_in, peak_out) = process::process_block(
-            block,
-            p,
-            &mut self.smoothers,
-            &mut self.strips,
-            &mut self.modulation,
-            &mut self.observer,
-        );
+        let (peak_in, peak_out) = self.cost_strips.measure(frames, || {
+            process::process_block(
+                block,
+                p,
+                &mut self.smoothers,
+                &mut self.strips,
+                &mut self.modulation,
+                &mut self.observer,
+            )
+        });
         // 3. What happened, reported out.
         self.observer.publish(
             p,
             self.sample_rate,
             telemetry::BlockReport {
-                frames: block.frames(),
+                frames,
                 peak_in,
                 peak_out,
                 started,

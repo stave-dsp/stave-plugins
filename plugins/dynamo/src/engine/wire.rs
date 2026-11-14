@@ -86,7 +86,7 @@ impl Wire {
     /// only — the audio path never allocates (the no-alloc check).
     pub fn prepare(&mut self, sr: f32) {
         self.delay.allocate((sr / 20.0) as usize + 8);
-        self.mag_rise = tau_coeff(0.8, sr);
+        self.mag_rise = tau_coeff(seconds(0.8), sr);
         self.demag = (-1.0 / (4.0 * sr)).exp();
         self.reset();
     }

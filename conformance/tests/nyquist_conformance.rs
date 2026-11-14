@@ -29,6 +29,7 @@ use common::Velvet4x;
 use stave_dsp::{SmoothSat, Stage};
 use stave_measure::tone_window::ToneWindow;
 use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
+use stave::dsp::units::{db};
 
 /// Companding reciprocity: with the shaper ~linear (tiny signal, gentle
 /// drive), the full pre-emphasis → 4× stack → post-emphasis chain must be
@@ -50,7 +51,7 @@ fn companding_shelves_cancel_exactly_up_to_20k() {
             velvet.prepare(fs as f32);
             let s = velvet.sat();
             s.set_drive(0.5);
-            s.set_hf_smoothing(18.0); // deepest companding = worst case
+            s.set_hf_smoothing(db(18.0)); // deepest companding = worst case
                                       // Tiny amplitude keeps the Chebyshev shape in its linear
                                       // region, so the measurement isolates the FILTERS.
             ToneWindow {
@@ -149,7 +150,7 @@ fn smoothsat_is_clean_on_near_nyquist_tones() {
             let s = velvet.sat();
             s.set_drive(1.6);
             s.set_smoothness(0.7);
-            s.set_hf_smoothing(4.0);
+            s.set_hf_smoothing(db(4.0));
             let r = ToneWindow {
                 bin: m,
                 window: n,
@@ -201,7 +202,7 @@ fn smoothness_does_not_regain_quiet_highs() {
         s.set_even(0.21);
         s.set_odd(odd);
         s.set_smoothness(smooth);
-        s.set_hf_smoothing(0.0);
+        s.set_hf_smoothing(db(0.0));
         // Amplitude far below the knee: measures the small-signal gain.
         ToneWindow {
             bin: m,

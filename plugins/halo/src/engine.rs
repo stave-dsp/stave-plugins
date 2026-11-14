@@ -104,6 +104,12 @@ pub struct Halo {
     panel: Panel,
     preamp_gain: Smoother,
     output_level: Smoother,
+    /// What the amplifier costs a block (`amp_ns_per_sample`,
+    /// `amp_load`). Input conditioning, preamp, tone stack, power
+    /// amplifier, transformer and output conditioner run one after
+    /// another inside a single per-sample loop, so the loop is the one
+    /// stage the perf check can name.
+    cost: CostTaps,
 }
 
 /// The panel re-resolves into the amplifier this often while it moves:
@@ -207,6 +213,11 @@ impl Plugin for Halo {
         features: &[Feature::AudioEffect, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// A triode preamp, push-pull power with three reservoirs and an
+    /// output transformer a lane: at the worst knobs ~1370 ns a sample
+    /// a channel on the x86_64 build host; twice that leaves a slower
+    /// machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(2_700.0);
     type Params = HaloParameters;
 
     fn new(parameters: &Arc<HaloParameters>, telemetry: &Telemetry) -> Self {
@@ -236,6 +247,7 @@ impl Plugin for Halo {
             output_level: Smoother::new(&parameters.output_level),
             parameters: parameters.clone(),
             taps,
+            cost: CostTaps::new(telemetry, cost_tap_ids!("amp")),
         }
     }
 
@@ -243,6 +255,7 @@ impl Plugin for Halo {
         self.preamp_gain.prepare(env);
         self.output_level.prepare(env);
         self.panel.prepare(env);
+        self.cost.prepare(env.sample_rate);
         self.amplifier
             .prepare(env.sample_rate, PanelControlValues::read(&self.parameters));
         self.settled.clone_from(&self.amplifier);
@@ -261,9 +274,10 @@ impl Plugin for Halo {
         let mut preamp_gain = self.preamp_gain.ramp(block, &parameters.preamp_gain);
         let mut output_level = self.output_level.ramp(block, &parameters.output_level);
         let amplifier = &mut self.amplifier;
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active_channel_count = lanes.active().min(2);
-        lanes.run(|frame| {
+        self.cost.measure(frames, || lanes.run(|frame| {
             let panel_values = panel.next();
             if frame.index() % CONTROL_INTERVAL == 0 {
                 amplifier.apply(panel_values);
@@ -276,7 +290,7 @@ impl Plugin for Halo {
                     * output_gain;
                 frame.write(channel_index, output);
             }
-        });
+        }));
 
         let measurements = self.amplifier.lanes[0].clean_power_amplifier.measurements();
         self.taps

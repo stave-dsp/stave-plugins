@@ -12,6 +12,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, DelayLine, Stage};
+use stave::dsp::units::{hz, Hz};
 
 /// Wrap distance for the 60 L reference cab (front of baffle to the
 /// open back and out to the axis), scaled by ∛(V/60L) with the box.
@@ -31,10 +32,10 @@ pub(crate) fn response_db(open: bool, vb_liters: f32, mic_r_m: f32, hz: f32, rat
     let mut lp = Biquad::passthrough();
     lp.prepare(rate);
     lp.set(FilterSpec::Lowpass {
-        hz: DIFFRACTION_HZ,
+        frequency: Hz::new(DIFFRACTION_HZ),
         q: 0.6,
     });
-    let (lr, li) = lp.response_at(hz);
+    let (lr, li) = lp.response_at(Hz::new(hz));
     let th = core::f32::consts::TAU * hz * tau;
     let (c, s) = (th.cos(), th.sin());
     // e^{-jθ}·(lr + j·li)
@@ -96,7 +97,7 @@ impl RearPath {
     fn rate_apply(&mut self, rate: f32) {
         self.delay_samples = self.wrap_m / 343.0 * rate;
         self.diffraction.set(FilterSpec::Lowpass {
-            hz: DIFFRACTION_HZ,
+            frequency: hz(DIFFRACTION_HZ),
             q: 0.6,
         });
     }

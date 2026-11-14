@@ -9,6 +9,7 @@
 //! state-versioned change takes it.
 
 use stave::dsp::{LinkwitzRiley4, Stage};
+use stave::dsp::units::{hz, Hz};
 
 pub(crate) struct Splitter {
     /// LP at low_xover → low band; HP at low_xover → "above low";
@@ -22,10 +23,10 @@ pub(crate) struct Splitter {
 impl Splitter {
     pub(crate) fn new(low_hz: f32, high_hz: f32) -> Self {
         Self {
-            lp_lo: [LinkwitzRiley4::lowpass(low_hz); 2],
-            hp_lo: [LinkwitzRiley4::highpass(low_hz); 2],
-            lp_hi: [LinkwitzRiley4::lowpass(high_hz); 2],
-            hp_hi: [LinkwitzRiley4::highpass(high_hz); 2],
+            lp_lo: [LinkwitzRiley4::lowpass(hz(low_hz)); 2],
+            hp_lo: [LinkwitzRiley4::highpass(hz(low_hz)); 2],
+            lp_hi: [LinkwitzRiley4::lowpass(hz(high_hz)); 2],
+            hp_hi: [LinkwitzRiley4::highpass(hz(high_hz)); 2],
         }
     }
 
@@ -52,13 +53,13 @@ impl Splitter {
 
     pub(crate) fn set_low(&mut self, hz: f32) {
         for f in self.lp_lo.iter_mut().chain(&mut self.hp_lo) {
-            f.set_hz(hz);
+            f.set_frequency(Hz::new(hz));
         }
     }
 
     pub(crate) fn set_high(&mut self, hz: f32) {
         for f in self.lp_hi.iter_mut().chain(&mut self.hp_hi) {
-            f.set_hz(hz);
+            f.set_frequency(Hz::new(hz));
         }
     }
 

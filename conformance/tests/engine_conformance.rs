@@ -13,6 +13,7 @@ use stave_dsp::{EnvelopeFollower, EnvelopeTimes, Oversampled2x, SmoothSat, Sourc
 use stave_measure::spectrum::goertzel;
 use stave_measure::tone_window::{ToneWindow, TwoToneWindow};
 use stave_multiband_comp_vst3::saturation::{BandSaturator, SaturationCharacter};
+use stave::dsp::units::{db};
 
 /// Triode + 1st-order LUT-ADAA inside a single 2× FIR half-band, swept
 /// over bright tones and hot drives — the configuration whose old
@@ -124,7 +125,7 @@ fn smoothsat_4x_audible_alias() {
     let s = velvet.sat();
     s.set_drive(1.6);
     s.set_smoothness(0.7);
-    s.set_hf_smoothing(4.0);
+    s.set_hf_smoothing(db(4.0));
     let r = ToneWindow {
         bin: m,
         window: n,
@@ -201,7 +202,7 @@ fn smoothsat_companding_cuts_ccif_imd() {
         s.prepare(fs as f32);
         s.set_drive(1.8);
         s.set_smoothness(0.6);
-        s.set_hf_smoothing(hf);
+        s.set_hf_smoothing(db(hf));
         TwoToneWindow {
             low_bin: m1,
             high_bin: m2,
@@ -243,7 +244,7 @@ fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
     s.set_even(0.0); // odd-only: any h2 is the breathing, not the recipe
     s.set_odd(0.25);
     s.set_smoothness(0.7);
-    s.set_hf_smoothing(0.0);
+    s.set_hf_smoothing(db(0.0));
     // TubeBias as data: EnvelopeFollower(0.35·τ, τ) + the coupling constants
     let mut mem = EnvelopeFollower::new(EnvelopeTimes {
         attack_ms: 0.35 * 120.0,
@@ -273,7 +274,7 @@ fn memory_driven_bias_blooms_even_harmonics_and_recovers() {
         s0.set_even(0.0);
         s0.set_odd(0.25);
         s0.set_smoothness(0.7);
-        s0.set_hf_smoothing(0.0);
+        s0.set_hf_smoothing(db(0.0));
         let out: Vec<f64> = (0..2 * n).map(|i| s0.tick(sig(i)) as f64).skip(n).collect();
         20.0 * h2_of(&out).log10()
     };
@@ -331,7 +332,7 @@ fn smoothness_fold_back_is_bounded_and_vanishes() {
         s.set_even(even);
         s.set_odd(odd);
         s.set_smoothness(smooth);
-        s.set_hf_smoothing(0.0);
+        s.set_hf_smoothing(db(0.0));
         // Cumulative fold-back = sum of NEGATIVE increments (total
         // vertical descent), not per-sample valley depth.
         let mut last = f32::NEG_INFINITY;
@@ -454,7 +455,7 @@ fn smoothsat_curve_stage_bridge_is_faithful() {
         s.set_even(even);
         s.set_odd(odd);
         s.set_smoothness(smooth);
-        s.set_hf_smoothing(0.0);
+        s.set_hf_smoothing(db(0.0));
         let mut cs = s.to_curve_stage();
         cs.set_adaa(false);
         cs.prepare(48_000.0);

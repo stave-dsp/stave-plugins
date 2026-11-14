@@ -27,6 +27,7 @@
 //! gaps between hits (a sparse groove is still playing).
 
 use stave::dsp::{tau_coeff, Stage, Svf};
+use stave::dsp::units::{hz, seconds, Hz};
 
 use super::describe::{Describe, D};
 
@@ -65,7 +66,7 @@ fn class_hz(class: usize, octave: i32) -> f32 {
 }
 
 fn coef(ms: f32, rate: f32) -> f32 {
-    tau_coeff(ms * 0.001, rate)
+    tau_coeff(seconds(f64::from(ms * 0.001)), rate)
 }
 
 /// The ear's three fingerprints at one moment, and how tonal it is.
@@ -159,20 +160,20 @@ impl Listen {
         for (c, row) in self.classes.iter_mut().enumerate() {
             for (k, f) in row.iter_mut().enumerate() {
                 f.prepare(rate);
-                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * rate), Q);
+                f.set(hz(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * rate)), Q);
             }
         }
         for (b, f) in self.bands.iter_mut().enumerate() {
             let hz = BAND_LO_HZ * (BAND_HI_HZ / BAND_LO_HZ).powf(b as f32 / (BANDS - 1) as f32);
             f.prepare(host);
-            f.set(hz.min(0.45 * host), BAND_Q);
+            f.set(Hz::new(hz.min(0.45 * host)), BAND_Q);
         }
         self.chroma_env = [0.0; CLASSES];
         self.band_env = [0.0; BANDS];
         self.logs = [SILENT_LOG; BANDS];
         self.log_mean = [SILENT_LOG; BANDS];
         self.log_sq = [SILENT_LOG * SILENT_LOG; BANDS];
-        self.timbre_k = tau_coeff(TIMBRE_TAU_S, rate);
+        self.timbre_k = tau_coeff(seconds(f64::from(TIMBRE_TAU_S)), rate);
         self.att = coef(ATTACK_MS, rate);
         self.rel = coef(RELEASE_MS, rate);
         self.band_att = coef(5.0, host);

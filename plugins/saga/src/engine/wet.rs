@@ -6,6 +6,7 @@
 //! the host.
 
 use stave::dsp::{ms_decode, ms_encode, Stage, Svf};
+use stave::dsp::units::Hz;
 
 use super::path::soft;
 
@@ -38,7 +39,7 @@ impl Wet {
         // sweep), so the corner follows the smoothed knob exactly.
         let hz = TONE_LO_HZ * (TONE_HI_HZ / TONE_LO_HZ).powf(tone);
         for f in &mut self.tone {
-            f.set(hz, TONE_Q);
+            f.set(Hz::new(hz), TONE_Q);
         }
         let l = self.tone[0].tick(x[0]);
         let r = self.tone[1].tick(x[1]);

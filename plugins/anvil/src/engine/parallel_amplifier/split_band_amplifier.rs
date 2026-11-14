@@ -35,12 +35,12 @@ struct ThreeWayCrossover {
 impl ThreeWayCrossover {
     fn new() -> Self {
         Self {
-            low_crossover_lowpass: LinkwitzRiley4::lowpass(LOW_CROSSOVER_HZ),
-            low_crossover_highpass: LinkwitzRiley4::highpass(LOW_CROSSOVER_HZ),
-            high_crossover_lowpass: LinkwitzRiley4::lowpass(HIGH_CROSSOVER_HZ),
-            high_crossover_highpass: LinkwitzRiley4::highpass(HIGH_CROSSOVER_HZ),
-            low_band_phase_compensation_lowpass: LinkwitzRiley4::lowpass(HIGH_CROSSOVER_HZ),
-            low_band_phase_compensation_highpass: LinkwitzRiley4::highpass(HIGH_CROSSOVER_HZ),
+            low_crossover_lowpass: LinkwitzRiley4::lowpass(hz(LOW_CROSSOVER_HZ)),
+            low_crossover_highpass: LinkwitzRiley4::highpass(hz(LOW_CROSSOVER_HZ)),
+            high_crossover_lowpass: LinkwitzRiley4::lowpass(hz(HIGH_CROSSOVER_HZ)),
+            high_crossover_highpass: LinkwitzRiley4::highpass(hz(HIGH_CROSSOVER_HZ)),
+            low_band_phase_compensation_lowpass: LinkwitzRiley4::lowpass(hz(HIGH_CROSSOVER_HZ)),
+            low_band_phase_compensation_highpass: LinkwitzRiley4::highpass(hz(HIGH_CROSSOVER_HZ)),
         }
     }
 
@@ -99,17 +99,17 @@ struct DeepBranchIsolationFilter {
 impl DeepBranchIsolationFilter {
     fn new() -> Self {
         Self {
-            input_guard: Biquad::new(FilterSpec::Lowpass { hz: 700.0, q: 0.6 }),
+            input_guard: Biquad::new(FilterSpec::Lowpass { frequency: hz(700.0), q: 0.6 }),
             first_output_guard: Biquad::new(FilterSpec::Lowpass {
-                hz: 800.0,
+                frequency: hz(800.0),
                 q: 0.518,
             }),
             second_output_guard: Biquad::new(FilterSpec::Lowpass {
-                hz: 800.0,
+                frequency: hz(800.0),
                 q: 0.707,
             }),
             third_output_guard: Biquad::new(FilterSpec::Lowpass {
-                hz: 800.0,
+                frequency: hz(800.0),
                 q: 1.932,
             }),
         }

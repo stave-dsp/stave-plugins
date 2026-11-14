@@ -89,6 +89,13 @@ pub struct Vault {
     early_control: Smoother,
     mix_control: Smoother,
     predelay_control: Smoother,
+    /// What the block-rate voicing costs (`tune_ns_per_sample`): the
+    /// playing machine's `tune` — the room re-solves its image sources.
+    cost_tune: CostTaps,
+    /// What the per-sample field costs (`field_ns_per_sample`): one
+    /// loop runs predelay, the machine, the late tank and the output
+    /// conditioning together, so it is timed as one stage.
+    cost_field: CostTaps,
     sr: f32,
     predelay: [DelayLine; 2],
     /// The fidelity half: the image-source geometry.
@@ -191,15 +198,22 @@ impl Plugin for Vault {
         features: &[Feature::AudioEffect, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// The room machine at its densest (live image sources into the
+    /// Hadamard FDN): ~1020 ns a sample a channel at the defaults on the
+    /// x86_64 build host, its costliest measured state; twice that
+    /// leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(2_000.0);
     type Params = VaultParams;
 
-    fn new(params: &Arc<VaultParams>, _telemetry: &Telemetry) -> Self {
+    fn new(params: &Arc<VaultParams>, telemetry: &Telemetry) -> Self {
         Self {
             output_control: Smoother::new(&params.output),
             early_control: Smoother::new(&params.early),
             mix_control: Smoother::new(&params.mix),
             predelay_control: Smoother::new(&params.predelay),
             params: params.clone(),
+            cost_tune: CostTaps::new(telemetry, cost_tap_ids!("tune")),
+            cost_field: CostTaps::new(telemetry, cost_tap_ids!("field")),
             sr: 48_000.0,
             predelay: [DelayLine::new(), DelayLine::new()],
             room: Room::new(),
@@ -257,6 +271,8 @@ impl Plugin for Vault {
         self.mix_control.prepare(env);
         self.predelay_control.prepare(env);
         self.sr = env.sample_rate;
+        self.cost_tune.prepare(self.sr);
+        self.cost_field.prepare(self.sr);
         let cap = (0.25 * self.sr) as usize + 16;
         self.predelay[0].allocate(cap);
         self.predelay[1].allocate(cap);
@@ -483,84 +499,89 @@ impl Plugin for Vault {
         let lift_amt = 4.6 * lift;
         let k_lift_rise = 1.0 - (-1.0 / (1.1 * sr)).exp();
         let k_lift_lp = 1.0 - (-core::f32::consts::TAU * 5_200.0 / sr).exp();
-        if plate_on {
-            self.plate.tune(
-                size, t60_s, bass, stiff, diffuse, tone, motion, width_g, frames,
-            );
-        } else if memory_on {
-            self.memory.tune(
-                size,
-                t60_s,
-                bass,
-                damp,
-                tone,
-                diffuse,
-                width_g,
-                p.ascend.value(),
-                frames,
-            );
-        } else if det_on {
-            self.det.tune(
-                size,
-                t60_s,
-                bass,
-                damp,
-                tone,
-                diffuse,
-                width_g,
-                p.fuse.value(),
-                frames,
-            );
-        } else if void_on {
-            // The void's high hold derives from the HIGH ENERGY
-            // dial as a T60 multiplier (no walls to absorb).
-            let hi_mult = (1.0 - 0.85 * damp).max(0.08);
-            self.void.tune(
-                size,
-                t60_s,
-                bass,
-                hi_mult,
-                tone,
-                diffuse,
-                width_g,
-                p.dawn.value(),
-                frames,
-            );
-        } else {
-            // LAUNCH: the EARLY-ONLY impossible head — the ER's
-            // ears widen past nature while the late field's
-            // coherence model stays honest, so precedence carries
-            // the image out of the speakers without blurring it.
-            // ITD stays inside the fusion window (~1 ms — beyond
-            // it the image SPLITS instead of stepping forward; the
-            // first cut used 2.2x ears and the coherence law read
-            // IACC 0.13: blur, not precedence). The heavy lifting
-            // moves to ILD: launch DEEPENS the head shadow.
-            let ear_early = ear_scale * (1.0 + 0.35 * launch);
-            self.room
-                .tune(size, stand, distance, ear_early, tone, wall, launch, frames);
-        }
-        let mfp = scene::Scene::describe(size, stand).mean_free_path_s();
-        let _ = &mfp;
-        let bal = self.room.balance() * 0.35;
-        let bal_norm = (2.0 / ((1.0 + bal).powi(2) + (1.0 - bal).powi(2))).sqrt();
-        let (lean_l, lean_r) = ((1.0 + bal) * bal_norm, (1.0 - bal) * bal_norm);
-        if room_on {
-            for m in self.mid.iter_mut() {
-                m.tune(mfp, diffuse, size, frames);
+        // Block-rate voicing of whichever machine plays (the room's
+        // image-source geometry re-solved here): `tune` in the cost taps.
+        let (lean_l, lean_r) = self.cost_tune.measure(frames, || {
+            if plate_on {
+                self.plate.tune(
+                    size, t60_s, bass, stiff, diffuse, tone, motion, width_g, frames,
+                );
+            } else if memory_on {
+                self.memory.tune(
+                    size,
+                    t60_s,
+                    bass,
+                    damp,
+                    tone,
+                    diffuse,
+                    width_g,
+                    p.ascend.value(),
+                    frames,
+                );
+            } else if det_on {
+                self.det.tune(
+                    size,
+                    t60_s,
+                    bass,
+                    damp,
+                    tone,
+                    diffuse,
+                    width_g,
+                    p.fuse.value(),
+                    frames,
+                );
+            } else if void_on {
+                // The void's high hold derives from the HIGH ENERGY
+                // dial as a T60 multiplier (no walls to absorb).
+                let hi_mult = (1.0 - 0.85 * damp).max(0.08);
+                self.void.tune(
+                    size,
+                    t60_s,
+                    bass,
+                    hi_mult,
+                    tone,
+                    diffuse,
+                    width_g,
+                    p.dawn.value(),
+                    frames,
+                );
+            } else {
+                // LAUNCH: the EARLY-ONLY impossible head — the ER's
+                // ears widen past nature while the late field's
+                // coherence model stays honest, so precedence carries
+                // the image out of the speakers without blurring it.
+                // ITD stays inside the fusion window (~1 ms — beyond
+                // it the image SPLITS instead of stepping forward; the
+                // first cut used 2.2x ears and the coherence law read
+                // IACC 0.13: blur, not precedence). The heavy lifting
+                // moves to ILD: launch DEEPENS the head shadow.
+                let ear_early = ear_scale * (1.0 + 0.35 * launch);
+                self.room
+                    .tune(size, stand, distance, ear_early, tone, wall, launch, frames);
             }
-            // The wet field LEANS toward the source (geometry-derived,
-            // applied to the wet only — the dry direct stays the
-            // host's business). Equal-power lean, ±~3 dB at the walls.
-            self.tank
-                .tune(size, t60_s, bass, hi_mult, diffuse, chorus_samples, frames);
+            let mfp = scene::Scene::describe(size, stand).mean_free_path_s();
+            let _ = &mfp;
+            let bal = self.room.balance() * 0.35;
+            let bal_norm = (2.0 / ((1.0 + bal).powi(2) + (1.0 - bal).powi(2))).sqrt();
+            let (lean_l, lean_r) = ((1.0 + bal) * bal_norm, (1.0 - bal) * bal_norm);
+            if room_on {
+                for m in self.mid.iter_mut() {
+                    m.tune(mfp, diffuse, size, frames);
+                }
+                // The wet field LEANS toward the source (geometry-derived,
+                // applied to the wet only — the dry direct stays the
+                // host's business). Equal-power lean, ±~3 dB at the walls.
+                self.tank
+                    .tune(size, t60_s, bass, hi_mult, diffuse, chorus_samples, frames);
 
-            self.rerad.tune(p.material.value().0 as usize);
-            self.diffusers[0].tune(size, diffuse, frames);
-            self.diffusers[1].tune(size, diffuse, frames);
-            self.modes
-                .tune(size, stand, distance, t60_s, bass, frames as f32 / sr);
-        }
+                self.rerad.tune(p.material.value().0 as usize);
+                self.diffusers[0].tune(size, diffuse, frames);
+                self.diffusers[1].tune(size, diffuse, frames);
+                self.modes
+                    .tune(size, stand, distance, t60_s, bass, frames as f32 / sr);
+            }
+            (lean_l, lean_r)
+        });
 
         let mut out_ramp = self.output_control.ramp(block, &p.output);
         let mut early_ramp = self.early_control.ramp(block, &p.early);
@@ -602,7 +623,8 @@ impl Plugin for Vault {
         let modes = &mut self.modes;
         let last_mix = &mut self.last_mix;
         let (dry_gc, wet_gc) = (&mut self.dry_g, &mut self.wet_g);
-        block.lanes::<2>().run(|fr| {
+        let cost_field = &self.cost_field;
+        cost_field.measure(frames, || block.lanes::<2>().run(|fr| {
             let dry_l = fr.input(0);
             let dry_r = fr.input(1);
             // The wet onset: glided predelay (read before write).
@@ -835,7 +857,7 @@ impl Plugin for Vault {
             let g = *out_g;
             fr.write(0, (dry_l * dry_g + wl * wet_g) * g);
             fr.write(1, (dry_r * dry_g + wr * wet_g) * g);
-        });
+        }));
     }
 
     /// Honest from the knobs: the LONGEST band's T60 — the low

@@ -3,6 +3,7 @@
 //! dependence.
 
 use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, FilterSpec, Source, Stage};
+use stave::dsp::units::{hz, ms};
 
 use crate::style::{attack_shrink, Character, FASTEST_ATTACK_MS};
 
@@ -93,7 +94,7 @@ impl Detector {
             self.hpf_hz = s.hpf_hz;
             if self.hpf_hz >= HPF_MIN_HZ {
                 let hpf = FilterSpec::Highpass {
-                    hz: self.hpf_hz,
+                    frequency: hz(self.hpf_hz),
                     q: core::f32::consts::FRAC_1_SQRT_2,
                 };
                 self.hpf.set(hpf);
@@ -130,13 +131,13 @@ impl Detector {
     fn retime(&mut self, times: EnvelopeTimes) {
         let now = self.follower.times();
         if times.attack_ms != now.attack_ms {
-            self.follower.set_attack_ms(times.attack_ms);
+            self.follower.set_attack(ms(f64::from(times.attack_ms)));
         }
         if times.release_ms != now.release_ms {
-            self.follower.set_release_ms(times.release_ms);
+            self.follower.set_release(ms(f64::from(times.release_ms)));
         }
         if times.slow_release_ms != now.slow_release_ms {
-            self.follower.set_slow_release_ms(times.slow_release_ms);
+            self.follower.set_slow_release(times.slow_release_ms.map(|t| ms(f64::from(t))));
         }
     }
 }

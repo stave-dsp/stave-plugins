@@ -7,6 +7,7 @@
 use stave::dsp::db_to_amp;
 use stave::dsp::FilterSpec;
 use stave::dsp::{Bias, Biquad, Coupler, Koren, LevelPolicy, Stage, Triode};
+use stave::dsp::units::{hz};
 
 use crate::controls::PreampSettings;
 use crate::params::DEFAULT_PREAMP_GAIN_DECIBELS;
@@ -44,11 +45,11 @@ impl CleanPreamp {
         Self {
             bright_capacitor_highpass: Biquad::default(),
             input_stage,
-            input_stage_coupler: Coupler::new(7.0),
+            input_stage_coupler: Coupler::new(hz(7.0)),
             recovery_stage,
             input_stage_bloom: 1.0,
             recovery_stage_bloom: 1.0,
-            output_coupler: Coupler::new(5.0),
+            output_coupler: Coupler::new(hz(5.0)),
             input_stage_output_trim: db_to_amp(FIRST_STAGE_OUTPUT_TRIM_DB),
             recovery_stage_output_trim: db_to_amp(RECOVERY_STAGE_OUTPUT_TRIM_DB),
         }
@@ -66,7 +67,7 @@ impl CleanPreamp {
     pub fn prepare(&mut self, sample_rate: f32) {
         self.bright_capacitor_highpass.prepare(sample_rate);
         self.bright_capacitor_highpass.set(FilterSpec::Highpass {
-            hz: 2_800.0,
+            frequency: hz(2_800.0),
             q: 0.5,
         });
         self.input_stage.prepare(sample_rate);
@@ -117,9 +118,9 @@ impl CleanPreamp {
     /// Fixed circuit gain, deliberately excluding the user-controlled input
     /// level. Output calibration must never cancel the Gain knob.
     pub fn fixed_stage_small_signal_gain_db(&self) -> f32 {
-        self.input_stage.small_signal_gain_db()
+        self.input_stage.small_signal_gain().get()
             + FIRST_STAGE_OUTPUT_TRIM_DB
-            + self.recovery_stage.small_signal_gain_db()
+            + self.recovery_stage.small_signal_gain().get()
             + RECOVERY_STAGE_OUTPUT_TRIM_DB
     }
 }

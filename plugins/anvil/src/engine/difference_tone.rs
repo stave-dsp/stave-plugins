@@ -23,15 +23,15 @@ impl DifferenceToneGenerator {
     pub fn new() -> Self {
         Self {
             generation_band: Biquad::new(FilterSpec::Lowpass {
-                hz: GENERATION_BAND_HZ,
+                frequency: hz(GENERATION_BAND_HZ),
                 q: 0.6,
             }),
             output_lowpass_1: Biquad::new(FilterSpec::Lowpass {
-                hz: OUTPUT_BAND_HZ,
+                frequency: hz(OUTPUT_BAND_HZ),
                 q: 0.541,
             }),
             output_lowpass_2: Biquad::new(FilterSpec::Lowpass {
-                hz: OUTPUT_BAND_HZ,
+                frequency: hz(OUTPUT_BAND_HZ),
                 q: 1.307,
             }),
             injection_amount: 0.0,

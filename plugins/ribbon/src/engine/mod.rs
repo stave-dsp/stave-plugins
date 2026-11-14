@@ -104,6 +104,11 @@ pub struct Ribbon {
     /// ribbon is: the heads are downstream of the record head).
     echo: [f32; 2],
     taps: RibbonTaps,
+    /// What the machine costs a block (`machine_ns_per_sample`,
+    /// `machine_load`): preamp, tape loop, playback and spring run
+    /// interleaved per sample (the feedback is one frame late), so the
+    /// whole frame law is the one stage the perf check can name.
+    cost: CostTaps,
 }
 
 impl Plugin for Ribbon {
@@ -116,6 +121,10 @@ impl Plugin for Ribbon {
         features: &[Feature::AudioEffect, Feature::Delay, Feature::Reverb, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// A preamp, a tape loop of up to three heads and a spring tank a
+    /// frame: at the worst knobs ~764 ns a sample a channel on the
+    /// x86_64 build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(1_500.0);
     type Params = RibbonParams;
 
     fn new(params: &Arc<RibbonParams>, telemetry: &Telemetry) -> Self {
@@ -126,17 +135,18 @@ impl Plugin for Ribbon {
             preamp: Preamp::new(),
             tape: Tape::new(),
             spring: Spring::new(),
-            fb_low: [Svf::new(FB_LOW_HZ, FB_Q); 2],
-            fb_top: [Svf::new(FB_TOP_HZ[0], FB_Q); 2],
-            gap: [Svf::new(GAP_HZ[0], GAP_Q); 2],
-            hiss_tilt: [Svf::new(1_500.0, HISS_Q); 2],
-            dc: [Coupler::new(18.0), Coupler::new(18.0)],
+            fb_low: [Svf::new(hz(FB_LOW_HZ), FB_Q); 2],
+            fb_top: [Svf::new(hz(FB_TOP_HZ[0]), FB_Q); 2],
+            gap: [Svf::new(hz(GAP_HZ[0]), GAP_Q); 2],
+            hiss_tilt: [Svf::new(hz(1_500.0), HISS_Q); 2],
+            dc: [Coupler::new(hz(18.0)), Coupler::new(hz(18.0))],
             rng: Xorshift32::new(0x51BB_0042),
             drop_gain: 1.0,
             drop_target: 1.0,
             drop_left: 0,
             echo: [0.0; 2],
             taps: RibbonTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("machine")),
         }
     }
 
@@ -158,6 +168,7 @@ impl Plugin for Ribbon {
         self.drop_target = 1.0;
         self.drop_left = 0;
         self.echo = [0.0; 2];
+        self.cost.prepare(sample_rate);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
@@ -193,17 +204,18 @@ impl Plugin for Ribbon {
         let echo = &mut self.echo;
         let mut frame = 0usize;
 
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        self.cost.measure(frames, || lanes.run(|fr| {
             let _ = drive_ramp.next();
             let (intensity, wear, erase) = (int_ramp.next(), wear_ramp.next(), erase_ramp.next());
             // WEAR's tone follows the GLIDING knob, not the raw value.
             if frame.is_multiple_of(CONTROL_FRAMES) {
                 let (top_hz, gap_hz) = (lerp_log(FB_TOP_HZ, wear).min(nyq), lerp_log(GAP_HZ, wear).min(nyq));
                 for ch in 0..2 {
-                    fb_top[ch].set(top_hz, FB_Q);
-                    gap[ch].set(gap_hz, GAP_Q);
+                    fb_top[ch].set(hz(top_hz), FB_Q);
+                    gap[ch].set(hz(gap_hz), GAP_Q);
                 }
             }
             frame += 1;
@@ -271,7 +283,7 @@ impl Plugin for Ribbon {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dg + 0.5 * (wet[0] + wet[1]) * wg) * og);
             }
-        });
+        }));
 
         // 3. What happened, reported out.
         self.taps.publish(self.tape.loop_phase(), self.tape.speed());

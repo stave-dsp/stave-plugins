@@ -28,6 +28,7 @@
 //! makes the network dense; the reflections fill what it leaves.)
 
 use stave::dsp::{DelayAllpass, DelayLine, Stage, Svf};
+use stave::dsp::units::{hz, ms};
 
 use super::space::{Anatomy, ER_BANDS, ER_BINS, ER_BIN_S};
 
@@ -55,8 +56,8 @@ pub(super) struct Crossover {
 impl Crossover {
     pub(super) fn new() -> Self {
         Self {
-            low: BUTTERWORTH4.map(|q| Svf::new(CROSSOVER_HZ.0, q)),
-            high: BUTTERWORTH4.map(|q| Svf::new(CROSSOVER_HZ.1, q)),
+            low: BUTTERWORTH4.map(|q| Svf::new(hz(CROSSOVER_HZ.0), q)),
+            high: BUTTERWORTH4.map(|q| Svf::new(hz(CROSSOVER_HZ.1), q)),
         }
     }
 
@@ -149,7 +150,7 @@ pub(super) struct FeedDiffuser {
 impl FeedDiffuser {
     /// Side `side`'s (0 left, 1 right: decorrelated).
     pub(super) fn new(side: usize) -> Self {
-        Self { stages: FEED_DIFFUSION[side].map(|(ms, g)| DelayAllpass::new(ms, ms, g)) }
+        Self { stages: FEED_DIFFUSION[side].map(|(t, g)| DelayAllpass::new(ms(f64::from(t)), ms(f64::from(t)), g)) }
     }
 
     pub(super) fn prepare(&mut self, sr: f32) {

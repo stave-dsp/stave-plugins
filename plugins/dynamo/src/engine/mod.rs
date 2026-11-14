@@ -29,7 +29,7 @@
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use stave::dsp::{
-    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
+    hz_of_key, mod_lfo_rate, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack, Xorshift32,
 };
 use stave::prelude::*;
@@ -341,7 +341,7 @@ impl Voice for DynamoVoice {
     fn prepare(&mut self, sample_rate: f32) {
         self.sr = sample_rate;
         // ~5 ms displacement glide (block-rate targets, no zipper).
-        self.glide = tau_coeff(0.005, sample_rate);
+        self.glide = tau_coeff(ms(5.0), sample_rate);
         self.env.prepare(sample_rate);
         self.wires[0].prepare(sample_rate);
         self.wires[1].prepare(sample_rate);
@@ -415,7 +415,7 @@ impl Voice for DynamoVoice {
         // The pallet's inertia tracks THIS note's swing.
         self.esc_sense_k = 1.0 - (-core::f32::consts::TAU * hz * 1.2 / self.sr).exp();
         self.env.gate_on();
-        self.sources.note_on(hz, velocity);
+        self.sources.note_on(Hz::new(hz), velocity);
     }
     fn note_off(&mut self) {
         self.env.gate_off();
@@ -711,6 +711,13 @@ pub struct Dynamo {
     /// THE BRIDGE rail (shared with every voice).
     bridge_rail: Arc<AtomicU32>,
     taps: DynamoTaps,
+    /// What the block-rate modulation matrix costs, evaluated per voice
+    /// (`matrix_ns_per_sample`, `matrix_load`).
+    matrix_cost: CostTaps,
+    /// What the machine costs: the event bridge, every voice's rotor,
+    /// wires and body, and the shared bridge rail, per sample
+    /// (`machine_ns_per_sample`, `machine_load`).
+    machine_cost: CostTaps,
 }
 
 impl Plugin for Dynamo {
@@ -723,6 +730,11 @@ impl Plugin for Dynamo {
         features: &[Feature::Instrument, Feature::Synthesizer, Feature::Stereo],
         ..Info::INSTRUMENT
     };
+    /// Up to sixteen physically-modelled voices (rotor, two wires with
+    /// memory, contact and body) on a shared bridge: at the worst knobs
+    /// (a chord struck every half second) ~1090 ns a sample a channel on
+    /// the x86_64 build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(2_200.0);
     /// An instrument: no audio in, stereo out — stated.
     const LAYOUTS: &'static [Layout] = &[Layout::INSTRUMENT];
     type Params = DynamoParams;
@@ -749,13 +761,15 @@ impl Plugin for Dynamo {
                 })
             },
             voicing: Watch::new(),
-            lfo: ModLfo::new(833.0, 0xC0FF_EE01),
+            lfo: ModLfo::new(ms(833.0), 0xC0FF_EE01),
             ensemble: Ensemble::default(),
             pressure: 1.0,
             hum_phase: 0.0,
             global_lags: [0.0; matrix::SLOTS],
             bridge_rail,
             taps,
+            matrix_cost: CostTaps::new(telemetry, cost_tap_ids!("matrix")),
+            machine_cost: CostTaps::new(telemetry, cost_tap_ids!("machine")),
         }
     }
 
@@ -764,6 +778,8 @@ impl Plugin for Dynamo {
         self.sr = env.sample_rate;
         self.rack.prepare(env.sample_rate);
         self.lfo.prepare(env.sample_rate);
+        self.matrix_cost.prepare(env.sample_rate);
+        self.machine_cost.prepare(env.sample_rate);
         self.lfo.reset();
         self.ensemble.reset();
         self.pressure = 1.0;
@@ -811,13 +827,13 @@ impl Plugin for Dynamo {
             .transport()
             .and_then(|t| t.tempo_bpm)
             .unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        let hz = mod_lfo_rate(p.lfo_rate.value_as(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo.set(
             hz,
             ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize),
         );
         let global_lfo = self.lfo.tick_frames(frames);
-        self.ensemble.leak(block_s);
+        self.ensemble.leak(seconds(f64::from(block_s)));
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
         };
@@ -885,30 +901,32 @@ impl Plugin for Dynamo {
             }
         }
         if routes.any() {
-            let rise_ms = p.lfo_rise.value();
-            let note_trig = p.lfo_trig.value() == crate::params::LfoTrig(1);
-            let ensemble = &self.ensemble;
-            let sr = self.sr;
-            let lfo = &self.lfo;
-            for v in self.rack.voices_mut() {
-                // The voice's own LFO value: NOTE trig reads its own
-                // phase, and the RISE ramp fades it in from note-on.
-                let raw_lfo = if note_trig {
-                    lfo.at_phase(v.sources.lfo_phases[0])
-                } else {
-                    global_lfo
-                };
-                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], block_s);
-                let ramp = rise(v.sources.age, rise_ms, sr);
-                let sv: matrix::SrcValues = standard_sources(
-                    raw_lfo * ramp,
-                    &v.sources,
-                    v.env_level(),
-                    ensemble,
-                    sympathy(total_level, v.level()),
-                );
-                v.apply_routes(&routes, &sv);
-            }
+            self.matrix_cost.measure(frames, || {
+                let rise_ms = p.lfo_rise.value();
+                let note_trig = p.lfo_trig.value() == crate::params::LfoTrig(1);
+                let ensemble = &self.ensemble;
+                let sr = self.sr;
+                let lfo = &self.lfo;
+                for v in self.rack.voices_mut() {
+                    // The voice's own LFO value: NOTE trig reads its own
+                    // phase, and the RISE ramp fades it in from note-on.
+                    let raw_lfo = if note_trig {
+                        lfo.at_phase(v.sources.lfo_phases[0])
+                    } else {
+                        global_lfo
+                    };
+                    v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], seconds(f64::from(block_s)));
+                    let ramp = rise(v.sources.age, ms(f64::from(rise_ms)), sr);
+                    let sv: matrix::SrcValues = standard_sources(
+                        raw_lfo * ramp,
+                        &v.sources,
+                        v.env_level(),
+                        ensemble,
+                        sympathy(total_level, v.level()),
+                    );
+                    v.apply_routes(&routes, &sv);
+                }
+            });
         }
         if self.taps.spin.is_attached() {
             // THE DIAGRAM's telemetry: the machine, seen. The
@@ -953,12 +971,12 @@ impl Plugin for Dynamo {
         let rack = &mut self.rack;
         let mut notes = EventCursor::new(block.events());
         let ensemble = &mut self.ensemble;
-        block.lanes::<2>().run(|fr| {
+        self.machine_cost.measure(frames, || block.lanes::<2>().run(|fr| {
             for event in notes.due(fr.index()) {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
                 if let VoiceEvent::On { hz, velocity, .. } = voice {
-                    ensemble.note_on(hz, velocity);
+                    ensemble.note_on(Hz::new(hz), velocity);
                 }
                 rack.dispatch(voice);
             }
@@ -971,7 +989,7 @@ impl Plugin for Dynamo {
             bridge_rail.store(rail.to_bits(), AtomicOrdering::Relaxed);
             fr.write(0, l * g);
             fr.write(1, r * g);
-        });
+        }));
     }
 
     /// Honest from the knobs: the longest a released note can ring

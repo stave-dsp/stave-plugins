@@ -9,6 +9,7 @@ use stave::dsp::{
     Driver, EnvelopeFollower, EnvelopeTimes, FilterSpec, ModMatrix, Route, StageId, StageTarget,
     Target,
 };
+use stave::dsp::units::{db, hz, ms};
 
 use super::strip::AmpChain;
 
@@ -57,13 +58,13 @@ impl Modulation {
                     release_ms: 120.0,
                     slow_release_ms: None,
                 })),
-                Driver::lfo_env_scaled(120.0, 8.0, 80.0),
+                Driver::lfo_env_scaled(hz(120.0), ms(8.0), ms(80.0)),
                 Driver::sub(),
             ]),
             sub_mix: 0.0,
             sub_mod: 0.0,
             active: false,
-            base_tone: FilterSpec::HighShelf { hz: 900.0, db: 0.0 },
+            base_tone: FilterSpec::HighShelf { frequency: hz(900.0), gain: db(0.0) },
             memory_on: false,
             blocking_on: false,
             width: 0.5,

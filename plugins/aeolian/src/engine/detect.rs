@@ -65,7 +65,7 @@ impl Detector {
         for (c, row) in self.bands.iter_mut().enumerate() {
             for (k, f) in row.iter_mut().enumerate() {
                 f.prepare(sample_rate);
-                f.set(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * sample_rate), Q);
+                f.set(hz(class_hz(c, LOW_OCTAVE + k as i32).min(0.45 * sample_rate)), Q);
             }
         }
         self.env = [0.0; CLASSES];

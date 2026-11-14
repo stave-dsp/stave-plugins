@@ -43,24 +43,24 @@ impl OutputConditioner {
             filter.prepare(sample_rate);
         }
         self.first_high_frequency_lowpass.set(FilterSpec::Lowpass {
-                hz: 10_400.0,
+                frequency: hz(10_400.0),
                 q: 0.6,
             });
         self.second_high_frequency_lowpass.set(FilterSpec::Lowpass {
-                hz: 9_500.0,
+                frequency: hz(9_500.0),
                 q: 0.55,
             });
         self.fixed_high_shelf.set(FilterSpec::HighShelfRbj {
-                hz: 1_400.0,
-                db: 8.5,
+                frequency: hz(1_400.0),
+                gain: db(8.5),
             });
         self.fixed_low_mid_peak.set(FilterSpec::Peak {
-                hz: 330.0,
-                db: 2.5,
+                frequency: hz(330.0),
+                gain: db(2.5),
                 q: 0.9,
             });
         self.direct_current_highpass
-            .set(FilterSpec::Highpass { hz: 10.0, q: 0.71 });
+            .set(FilterSpec::Highpass { frequency: hz(10.0), q: 0.71 });
     }
 
     pub fn reset(&mut self) {
@@ -79,12 +79,12 @@ impl OutputConditioner {
 
     pub fn apply_settings(&mut self, settings: OutputSettings) {
         self.presence_high_shelf.set(FilterSpec::HighShelfRbj {
-                hz: 4_500.0,
-                db: settings.presence_gain_db,
+                frequency: hz(4_500.0),
+                gain: db(settings.presence_gain_db),
             });
         self.depth_low_shelf.set(FilterSpec::LowShelfRbj {
-                hz: 90.0,
-                db: settings.depth_gain_db,
+                frequency: hz(90.0),
+                gain: db(settings.depth_gain_db),
             });
     }
 

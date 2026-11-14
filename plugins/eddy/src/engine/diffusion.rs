@@ -41,6 +41,7 @@
 
 use stave::dsp::Xorshift32;
 use stave::dsp::{Allpass1, DelayLine, OnePole, PerChannel, Stage};
+use stave::dsp::units::{hz, Hz};
 
 use crate::params::EddyParams;
 
@@ -150,7 +151,7 @@ impl Branch {
             mod_ap: Ap::new(),
             d1: DelayLine::new(),
             d1_len: 0.0,
-            damp: OnePole::lowpass(TANK_DAMP_HZ),
+            damp: OnePole::lowpass(hz(TANK_DAMP_HZ)),
             ap2: Ap::new(),
             d2: DelayLine::new(),
             d2_len: 0.0,
@@ -220,7 +221,7 @@ impl Diffusion {
             tank: [Branch::new(), Branch::new()],
             plate_g: 0.55,
             plate_mod: 0.5,
-            prism: PerChannel::new(|_| [Allpass1::new(1_000.0); PRISM_STAGES]),
+            prism: PerChannel::new(|_| [Allpass1::new(hz(1_000.0)); PRISM_STAGES]),
             prism_depth: 0.0,
             dust_lines: PerChannel::new(|_| DelayLine::new()),
             dust_taps: core::array::from_fn(|_| DustTap {
@@ -233,7 +234,7 @@ impl Diffusion {
             mesh_len: [0.0; 4],
             mesh_drift: [0.0; 4],
             mesh_target: [0.0; 4],
-            mesh_damp: [OnePole::lowpass(MESH_DAMP_HZ); 4],
+            mesh_damp: [OnePole::lowpass(hz(MESH_DAMP_HZ)); 4],
             mesh_cos: 1.0,
             mesh_sin: 0.0,
             mesh_cos2: 1.0,
@@ -357,7 +358,7 @@ impl Diffusion {
                 let hz = 90.0 * 20f32.powf(p.bend.value());
                 for lane in self.prism.iter_mut() {
                     for ap in lane.iter_mut() {
-                        ap.set_hz(hz);
+                        ap.set_frequency(Hz::new(hz));
                     }
                 }
                 // Squared taper: resolution where the smear is subtle.

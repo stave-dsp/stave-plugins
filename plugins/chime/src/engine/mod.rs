@@ -26,7 +26,7 @@
 //!   strings; a lone voice hears none).
 
 use stave::dsp::{
-    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, ModLfo,
+    hz_of_key, mod_lfo_rate, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Osc, Steal, Voice, VoiceEvent, VoiceRack, Waveform,
 };
 use stave::prelude::*;
@@ -152,10 +152,10 @@ impl Voice for ChimeVoice {
     }
     fn note_on(&mut self, hz: f32, velocity: f32) {
         self.hz = hz;
-        self.osc.set_hz(hz);
+        self.osc.set_frequency(Hz::new(hz));
         self.osc.reset(); // same attack every time: reproducible by construction
         self.env.gate_on();
-        self.sources.note_on(hz, velocity);
+        self.sources.note_on(Hz::new(hz), velocity);
     }
     fn note_off(&mut self) {
         self.env.gate_off();
@@ -177,7 +177,7 @@ impl Voice for ChimeVoice {
         self.pitch_st += self.glide * (self.pitch_st_target - self.pitch_st);
         self.level_db += self.glide * (self.level_db_target - self.level_db);
         if self.pitch_st.abs() > 1e-4 {
-            self.osc.set_hz(self.hz * (self.pitch_st / 12.0).exp2());
+            self.osc.set_frequency(hz(self.hz * (self.pitch_st / 12.0).exp2()));
         }
         let g = if self.level_db.abs() > 1e-4 {
             db_to_amp(self.level_db)
@@ -226,6 +226,12 @@ pub struct Chime {
     /// recent note's value — the ring dances to what you just
     /// played, the Vital feel.
     taps: ChimeTaps,
+    /// What the block-rate modulation matrix costs, evaluated per voice
+    /// (`matrix_ns_per_sample`, `matrix_load`).
+    matrix_cost: CostTaps,
+    /// What the voices cost: the event bridge and the rack's tick, per
+    /// sample (`voices_ns_per_sample`, `voices_load`).
+    voices_cost: CostTaps,
 }
 
 impl Plugin for Chime {
@@ -238,6 +244,11 @@ impl Plugin for Chime {
         features: &[Feature::Instrument, Feature::Synthesizer, Feature::Stereo],
         ..Info::INSTRUMENT
     };
+    /// Up to sixteen oscillator voices and a block-rate matrix: at the
+    /// worst knobs (a chord struck every half second) ~225 ns a sample a
+    /// channel on the x86_64 build host; twice that leaves a slower
+    /// machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(450.0);
     /// An instrument: no audio in, stereo out — stated.
     const LAYOUTS: &'static [Layout] = &[Layout::INSTRUMENT];
     type Params = ChimeParams;
@@ -251,9 +262,11 @@ impl Plugin for Chime {
                 ChimeVoice::with_seed(0x9E37_79B9 ^ (i as u32).wrapping_mul(0x9E37_79B1))
             }),
             voicing: Watch::new(),
-            lfo: ModLfo::new(833.0, 0xC0FF_EE01),
+            lfo: ModLfo::new(ms(833.0), 0xC0FF_EE01),
             ensemble: Ensemble::default(),
             taps: ChimeTaps::new(telemetry),
+            matrix_cost: CostTaps::new(telemetry, cost_tap_ids!("matrix")),
+            voices_cost: CostTaps::new(telemetry, cost_tap_ids!("voices")),
         }
     }
 
@@ -262,6 +275,8 @@ impl Plugin for Chime {
         self.sample_rate = env.sample_rate;
         self.rack.prepare(env.sample_rate);
         self.lfo.prepare(env.sample_rate);
+        self.matrix_cost.prepare(env.sample_rate);
+        self.voices_cost.prepare(env.sample_rate);
         self.ensemble.reset();
         self.voicing.reset();
     }
@@ -297,44 +312,47 @@ impl Plugin for Chime {
         //     advance the global clocks, then evaluate per voice.
         let block_s = block.frames() as f32 / self.sample_rate;
         let tempo = block.transport().and_then(|t| t.tempo_bpm).unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        let hz = mod_lfo_rate(p.lfo_rate.value_as(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo
             .set(hz, ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize));
         let global_lfo = self.lfo.tick_frames(block.frames());
-        self.ensemble.leak(block_s);
+        self.ensemble.leak(seconds(f64::from(block_s)));
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
         };
+        let frames = block.frames();
         if routes.any() {
-            // SYMP needs the ensemble's energy before any voice moves.
-            let mut total_level = 0.0f32;
-            for v in self.rack.voices_mut() {
-                total_level += v.level();
-            }
-            let rise_ms = p.lfo_rise.value();
-            let note_trig = p.lfo_trig.value() == LfoTrig(1);
-            let ensemble = &self.ensemble;
-            let sample_rate = self.sample_rate;
-            let lfo = &self.lfo;
-            for v in self.rack.voices_mut() {
-                // The voice's own LFO value: NOTE trig reads its own
-                // phase, and the RISE ramp fades it in from note-on.
-                let raw_lfo = if note_trig {
-                    lfo.at_phase(v.sources.lfo_phases[0])
-                } else {
-                    global_lfo
-                };
-                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], block_s);
-                let ramp = rise(v.sources.age, rise_ms, sample_rate);
-                let sv: matrix::SrcValues = standard_sources(
-                    raw_lfo * ramp,
-                    &v.sources,
-                    v.env_level(),
-                    ensemble,
-                    sympathy(total_level, v.level()),
-                );
-                v.apply_routes(&routes, &sv);
-            }
+            self.matrix_cost.measure(frames, || {
+                // SYMP needs the ensemble's energy before any voice moves.
+                let mut total_level = 0.0f32;
+                for v in self.rack.voices_mut() {
+                    total_level += v.level();
+                }
+                let rise_ms = p.lfo_rise.value();
+                let note_trig = p.lfo_trig.value() == LfoTrig(1);
+                let ensemble = &self.ensemble;
+                let sample_rate = self.sample_rate;
+                let lfo = &self.lfo;
+                for v in self.rack.voices_mut() {
+                    // The voice's own LFO value: NOTE trig reads its own
+                    // phase, and the RISE ramp fades it in from note-on.
+                    let raw_lfo = if note_trig {
+                        lfo.at_phase(v.sources.lfo_phases[0])
+                    } else {
+                        global_lfo
+                    };
+                    v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], seconds(f64::from(block_s)));
+                    let ramp = rise(v.sources.age, ms(f64::from(rise_ms)), sample_rate);
+                    let sv: matrix::SrcValues = standard_sources(
+                        raw_lfo * ramp,
+                        &v.sources,
+                        v.env_level(),
+                        ensemble,
+                        sympathy(total_level, v.level()),
+                    );
+                    v.apply_routes(&routes, &sv);
+                }
+            });
         }
         // The rings' feed: each slot's live SOURCE value (±1).
         // Per-voice sources publish the most recent note's or an
@@ -354,12 +372,12 @@ impl Plugin for Chime {
         let rack = &mut self.rack;
         let mut notes = EventCursor::new(block.events());
         let ensemble = &mut self.ensemble;
-        block.lanes::<2>().run(|fr| {
+        self.voices_cost.measure(frames, || block.lanes::<2>().run(|fr| {
             for event in notes.due(fr.index()) {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
                 if let VoiceEvent::On { hz, velocity, .. } = voice {
-                    ensemble.note_on(hz, velocity);
+                    ensemble.note_on(Hz::new(hz), velocity);
                 }
                 rack.dispatch(voice);
             }
@@ -367,7 +385,7 @@ impl Plugin for Chime {
             let (l, r) = rack.tick();
             fr.write(0, l * g);
             fr.write(1, r * g);
-        });
+        }));
     }
 
     /// Honest from the knobs: the longest a released note can ring

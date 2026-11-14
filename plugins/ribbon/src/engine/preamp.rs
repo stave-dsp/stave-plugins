@@ -23,7 +23,7 @@ impl Preamp {
         // unity, so DRIVE moves the tube toward its knee (more grit)
         // without making the record level louder.
         let tube = || Triode::with_tube(Koren::T12AX7);
-        Self { tubes: [tube(), tube()], couplers: [Coupler::new(12.0), Coupler::new(12.0)], drive: 0.0 }
+        Self { tubes: [tube(), tube()], couplers: [Coupler::new(hz(12.0)), Coupler::new(hz(12.0))], drive: 0.0 }
     }
 
     pub(super) fn prepare(&mut self, sample_rate: f32) {

@@ -107,7 +107,7 @@ impl SettledSupply {
     pub fn at(sample_rate: f32) -> Self {
         let mut supply = PowerSupply::new(SUPPLY);
         supply.prepare(sample_rate);
-        let idle_volts = supply.settle(IDLE_LOAD_AMPS, SUPPLY_SETTLE_SECONDS);
+        let idle_volts = supply.settle(IDLE_LOAD_AMPS, seconds(SUPPLY_SETTLE_SECONDS));
         Self { supply, idle_volts }
     }
 
@@ -171,8 +171,8 @@ impl AmplifierBranch {
         self.output_high_shelf.prepare(sample_rate);
         if let Some(emphasis) = self.design.high_frequency_emphasis {
             self.output_high_shelf.set(FilterSpec::HighShelfRbj {
-                hz: emphasis.corner_hz,
-                db: emphasis.output_gain_db,
+                frequency: hz(emphasis.corner_hz),
+                gain: db(emphasis.output_gain_db),
             });
         }
 
@@ -189,7 +189,7 @@ impl AmplifierBranch {
         self.power_pair.set_class_ab(power_pair_cold_bias_volts);
         self.power_pair
             .set_imbalance(self.design.power_pair_imbalance);
-        self.power_pair.set_drive_db(0.0);
+        self.power_pair.set_drive(db(0.0));
 
         self.settled_supply.clone_from(settled);
         self.reset();
@@ -202,8 +202,8 @@ impl AmplifierBranch {
         self.output_high_shelf.reset();
         if let Some(emphasis) = self.design.high_frequency_emphasis {
             self.input_high_shelf.set(FilterSpec::HighShelfRbj {
-                hz: emphasis.corner_hz,
-                db: emphasis.input_gain_db,
+                frequency: hz(emphasis.corner_hz),
+                gain: db(emphasis.input_gain_db),
             });
         }
         self.preamp.reset();
@@ -226,14 +226,14 @@ impl AmplifierBranch {
         self.preamp.set_stage_count(preamp_stage_count);
         self.preamp.set_drive_db(preamp_drive_db);
         self.preamp.set_interstage_gain_db(INTERSTAGE_DIVIDER_DB);
-        self.power_pair.set_feedback_db(NEGATIVE_FEEDBACK_DB);
+        self.power_pair.set_feedback(db(NEGATIVE_FEEDBACK_DB));
 
         // The live overdrive control selects how far the expected signal rides
         // past the power-pair knee. Cold bias remains a prepare-time design
         // choice and is never remapped by this control.
         let requested_overdrive_depth_db = power_pair_overdrive_db * 1.75 - 13.0;
         let power_pair_input_knee_db =
-            self.power_pair.ceiling_db() - self.power_pair.small_signal_gain_db();
+            self.power_pair.ceiling().get() - self.power_pair.small_signal_gain().get();
         self.power_pair_input_gain = db_to_amp(
             requested_overdrive_depth_db + power_pair_input_knee_db
                 - self.expected_preamp_output_db(reference_input_level_db),
@@ -258,8 +258,8 @@ impl AmplifierBranch {
         let expected_output_level_db = soft_limit_db(
             preamp_output_level_db
                 + 20.0 * self.power_pair_input_gain.max(1e-9).log10()
-                + self.power_pair.small_signal_gain_db(),
-            self.power_pair.ceiling_db(),
+                + self.power_pair.small_signal_gain().get(),
+            self.power_pair.ceiling().get(),
         );
         self.power_pair.set_supply_scale(self.supply_scale);
         expected_output_level_db
@@ -275,8 +275,8 @@ impl AmplifierBranch {
                 let high_shelf_gain_db =
                     8.0 + self.blocking_high_shelf_depth * (target_high_shelf_gain_db - 8.0);
                 self.input_high_shelf.set(FilterSpec::HighShelfRbj {
-                        hz: 480.0,
-                        db: high_shelf_gain_db,
+                        frequency: hz(480.0),
+                        gain: db(high_shelf_gain_db),
                     });
             }
         }

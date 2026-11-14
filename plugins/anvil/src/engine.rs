@@ -86,6 +86,13 @@ pub struct Anvil {
     settled: Amplifier,
     panel: Panel,
     output_level: Smoother,
+    /// What the amplifier costs a block (`amp_ns_per_sample`,
+    /// `amp_load`). Input conditioning, difference tones, the parallel
+    /// amplifier, the band limiter, tone stack and output conditioner
+    /// run one after another inside a single per-sample loop (each
+    /// stage feeds the next, and the amplifier's output feeds back), so
+    /// the loop is the one stage the perf check can name.
+    cost: CostTaps,
 }
 
 /// The panel re-resolves into the amplifier this often while it moves:
@@ -188,7 +195,7 @@ impl Amplifier {
         for processing_lane in self.lanes.iter_mut() {
             if input_settings_changed {
                 processing_lane.input_highpass_filter.set(FilterSpec::Highpass {
-                    hz: settings.input.highpass_cutoff_hz,
+                    frequency: hz(settings.input.highpass_cutoff_hz),
                     q: 0.71,
                 });
             }
@@ -263,6 +270,11 @@ impl Plugin for Anvil {
         features: &[Feature::AudioEffect, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Parallel triode cascades, push-pull power and per-band
+    /// saturation a lane: at the worst knobs ~2350 ns a sample a
+    /// channel on the x86_64 build host; twice that leaves a slower
+    /// machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(4_700.0);
     /// 1: the tone stack's bass/mid/treble moved from dB to knob
     /// positions (0–10).
     const STATE_VERSION: u32 = 1;
@@ -303,12 +315,14 @@ impl Plugin for Anvil {
             panel: Panel::new(parameters),
             output_level: Smoother::new(&parameters.output_level),
             parameters: parameters.clone(),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("amp")),
         }
     }
 
     fn prepare(&mut self, environment: &Environment) {
         self.output_level.prepare(environment);
         self.panel.prepare(environment);
+        self.cost.prepare(environment.sample_rate);
         self.amplifier.prepare(
             environment.sample_rate,
             PanelControlValues::read(&self.parameters),
@@ -332,9 +346,10 @@ impl Plugin for Anvil {
         let mut panel = self.panel.ramp(block, parameters);
         let mut output_level_values = self.output_level.ramp(block, &parameters.output_level);
         let amplifier = &mut self.amplifier;
+        let frames = block.frames();
         let audio_lanes = block.lanes::<2>();
         let active_channel_count = audio_lanes.active().min(2);
-        audio_lanes.run(|audio_frame| {
+        self.cost.measure(frames, || audio_lanes.run(|audio_frame| {
             let panel_values = panel.next();
             if audio_frame.index() % CONTROL_INTERVAL == 0 {
                 amplifier.apply(panel_values.into());
@@ -348,7 +363,7 @@ impl Plugin for Anvil {
                 ) * final_output_gain;
                 audio_frame.write(channel_index, output_sample);
             }
-        });
+        }));
         drop(panel);
         drop(output_level_values);
         let measurements = self.amplifier.lanes[0]

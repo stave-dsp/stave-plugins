@@ -99,6 +99,10 @@ pub struct Heirloom {
     wet: Wet,
     media: Media,
     taps: HeirloomTaps,
+    /// What the per-sample core costs a block (`core_ns_per_sample`,
+    /// `core_load`). The clock, the machines, the wet stage and the record run
+    /// interleaved in one per-sample loop, so they are timed as one stage.
+    cost: CostTaps,
     last_clock: f32,
     /// The record the face shows: angle (radians) and speed (1 = 33⅓).
     spin: f64,
@@ -115,6 +119,10 @@ impl Plugin for Heirloom {
         features: &[Feature::AudioEffect, Feature::Reverb, Feature::Delay, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Saga's machines plus the record: at its costliest state ~322 ns a
+    /// sample a channel on the x86_64 build host; twice that leaves a
+    /// slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(640.0);
     type Params = HeirloomParams;
 
     fn new(params: &Arc<HeirloomParams>, telemetry: &Telemetry) -> Self {
@@ -130,6 +138,7 @@ impl Plugin for Heirloom {
             wet: Wet::new(),
             media: Media::new(),
             taps: HeirloomTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("core")),
             last_clock: 1.0,
             spin: 0.0,
             spin_speed: 0.0,
@@ -147,6 +156,7 @@ impl Plugin for Heirloom {
         self.programs.prepare();
         self.wet.prepare(env.sample_rate);
         self.media.prepare(env.sample_rate);
+        self.cost.prepare(env.sample_rate);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
@@ -190,9 +200,10 @@ impl Plugin for Heirloom {
         let mut wet_peak = 0.0f32;
 
         let frames = block.frames();
+        let cost = &self.cost;
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        cost.measure(frames, || lanes.run(|fr| {
             let knob_ms = time_ramp.next();
             let time_ms = synced_ms.unwrap_or(knob_ms);
             let repeats = repeats_ramp.next();
@@ -258,7 +269,7 @@ impl Plugin for Heirloom {
             } else if active == 1 {
                 fr.write(0, 0.5 * (y[0] + y[1]) * g);
             }
-        });
+        }));
         self.last_clock = clk;
 
         // 3. The platter: it turns at the speed the audio PLAYS (the
