@@ -48,11 +48,11 @@ needless_range_loop = "allow"
 # Upgrade with scripts/bump-framework.sh (all together). To co-edit a
 # sibling checkout at ../stave instead, see scripts/link-framework.sh.
 libc = "0.2"
-stave = { git = "https://github.com/stave-dsp/stave", tag = "v0.4.0" }
-stave-dsp = { git = "https://github.com/stave-dsp/stave", tag = "v0.4.0" }
-stave-host = { git = "https://github.com/stave-dsp/stave", tag = "v0.4.0" }
-stave-measure = { git = "https://github.com/stave-dsp/stave", tag = "v0.4.0" }
-stave-test = { git = "https://github.com/stave-dsp/stave", tag = "v0.4.0" }
+stave = { git = "https://github.com/stave-dsp/stave", tag = "v0.5.0" }
+stave-dsp = { git = "https://github.com/stave-dsp/stave", tag = "v0.5.0" }
+stave-host = { git = "https://github.com/stave-dsp/stave", tag = "v0.5.0" }
+stave-measure = { git = "https://github.com/stave-dsp/stave", tag = "v0.5.0" }
+stave-test = { git = "https://github.com/stave-dsp/stave", tag = "v0.5.0" }
 thiserror = "2"
 
 [profile.release]
