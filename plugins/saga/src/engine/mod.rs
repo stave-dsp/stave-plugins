@@ -69,6 +69,10 @@ pub struct Saga {
     programs: Programs,
     wet: Wet,
     taps: SagaTaps,
+    /// What the per-sample core costs a block (`core_ns_per_sample`,
+    /// `core_load`). The clock, the machines, the wet stage run
+    /// interleaved in one per-sample loop, so they are timed as one stage.
+    cost: CostTaps,
     last_clock: f32,
 }
 
@@ -82,6 +86,10 @@ impl Plugin for Saga {
         features: &[Feature::AudioEffect, Feature::Reverb, Feature::Delay, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Two machines on a 32 kHz clock: at the costliest declared case
+    /// (program IV at its fastest clock) ~255 ns a sample a channel on
+    /// the x86_64 build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(510.0);
     type Params = SagaParams;
 
     fn new(params: &Arc<SagaParams>, telemetry: &Telemetry) -> Self {
@@ -96,6 +104,7 @@ impl Plugin for Saga {
             programs: Programs::new(),
             wet: Wet::new(),
             taps: SagaTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("core")),
             last_clock: 1.0,
         }
     }
@@ -110,6 +119,7 @@ impl Plugin for Saga {
         self.clock.prepare(env.sample_rate);
         self.programs.prepare();
         self.wet.prepare(env.sample_rate);
+        self.cost.prepare(env.sample_rate);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
@@ -148,9 +158,11 @@ impl Plugin for Saga {
         let mut clk = self.last_clock;
         let mut wet_peak = 0.0f32;
 
+        let frames = block.frames();
+        let cost = &self.cost;
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        cost.measure(frames, || lanes.run(|fr| {
             let knob_ms = time_ramp.next();
             let time_ms = synced_ms.unwrap_or(knob_ms);
             let k = Knobs {
@@ -193,7 +205,7 @@ impl Plugin for Saga {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dry_g + 0.5 * (w[0] + w[1]) * wet_g) * g);
             }
-        });
+        }));
         self.last_clock = clk;
 
         // 3. What happened, reported out.

@@ -81,6 +81,12 @@ pub struct Tolex {
     /// True between prepare and the first bind — structure snaps
     /// instead of gliding (no history to protect yet).
     fresh: bool,
+    /// What the cabinet costs a block (`cabinet_ns_per_sample`,
+    /// `cabinet_load`). Motor, driver chorus, rear path, interior, cone
+    /// voice and microphone run one after another inside a single
+    /// per-sample loop, so the loop is the one stage the perf check can
+    /// name.
+    cost: CostTaps,
 }
 
 impl Tolex {
@@ -129,6 +135,10 @@ impl Plugin for Tolex {
         features: &[Feature::AudioEffect, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// A physical speaker motor, cone, box and air a lane: at the worst
+    /// knobs ~570 ns a sample a channel on the x86_64 build host;
+    /// twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(1_100.0);
     type Params = TolexParams;
 
     fn new(params: &Arc<TolexParams>, telemetry: &Telemetry) -> Self {
@@ -150,6 +160,7 @@ impl Plugin for Tolex {
             soften_phase: 0,
             fresh: true,
             taps: TolexTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("cabinet")),
         }
     }
 
@@ -158,6 +169,7 @@ impl Plugin for Tolex {
         self.mic.prepare(env);
         self.output.prepare(env);
         self.sample_rate = env.sample_rate;
+        self.cost.prepare(env.sample_rate);
         for lane in self.lanes.iter_mut() {
             lane.motor.prepare(env.sample_rate);
             lane.chorus.prepare(env.sample_rate);
@@ -196,10 +208,11 @@ impl Plugin for Tolex {
         let mut mic = self.mic.ramp(block, &p.mic);
         let mut output = self.output.ramp(block, &p.output);
         let lanes_state = &mut self.lanes;
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
         let mut soften_phase = self.soften_phase;
-        lanes.run(|frame| {
+        self.cost.measure(frames, || lanes.run(|frame| {
             let vd = V_REF * db_to_amp(drive.next());
             let mic_r = mic.next() * 0.01; // cm → m
             let g = db_to_amp(output.next());
@@ -214,7 +227,7 @@ impl Plugin for Tolex {
                 let at_mic = s.interior.tick(s.back.tick(pressure, mic_r));
                 frame.write(lane, s.mic.tick(s.voice.tick(at_mic)) * g);
             }
-        });
+        }));
         self.soften_phase = soften_phase;
 
         // Observe: the block's operating point (max across lanes).

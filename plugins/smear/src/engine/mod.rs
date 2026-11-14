@@ -55,6 +55,10 @@ struct Values {
 pub struct Smear {
     sample_rate: f32,
     taps: SmearTaps,
+    /// What the garden costs a block (`garden_ns_per_sample`,
+    /// `garden_load`): the resonator lattice is the whole DSP, so it is
+    /// the one stage the perf check can name.
+    cost: CostTaps,
     chans: PerChannel<ChanState, MAX_CHANS>,
     ctrl_phase: usize,
 
@@ -81,6 +85,10 @@ impl Plugin for Smear {
         features: &[Feature::AudioEffect, Feature::Reverb, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Eighty-four coupled resonators a lane, per sample: at the worst
+    /// knobs ~2390 ns a sample a channel on the x86_64 build host
+    /// (~400 on Apple Silicon); twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(4_800.0);
     /// The declared set — stereo preferred, 5.1 as the surround
     /// variant of the PerChannel lift. The gardens are per-lane
     /// independent, so the lift is exactly what lanes are for; the
@@ -95,6 +103,7 @@ impl Plugin for Smear {
         Self {
             sample_rate: 48_000.0,
             taps: SmearTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("garden")),
             chans: PerChannel::new(|lane| {
                 // Lanes 0/1 keep their historical seeds (stereo is
                 // bit-pinned through the 5.1 lift); rears/C/LFE get
@@ -124,6 +133,7 @@ impl Plugin for Smear {
         }
         self.ctrl_phase = 0;
         self.controls.prepare(env);
+        self.cost.prepare(sample_rate);
         for c in self.chans.iter_mut() {
             c.update_coeffs(sample_rate, self.params.decay.value(), 0.0, 0.0);
         }
@@ -146,7 +156,8 @@ impl Plugin for Smear {
         // up to roughly dry level; soft-clip catches dense excitation.
         let norm = 14.0 / (N_RES as f32).sqrt();
 
-        let peaks = block.lanes::<MAX_CHANS>().run(|frame| {
+        let frames = block.frames();
+        let peaks = self.cost.measure(frames, || block.lanes::<MAX_CHANS>().run(|frame| {
             let v = ramps.next();
             let out_lin = db_to_amp(v.output);
             // Control-rate update: coefficients + tuning drift.
@@ -225,7 +236,7 @@ impl Plugin for Smear {
 
                 frame.write(c, dry + (wet * out_lin - dry) * v.mix);
             }
-        });
+        }));
         let db = |p: f32| 20.0 * f64::from(p.max(1e-6)).log10();
         self.taps.io_in.set(db(peaks.input));
         self.taps.io_out.set(db(peaks.output));

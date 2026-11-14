@@ -110,6 +110,11 @@ pub struct Eddy {
     /// telemetry the wave cycle is published on.
     taps: EddyTaps,
     telemetry: Arc<Telemetry>,
+    /// What the delay loop costs a block (`loop_ns_per_sample`,
+    /// `loop_load`): echo, read-head motion, the active algorithm and
+    /// the in-loop diffusion all run interleaved in one per-sample
+    /// frame law, so the loop is the one stage the perf check can name.
+    cost: CostTaps,
 }
 
 impl Plugin for Eddy {
@@ -122,6 +127,10 @@ impl Plugin for Eddy {
         features: &[Feature::AudioEffect, Feature::Delay, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Two delay lanes, one algorithm and the diffusion field a frame:
+    /// at the worst knobs ~309 ns a sample a channel on the x86_64
+    /// build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(620.0);
     type Params = EddyParams;
 
     fn new(params: &Arc<EddyParams>, telemetry: &Telemetry) -> Self {
@@ -137,6 +146,7 @@ impl Plugin for Eddy {
             diffusion: Diffusion::new(),
             taps: EddyTaps::new(telemetry),
             telemetry: telemetry.shared(),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("loop")),
         }
     }
 
@@ -151,6 +161,7 @@ impl Plugin for Eddy {
         self.motor.prepare(env.sample_rate);
         self.shift.prepare(env.sample_rate);
         self.diffusion.prepare(env.sample_rate);
+        self.cost.prepare(env.sample_rate);
     }
 
     /// The per-block orchestration — three named phases:
@@ -196,9 +207,10 @@ impl Plugin for Eddy {
         let diffusion = &mut self.diffusion;
         let mut wet_peak = 0.0f32;
 
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        self.cost.measure(frames, || lanes.run(|fr| {
             // Ramps honor the declared ranges — no read-site
             // clamps to drift out of sync with the table.
             let base = time.next() * 0.001 * sample_rate;
@@ -259,7 +271,7 @@ impl Plugin for Eddy {
                 wet_peak = wet_peak.max(wet.abs());
                 fr.write(0, blend(x, wet, dry_g, wet_g) * gain);
             }
-        });
+        }));
 
         // 3. What happened, reported out.
         self.taps.lfo_phase.set(f64::from(self.motion.phase01()));

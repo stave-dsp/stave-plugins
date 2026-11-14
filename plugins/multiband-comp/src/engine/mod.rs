@@ -51,6 +51,11 @@ pub struct MultibandComp {
     /// The face's spectrum feed: mono input and output on the capture
     /// wire (the plugin owns the capture; sized in `prepare`).
     scope: Scope,
+    /// What the band loop costs a block (`bands_ns_per_sample`,
+    /// `bands_load`): both splits, the three bands' detectors,
+    /// compressors and 4x saturators run interleaved per sample, so the
+    /// loop is the one stage the perf check can name.
+    cost: CostTaps,
 }
 
 /// Retune both splits wherever a cutoff moved.
@@ -92,6 +97,10 @@ impl Plugin for MultibandComp {
         },
         Layout::STEREO,
     ];
+    /// Two crossovers and three compressed, 4x-saturated bands: at the
+    /// worst knobs ~1131 ns a sample a channel on the x86_64 build host;
+    /// twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(2_300.0);
     type Params = MbParams;
 
     fn new(params: &Arc<MbParams>, telemetry: &Telemetry) -> Self {
@@ -108,6 +117,7 @@ impl Plugin for MultibandComp {
             telemetry: telemetry.shared(),
             taps: MultibandTaps::new(telemetry),
             scope: Scope::new(),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("bands")),
             params: params.clone(),
         }
     }
@@ -116,6 +126,7 @@ impl Plugin for MultibandComp {
         let p = &*self.params;
         self.sample_rate = env.sample_rate;
         self.scope.prepare(env.max_block);
+        self.cost.prepare(env.sample_rate);
         self.split.prepare(env.sample_rate);
         self.sidechain_split.prepare(env.sample_rate);
         self.sidechain_was_live = false;
@@ -171,6 +182,7 @@ impl Plugin for MultibandComp {
             controls,
             bands,
             scope,
+            cost,
             ..
         } = self;
         let [low, high] = crossovers;
@@ -187,7 +199,7 @@ impl Plugin for MultibandComp {
             0 => return,
             active => active > 1,
         };
-        lanes.run(|fr| {
+        cost.measure(frames, || lanes.run(|fr| {
             set_crossovers(
                 [&mut *split, &mut *sidechain_split],
                 crossover_hz,
@@ -217,7 +229,7 @@ impl Plugin for MultibandComp {
             }
             let mono_out = if stereo { 0.5 * (out.0 + out.1) } else { out.0 };
             scope.write(fr.index(), 0.5 * (left + right), mono_out);
-        });
+        }));
         self.scope.publish(&self.telemetry, frames);
         self.taps.sample_rate.set(f64::from(self.sample_rate));
         for (tap, band) in self.taps.bands().into_iter().zip(&self.bands) {

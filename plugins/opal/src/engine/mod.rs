@@ -257,6 +257,13 @@ pub struct Opal {
     global_lags: [f32; 4],
     ensemble: Ensemble,
     taps: OpalTaps,
+    /// What the block-rate modulation matrix costs, evaluated per voice
+    /// (`matrix_ns_per_sample`, `matrix_load`).
+    matrix_cost: CostTaps,
+    /// What the voices cost: the event bridge and the rack's four
+    /// operators a voice, per sample (`voices_ns_per_sample`,
+    /// `voices_load`).
+    voices_cost: CostTaps,
 }
 
 impl Plugin for Opal {
@@ -269,6 +276,11 @@ impl Plugin for Opal {
         features: &[Feature::Instrument, Feature::Synthesizer, Feature::Stereo],
         ..Info::INSTRUMENT
     };
+    /// Up to sixteen four-operator FM voices and a two-LFO matrix: at
+    /// the worst knobs (a chord struck every half second) ~1100 ns a
+    /// sample a channel on the x86_64 build host; twice that leaves a
+    /// slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(2_200.0);
     /// An instrument: no audio in, stereo out.
     const LAYOUTS: &'static [Layout] = &[Layout::INSTRUMENT];
     type Params = OpalParams;
@@ -287,6 +299,8 @@ impl Plugin for Opal {
             global_lags: [0.0; 4],
             ensemble: Ensemble::default(),
             taps: OpalTaps::new(telemetry),
+            matrix_cost: CostTaps::new(telemetry, cost_tap_ids!("matrix")),
+            voices_cost: CostTaps::new(telemetry, cost_tap_ids!("voices")),
         }
     }
 
@@ -296,6 +310,8 @@ impl Plugin for Opal {
         self.rack.prepare(env.sample_rate);
         self.lfo.prepare(env.sample_rate);
         self.lfo2.prepare(env.sample_rate);
+        self.matrix_cost.prepare(env.sample_rate);
+        self.voices_cost.prepare(env.sample_rate);
         self.global_lags = [0.0; 4];
         self.ensemble.reset();
         self.voicing.reset();
@@ -403,40 +419,42 @@ impl Plugin for Opal {
             .set(Hz::new(hz2), ModLfoShape::from_index(p.lfo2_shape.value().to_index() as usize));
         let global_lfo2 = self.lfo2.tick_frames(frames);
         if routes.any() {
-            let rise_ms = p.lfo_rise.value();
-            let rise2_ms = p.lfo2_rise.value();
-            let note_trig = p.lfo_trig.value() == LfoTrig(1);
-            let note_trig2 = p.lfo2_trig.value() == LfoTrig(1);
-            let ensemble = &self.ensemble;
-            let sample_rate = self.sample_rate;
-            let (lfo, lfo2) = (&self.lfo, &self.lfo2);
-            for v in self.rack.voices_mut() {
-                let raw_lfo = if note_trig {
-                    lfo.at_phase(v.sources.lfo_phases[0])
-                } else {
-                    global_lfo
-                };
-                let raw_lfo2 = if note_trig2 {
-                    lfo2.at_phase(v.sources.lfo_phases[1])
-                } else {
-                    global_lfo2
-                };
-                let phases = &mut v.sources.lfo_phases;
-                phases[0] = lfo.advance_phase(phases[0], seconds(f64::from(block_s)));
-                phases[1] = lfo2.advance_phase(phases[1], seconds(f64::from(block_s)));
-                let age = v.sources.age;
-                let sv = with_lfo2(
-                    standard_sources(
-                        raw_lfo * rise(age, ms(f64::from(rise_ms)), sample_rate),
-                        &v.sources,
-                        v.env_level(),
-                        ensemble,
-                        sympathy(total_level, v.level()),
-                    ),
-                    raw_lfo2 * rise(age, ms(f64::from(rise2_ms)), sample_rate),
-                );
-                v.apply_routes(&routes, &sv);
-            }
+            self.matrix_cost.measure(frames, || {
+                let rise_ms = p.lfo_rise.value();
+                let rise2_ms = p.lfo2_rise.value();
+                let note_trig = p.lfo_trig.value() == LfoTrig(1);
+                let note_trig2 = p.lfo2_trig.value() == LfoTrig(1);
+                let ensemble = &self.ensemble;
+                let sample_rate = self.sample_rate;
+                let (lfo, lfo2) = (&self.lfo, &self.lfo2);
+                for v in self.rack.voices_mut() {
+                    let raw_lfo = if note_trig {
+                        lfo.at_phase(v.sources.lfo_phases[0])
+                    } else {
+                        global_lfo
+                    };
+                    let raw_lfo2 = if note_trig2 {
+                        lfo2.at_phase(v.sources.lfo_phases[1])
+                    } else {
+                        global_lfo2
+                    };
+                    let phases = &mut v.sources.lfo_phases;
+                    phases[0] = lfo.advance_phase(phases[0], seconds(f64::from(block_s)));
+                    phases[1] = lfo2.advance_phase(phases[1], seconds(f64::from(block_s)));
+                    let age = v.sources.age;
+                    let sv = with_lfo2(
+                        standard_sources(
+                            raw_lfo * rise(age, ms(f64::from(rise_ms)), sample_rate),
+                            &v.sources,
+                            v.env_level(),
+                            ensemble,
+                            sympathy(total_level, v.level()),
+                        ),
+                        raw_lfo2 * rise(age, ms(f64::from(rise2_ms)), sample_rate),
+                    );
+                    v.apply_routes(&routes, &sv);
+                }
+            });
         }
         let shown = with_lfo2(self.ensemble.sources(global_lfo, total_level), global_lfo2);
         for (tap, slot) in self.taps.mods().into_iter().zip(&routes.slots) {
@@ -449,7 +467,7 @@ impl Plugin for Opal {
         let rack = &mut self.rack;
         let mut notes = EventCursor::new(block.events());
         let ensemble = &mut self.ensemble;
-        block.lanes::<2>().run(|fr| {
+        self.voices_cost.measure(frames, || block.lanes::<2>().run(|fr| {
             for event in notes.due(fr.index()) {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
@@ -462,7 +480,7 @@ impl Plugin for Opal {
             let (l, r) = rack.tick();
             fr.write(0, l * g);
             fr.write(1, r * g);
-        });
+        }));
     }
 
     fn face(params: &OpalParams) -> Option<Face> {

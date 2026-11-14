@@ -104,6 +104,11 @@ pub struct Ribbon {
     /// ribbon is: the heads are downstream of the record head).
     echo: [f32; 2],
     taps: RibbonTaps,
+    /// What the machine costs a block (`machine_ns_per_sample`,
+    /// `machine_load`): preamp, tape loop, playback and spring run
+    /// interleaved per sample (the feedback is one frame late), so the
+    /// whole frame law is the one stage the perf check can name.
+    cost: CostTaps,
 }
 
 impl Plugin for Ribbon {
@@ -116,6 +121,10 @@ impl Plugin for Ribbon {
         features: &[Feature::AudioEffect, Feature::Delay, Feature::Reverb, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// A preamp, a tape loop of up to three heads and a spring tank a
+    /// frame: at the worst knobs ~764 ns a sample a channel on the
+    /// x86_64 build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(1_500.0);
     type Params = RibbonParams;
 
     fn new(params: &Arc<RibbonParams>, telemetry: &Telemetry) -> Self {
@@ -137,6 +146,7 @@ impl Plugin for Ribbon {
             drop_left: 0,
             echo: [0.0; 2],
             taps: RibbonTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("machine")),
         }
     }
 
@@ -158,6 +168,7 @@ impl Plugin for Ribbon {
         self.drop_target = 1.0;
         self.drop_left = 0;
         self.echo = [0.0; 2];
+        self.cost.prepare(sample_rate);
     }
 
     fn process(&mut self, block: &mut Block<'_>) {
@@ -193,9 +204,10 @@ impl Plugin for Ribbon {
         let echo = &mut self.echo;
         let mut frame = 0usize;
 
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        self.cost.measure(frames, || lanes.run(|fr| {
             let _ = drive_ramp.next();
             let (intensity, wear, erase) = (int_ramp.next(), wear_ramp.next(), erase_ramp.next());
             // WEAR's tone follows the GLIDING knob, not the raw value.
@@ -271,7 +283,7 @@ impl Plugin for Ribbon {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dg + 0.5 * (wet[0] + wet[1]) * wg) * og);
             }
-        });
+        }));
 
         // 3. What happened, reported out.
         self.taps.publish(self.tape.loop_phase(), self.tape.speed());

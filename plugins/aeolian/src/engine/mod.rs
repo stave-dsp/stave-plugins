@@ -67,6 +67,10 @@ pub struct Aeolian {
     tone: [Svf; 2],
     pans: [[f32; 2]; CLASSES],
     taps: AeolianTaps,
+    /// What the harp costs a block (`harp_ns_per_sample`, `harp_load`):
+    /// detector, strings, ensemble and tone run interleaved in one
+    /// per-sample loop, so the loop is the one stage the perf check names.
+    cost: CostTaps,
     /// Seconds of audio played (wrapped) — the strings' animation clock.
     clock: f64,
 }
@@ -81,6 +85,10 @@ impl Plugin for Aeolian {
         features: &[Feature::AudioEffect, Feature::Filter, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// Twelve plucked-string loops with their detector and ensemble: at
+    /// the worst knobs ~610 ns a sample a channel on the x86_64 build
+    /// host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(1_200.0);
     type Params = AeolianParams;
 
     fn new(params: &Arc<AeolianParams>, telemetry: &Telemetry) -> Self {
@@ -94,6 +102,7 @@ impl Plugin for Aeolian {
             tone: [Svf::new(hz(TONE_HI_HZ), TONE_Q); 2],
             pans: pans(),
             taps: AeolianTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("harp")),
             clock: 0.0,
         }
     }
@@ -101,6 +110,7 @@ impl Plugin for Aeolian {
     fn prepare(&mut self, env: &Environment) {
         self.sample_rate = env.sample_rate;
         self.controls.prepare(env);
+        self.cost.prepare(env.sample_rate);
         self.detector.prepare(env.sample_rate);
         self.strings.prepare(env.sample_rate);
         self.ensemble.prepare(env.sample_rate);
@@ -130,9 +140,10 @@ impl Plugin for Aeolian {
             (&mut self.detector, &mut self.strings, &mut self.ensemble, &mut self.tone, &self.pans);
         let mut frame = 0usize;
 
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        self.cost.measure(frames, || lanes.run(|fr| {
             let (t, m, s, fb) = (tone_ramp.next(), mod_ramp.next(), sens_ramp.next(), fb_ramp.next());
             if frame.is_multiple_of(CONTROL_FRAMES) {
                 strings.voice(Voicing {
@@ -172,7 +183,7 @@ impl Plugin for Aeolian {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dg + 0.5 * (w[0] + w[1]) * wg) * g);
             }
-        });
+        }));
 
         // 3. What happened, reported out.
         self.clock = (self.clock + block.frames() as f64 / f64::from(self.sample_rate)) % 3600.0;

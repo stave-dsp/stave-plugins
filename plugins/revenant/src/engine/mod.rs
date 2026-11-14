@@ -85,6 +85,11 @@ pub struct Revenant {
     let_go: f32,
     come_back: f32,
     taps: RevenantTaps,
+    /// What the brain costs a block (`brain_ns_per_sample`,
+    /// `brain_load`): the reservoir steps inside the per-sample loop,
+    /// between its input average and its voice, so the loop is the one
+    /// stage the perf check names.
+    cost: CostTaps,
 }
 
 impl Plugin for Revenant {
@@ -97,6 +102,10 @@ impl Plugin for Revenant {
         features: &[Feature::AudioEffect, Feature::Stereo],
         ..Info::EFFECT
     };
+    /// An echo-state reservoir learning online at the decimated brain
+    /// rate: at the worst knobs ~350 ns a sample a channel on the x86_64
+    /// build host; twice that leaves a slower machine room.
+    const CPU_BUDGET: Budget = Budget::per_channel(700.0);
     type Params = RevenantParams;
 
     fn new(params: &Arc<RevenantParams>, telemetry: &Telemetry) -> Self {
@@ -119,6 +128,7 @@ impl Plugin for Revenant {
             let_go: 0.0,
             come_back: 0.0,
             taps: RevenantTaps::new(telemetry),
+            cost: CostTaps::new(telemetry, cost_tap_ids!("brain")),
         }
     }
 
@@ -126,6 +136,7 @@ impl Plugin for Revenant {
         let sample_rate = env.sample_rate;
         self.sample_rate = sample_rate;
         self.controls.prepare(env);
+        self.cost.prepare(sample_rate);
         self.decim = ((sample_rate / BRAIN_HZ).round() as usize).max(1);
         self.voice.prepare(sample_rate);
         self.dc.prepare(sample_rate);
@@ -178,9 +189,10 @@ impl Plugin for Revenant {
         let (env_err, env_in, env_k) = (&mut self.env_err, &mut self.env_in, self.env_k);
         let (attention, let_go, come_back) = (&mut self.attention, self.let_go, self.come_back);
 
+        let frames = block.frames();
         let lanes = block.lanes::<2>();
         let active = lanes.active();
-        lanes.run(|fr| {
+        self.cost.measure(frames, || lanes.run(|fr| {
             let (learn, memory, chaos, dream) = (learn_ramp.next(), memory_ramp.next(), chaos_ramp.next(), dream_ramp.next());
             let dry = if active >= 2 { [fr.input(0), fr.input(1)] } else { [fr.input(0); 2] };
             // Into the brain: a box average over its step.
@@ -224,7 +236,7 @@ impl Plugin for Revenant {
             } else if active == 1 {
                 fr.write(0, (dry[0] * dg + voice * wg) * g);
             }
-        });
+        }));
 
         let surprise = if self.env_in > 1e-4 { (self.env_err / self.env_in).clamp(0.0, 1.0) } else { 0.0 };
         self.taps.publish(surprise, &self.brain);
