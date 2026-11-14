@@ -383,8 +383,8 @@ impl Plugin for Engram {
         for l in &mut self.late_in {
             l.allocate((LATE_GAP_S * sr) as usize + 8);
         }
-        self.recall_env_k = tau_coeff(0.08, sr);
-        self.late_gap_k = tau_coeff(0.05, sr);
+        self.recall_env_k = tau_coeff(ms(80.0), sr);
+        self.late_gap_k = tau_coeff(ms(50.0), sr);
         self.reset();
     }
 

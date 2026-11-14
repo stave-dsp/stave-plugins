@@ -53,7 +53,7 @@ impl ParallelAmplifier {
             split_band_amplifier: SplitBandAmplifier::new(&full_band_branch),
             full_band_branch,
             full_band_phase_alignment: Biquad::new(FilterSpec::Allpass {
-                hz: FULL_BAND_PHASE_ALIGNMENT_HZ,
+                frequency: hz(FULL_BAND_PHASE_ALIGNMENT_HZ),
                 q: FULL_BAND_PHASE_ALIGNMENT_QUALITY,
             }),
             topology_separation_amount: 0.7,

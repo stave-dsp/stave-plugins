@@ -188,7 +188,7 @@ impl Amplifier {
         for processing_lane in self.lanes.iter_mut() {
             if input_settings_changed {
                 processing_lane.input_highpass_filter.set(FilterSpec::Highpass {
-                    hz: settings.input.highpass_cutoff_hz,
+                    frequency: hz(settings.input.highpass_cutoff_hz),
                     q: 0.71,
                 });
             }

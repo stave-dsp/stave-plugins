@@ -8,7 +8,7 @@
 
 use stave::dsp::{
     Source,
-    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig,
+    hz_of_key, mod_lfo_rate, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig,
     Ensemble, ModLfo, ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack,
 };
 use stave::prelude::*;
@@ -129,7 +129,7 @@ impl OpalVoice {
 impl Voice for OpalVoice {
     fn prepare(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate;
-        self.glide = tau_coeff(0.005, sample_rate);
+        self.glide = tau_coeff(ms(5.0), sample_rate);
         for env in &mut self.envs {
             env.prepare(sample_rate);
         }
@@ -147,7 +147,7 @@ impl Voice for OpalVoice {
     }
     fn note_on(&mut self, hz: f32, velocity: f32) {
         self.hz = hz;
-        self.sources.note_on(hz, velocity);
+        self.sources.note_on(Hz::new(hz), velocity);
         self.retune();
         self.core.reset(); // same attack every time — reproducible
         for e in self.envs.iter_mut() {
@@ -282,8 +282,8 @@ impl Plugin for Opal {
                 OpalVoice::with_seed(0x0BA1_0BA1 ^ (i as u32).wrapping_mul(0x9E37_79B1))
             }),
             voicing: Watch::new(),
-            lfo: ModLfo::new(833.0, 0x0BA1_0001),
-            lfo2: ModLfo::new(3_333.0, 0x0BA1_0002),
+            lfo: ModLfo::new(ms(833.0), 0x0BA1_0001),
+            lfo2: ModLfo::new(ms(3_333.0), 0x0BA1_0002),
             global_lags: [0.0; 4],
             ensemble: Ensemble::default(),
             taps: OpalTaps::new(telemetry),
@@ -373,11 +373,11 @@ impl Plugin for Opal {
             .transport()
             .and_then(|t| t.tempo_bpm)
             .unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        let hz = mod_lfo_rate(p.lfo_rate.value_as(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo
             .set(hz, ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize));
         let global_lfo = self.lfo.tick_frames(frames);
-        self.ensemble.leak(block_s);
+        self.ensemble.leak(seconds(f64::from(block_s)));
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
         };
@@ -390,7 +390,7 @@ impl Plugin for Opal {
         // clock cannot follow sixteen voices; self-reference reads
         // the PREVIOUS block, the one-block lag every feedback
         // observes).
-        let hz2_base = mod_lfo_hz(p.lfo2_rate.value(), p.lfo2_sync.value().to_index() as usize, tempo);
+        let hz2_base = mod_lfo_rate(p.lfo2_rate.value_as(), p.lfo2_sync.value().to_index() as usize, tempo).get();
         let global_sv = with_lfo2(
             self.ensemble.sources(global_lfo, total_level),
             self.lfo2.state(),
@@ -400,7 +400,7 @@ impl Plugin for Opal {
         self.global_lags = glags;
         let hz2 = (hz2_base * gdisp.lfo2_oct.exp2()).clamp(0.01, 40.0);
         self.lfo2
-            .set(hz2, ModLfoShape::from_index(p.lfo2_shape.value().to_index() as usize));
+            .set(Hz::new(hz2), ModLfoShape::from_index(p.lfo2_shape.value().to_index() as usize));
         let global_lfo2 = self.lfo2.tick_frames(frames);
         if routes.any() {
             let rise_ms = p.lfo_rise.value();
@@ -422,18 +422,18 @@ impl Plugin for Opal {
                     global_lfo2
                 };
                 let phases = &mut v.sources.lfo_phases;
-                phases[0] = lfo.advance_phase(phases[0], block_s);
-                phases[1] = lfo2.advance_phase(phases[1], block_s);
+                phases[0] = lfo.advance_phase(phases[0], seconds(f64::from(block_s)));
+                phases[1] = lfo2.advance_phase(phases[1], seconds(f64::from(block_s)));
                 let age = v.sources.age;
                 let sv = with_lfo2(
                     standard_sources(
-                        raw_lfo * rise(age, rise_ms, sample_rate),
+                        raw_lfo * rise(age, ms(f64::from(rise_ms)), sample_rate),
                         &v.sources,
                         v.env_level(),
                         ensemble,
                         sympathy(total_level, v.level()),
                     ),
-                    raw_lfo2 * rise(age, rise2_ms, sample_rate),
+                    raw_lfo2 * rise(age, ms(f64::from(rise2_ms)), sample_rate),
                 );
                 v.apply_routes(&routes, &sv);
             }
@@ -454,7 +454,7 @@ impl Plugin for Opal {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
                 if let VoiceEvent::On { hz, velocity, .. } = voice {
-                    ensemble.note_on(hz, velocity);
+                    ensemble.note_on(Hz::new(hz), velocity);
                 }
                 rack.dispatch(voice);
             }

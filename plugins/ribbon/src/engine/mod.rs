@@ -126,11 +126,11 @@ impl Plugin for Ribbon {
             preamp: Preamp::new(),
             tape: Tape::new(),
             spring: Spring::new(),
-            fb_low: [Svf::new(FB_LOW_HZ, FB_Q); 2],
-            fb_top: [Svf::new(FB_TOP_HZ[0], FB_Q); 2],
-            gap: [Svf::new(GAP_HZ[0], GAP_Q); 2],
-            hiss_tilt: [Svf::new(1_500.0, HISS_Q); 2],
-            dc: [Coupler::new(18.0), Coupler::new(18.0)],
+            fb_low: [Svf::new(hz(FB_LOW_HZ), FB_Q); 2],
+            fb_top: [Svf::new(hz(FB_TOP_HZ[0]), FB_Q); 2],
+            gap: [Svf::new(hz(GAP_HZ[0]), GAP_Q); 2],
+            hiss_tilt: [Svf::new(hz(1_500.0), HISS_Q); 2],
+            dc: [Coupler::new(hz(18.0)), Coupler::new(hz(18.0))],
             rng: Xorshift32::new(0x51BB_0042),
             drop_gain: 1.0,
             drop_target: 1.0,
@@ -202,8 +202,8 @@ impl Plugin for Ribbon {
             if frame.is_multiple_of(CONTROL_FRAMES) {
                 let (top_hz, gap_hz) = (lerp_log(FB_TOP_HZ, wear).min(nyq), lerp_log(GAP_HZ, wear).min(nyq));
                 for ch in 0..2 {
-                    fb_top[ch].set(top_hz, FB_Q);
-                    gap[ch].set(gap_hz, GAP_Q);
+                    fb_top[ch].set(hz(top_hz), FB_Q);
+                    gap[ch].set(hz(gap_hz), GAP_Q);
                 }
             }
             frame += 1;

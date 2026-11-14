@@ -91,7 +91,7 @@ impl Plugin for Aeolian {
             detector: Detector::new(),
             strings: Strings::new(),
             ensemble: Ensemble::new(),
-            tone: [Svf::new(TONE_HI_HZ, TONE_Q); 2],
+            tone: [Svf::new(hz(TONE_HI_HZ), TONE_Q); 2],
             pans: pans(),
             taps: AeolianTaps::new(telemetry),
             clock: 0.0,
@@ -144,7 +144,7 @@ impl Plugin for Aeolian {
                 });
                 let hz = (TONE_LO_HZ * (TONE_HI_HZ / TONE_LO_HZ).powf(t)).min(nyq);
                 for lp in tone.iter_mut() {
-                    lp.set(hz, TONE_Q);
+                    lp.set(Hz::new(hz), TONE_Q);
                 }
             }
             frame += 1;

@@ -22,6 +22,7 @@
 use stave::dsp::primitives::random::{splitmix64, unit_f32};
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, DelayLine, Stage};
+use stave::dsp::units::{db, hz, Db, Hz};
 
 const N_MODES: usize = 40;
 /// Same size axis as motor::SIZES — the cliff base per driver size,
@@ -295,31 +296,31 @@ pub(crate) fn response_add(
     bq.prepare(rate);
     let add_current = |bq: &Biquad, out: &mut [f32]| {
         for (i, f) in hz.iter().enumerate() {
-            out[i] += 20.0 * bq.magnitude_at(*f).max(1e-12).log10();
+            out[i] += 20.0 * bq.magnitude_at(Hz::new(*f)).max(1e-12).log10();
         }
     };
     for s in &spec {
         let (db, q) = mode_voicing(s, breakup, doping, position, soften);
-        bq.set(FilterSpec::Peak { hz: s.hz, db, q });
+        bq.set(FilterSpec::Peak { frequency: Hz::new(s.hz), gain: Db::new(db), q });
         add_current(&bq, out);
     }
     let cliff = cliff_hz(size, mass) * (1.0 - 0.15 * position);
-    bq.set(FilterSpec::Lowpass { hz: cliff, q: 0.62 });
+    bq.set(FilterSpec::Lowpass { frequency: Hz::new(cliff), q: 0.62 });
     add_current(&bq, out);
     bq.set(FilterSpec::Lowpass {
-        hz: cliff * 2.1,
+        frequency: Hz::new(cliff * 2.1),
         q: 0.62,
     });
     add_current(&bq, out);
     let tilt = macro_tilt(position);
     bq.set(FilterSpec::LowShelfRbj {
-        hz: 500.0,
-        db: -tilt * 0.5,
+        frequency: Hz::new(500.0),
+        gain: db(-tilt * 0.5),
     });
     add_current(&bq, out);
     bq.set(FilterSpec::HighShelfRbj {
-        hz: 2_500.0,
-        db: tilt * 0.5,
+        frequency: Hz::new(2_500.0),
+        gain: db(tilt * 0.5),
     });
     add_current(&bq, out);
     let (tau, g) = comb_geometry(position, breakup);
@@ -451,23 +452,23 @@ impl Voice {
         for k in 0..N_MODES {
             let s = self.spec[k];
             let (db, q) = mode_voicing(&s, self.breakup, self.doping, self.position, self.soften);
-            self.modes[k].set(FilterSpec::Peak { hz: s.hz, db, q });
+            self.modes[k].set(FilterSpec::Peak { frequency: hz(s.hz), gain: Db::new(db), q });
         }
         // The cliff, with the corpus corner walk (6.8 -> 5.8 kHz).
         let cliff = cliff_hz(self.size, self.mass) * (1.0 - 0.15 * self.position);
-        self.lp_a.set(FilterSpec::Lowpass { hz: cliff, q: 0.62 });
+        self.lp_a.set(FilterSpec::Lowpass { frequency: hz(cliff), q: 0.62 });
         self.lp_b.set(FilterSpec::Lowpass {
-            hz: cliff * 2.1,
+            frequency: hz(cliff * 2.1),
             q: 0.62,
         });
         let tilt = macro_tilt(self.position);
         self.tilt_lo.set(FilterSpec::LowShelfRbj {
-            hz: 500.0,
-            db: -tilt * 0.5,
+            frequency: hz(500.0),
+            gain: db(-tilt * 0.5),
         });
         self.tilt_hi.set(FilterSpec::HighShelfRbj {
-            hz: 2_500.0,
-            db: tilt * 0.5,
+            frequency: hz(2_500.0),
+            gain: db(tilt * 0.5),
         });
         // The cap-cavity comb (corpus §4: dominant lags 0.1-0.3 ms,
         // walking longer toward the edge).

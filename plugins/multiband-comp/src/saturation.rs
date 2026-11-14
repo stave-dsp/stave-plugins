@@ -22,6 +22,7 @@ use stave::dsp::{
     db_to_amp, Biquad, Compensator, EnvelopeFollower, EnvelopeTimes, FilterSpec, Oversampled2x,
     Generator, SmoothedParam, Stage, Triode,
 };
+use stave::dsp::units::{db, hz};
 
 /// Cross-channel link for the tube makeup AGC: both
 /// channels key their makeup from the MAX of the two channels' input
@@ -248,7 +249,7 @@ impl BandSaturator {
         self.pre_shape.prepare(sample_rate);
         self.post_shape.prepare(sample_rate);
         self.dc_blocker
-            .set(FilterSpec::Highpass { hz: 5.0, q: 0.707 });
+            .set(FilterSpec::Highpass { frequency: hz(5.0), q: 0.707 });
         self.dc_blocker.reset();
         // The triode runs INSIDE the 4× stack, so its stateful cathode
         // dynamics must be prepared at the rate it actually ticks (the
@@ -318,8 +319,8 @@ impl BandSaturator {
                 let bump_db = 2.5 + 0.15 * self.drive_db;
                 self.pre_shape.set(
                     FilterSpec::LowShelf {
-                        hz: 80.0,
-                        db: bump_db,
+                        frequency: hz(80.0),
+                        gain: db(bump_db),
                     },
                 );
                 self.pre_shape.reset();
@@ -331,8 +332,8 @@ impl BandSaturator {
                 let rolloff_db = -0.5 - 0.25 * self.drive_db;
                 self.post_shape.set(
                     FilterSpec::HighShelf {
-                        hz: 7_500.0,
-                        db: rolloff_db,
+                        frequency: hz(7_500.0),
+                        gain: db(rolloff_db),
                     },
                 );
                 self.post_shape.reset();
@@ -357,15 +358,15 @@ impl BandSaturator {
             let bump_db = 2.5 + 0.15 * drive_db;
             self.pre_shape.set(
                 FilterSpec::LowShelf {
-                    hz: 80.0,
-                    db: bump_db,
+                    frequency: hz(80.0),
+                    gain: db(bump_db),
                 },
             );
             let rolloff_db = -0.5 - 0.25 * drive_db;
             self.post_shape.set(
                 FilterSpec::HighShelf {
-                    hz: 7_500.0,
-                    db: rolloff_db,
+                    frequency: hz(7_500.0),
+                    gain: db(rolloff_db),
                 },
             );
         }

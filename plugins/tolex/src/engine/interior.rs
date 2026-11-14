@@ -20,6 +20,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, DelayLine, Stage};
+use stave::dsp::units::{hz, Db, Hz};
 
 const C_AIR: f32 = 343.0;
 /// Reference box scale: ∛(60 L).
@@ -145,7 +146,7 @@ impl Interior {
         for (k, (frac, gain, lp_hz)) in TAPS.iter().enumerate() {
             self.tap_samples[k] = frac * s / C_AIR * rate;
             self.tap_gain[k] = gain * tap_scale * if k == 0 { 1.0 } else { vent };
-            self.tap_lp[k].set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 });
+            self.tap_lp[k].set(FilterSpec::Lowpass { frequency: hz(*lp_hz), q: 0.6 });
         }
         // The diffuse tail: depth-path recirculation, heavier and
         // longer as the box grows (T ~ V/A ~ s).
@@ -153,7 +154,7 @@ impl Interior {
         self.ring_fb = (0.30 * (s / S_REF)).clamp(0.0, 0.55) * vent;
         self.ring_out = 0.20 * vent;
         self.ring_lp.set(FilterSpec::Lowpass {
-            hz: 1_000.0,
+            frequency: hz(1_000.0),
             q: 0.6,
         });
         let lay = layout.min(2);
@@ -177,8 +178,8 @@ impl Interior {
         for (k, (frac, db, q)) in AIR_MODES.iter().enumerate() {
             let f = C_AIR / (2.0 * frac * s);
             self.air[k].set(FilterSpec::Peak {
-                hz: f,
-                db: db * vent * g_scale,
+                frequency: hz(f),
+                gain: Db::new(db * vent * g_scale),
                 q: q * q_scale,
             });
         }
@@ -190,8 +191,8 @@ impl Interior {
         let f_scale = S_REF / s;
         for (k, (hz, db, q)) in modes.iter().enumerate() {
             self.panels[k].set(FilterSpec::Peak {
-                hz: hz * f_scale,
-                db: db * panel_scale,
+                frequency: Hz::new(hz * f_scale),
+                gain: Db::new(db * panel_scale),
                 q: *q,
             });
         }
@@ -241,8 +242,8 @@ pub(crate) fn response_db(
     for (k, (frac, gain, lp_hz)) in TAPS.iter().enumerate() {
         let tau = frac * s / C_AIR;
         let g = gain * tap_scale * if k == 0 { 1.0 } else { vent };
-        lp.set(FilterSpec::Lowpass { hz: *lp_hz, q: 0.6 });
-        let (lr, li) = lp.response_at(hz);
+        lp.set(FilterSpec::Lowpass { frequency: Hz::new(*lp_hz), q: 0.6 });
+        let (lr, li) = lp.response_at(Hz::new(hz));
         let th = core::f32::consts::TAU * hz * tau;
         let (c, sn) = (th.cos(), th.sin());
         // g·H_lp·e^{-jθ}
@@ -268,10 +269,10 @@ pub(crate) fn response_db(
         let g_fb = (0.30 * (s / S_REF)).clamp(0.0, 0.55) * vent;
         let g_out = 0.20 * vent;
         lp.set(FilterSpec::Lowpass {
-            hz: 1_000.0,
+            frequency: Hz::new(1_000.0),
             q: 0.6,
         });
-        let (hr, hi) = lp.response_at(hz);
+        let (hr, hi) = lp.response_at(Hz::new(hz));
         let th = core::f32::consts::TAU * hz * tau;
         let (c, sn) = (th.cos(), th.sin());
         let (er, ei) = (hr * c + hi * sn, hi * c - hr * sn);
@@ -286,22 +287,22 @@ pub(crate) fn response_db(
     for (frac, db_m, q) in &AIR_MODES {
         let f = C_AIR / (2.0 * frac * s);
         lp.set(FilterSpec::Peak {
-            hz: f,
-            db: db_m * vent * g_scale,
+            frequency: Hz::new(f),
+            gain: Db::new(db_m * vent * g_scale),
             q: q * q_scale,
         });
-        db += 20.0 * lp.magnitude_at(hz).max(1e-12).log10();
+        db += 20.0 * lp.magnitude_at(Hz::new(hz)).max(1e-12).log10();
     }
     let panel_scale = (s / S_REF).powf(0.7).clamp(0.7, 1.4);
     let modes = &PANELS[material.min(PANELS.len() - 1)];
     let f_scale = S_REF / s;
     for (hz_m, db_m, q) in modes {
         lp.set(FilterSpec::Peak {
-            hz: hz_m * f_scale,
-            db: db_m * panel_scale,
+            frequency: Hz::new(hz_m * f_scale),
+            gain: Db::new(db_m * panel_scale),
             q: *q,
         });
-        db += 20.0 * lp.magnitude_at(hz).max(1e-12).log10();
+        db += 20.0 * lp.magnitude_at(Hz::new(hz)).max(1e-12).log10();
     }
     db
 }

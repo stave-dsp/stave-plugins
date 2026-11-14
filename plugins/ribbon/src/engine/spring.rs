@@ -59,7 +59,7 @@ pub(super) struct Spring {
 
 impl Spring {
     pub(super) fn new() -> Self {
-        Self { springs: [OneSpring::new(), OneSpring::new()], damp: [Svf::new(DAMP_HZ, Q); 2], xducer: [Svf::new(XDUCER_HZ, Q); 2] }
+        Self { springs: [OneSpring::new(), OneSpring::new()], damp: [Svf::new(hz(DAMP_HZ), Q); 2], xducer: [Svf::new(hz(XDUCER_HZ), Q); 2] }
     }
 
     pub(super) fn prepare(&mut self, sample_rate: f32) {
@@ -71,7 +71,7 @@ impl Spring {
         }
         for (damp, xducer) in self.damp.iter_mut().zip(&mut self.xducer) {
             damp.prepare(sample_rate);
-            damp.set(DAMP_HZ.min(0.45 * sample_rate), Q);
+            damp.set(hz(DAMP_HZ.min(0.45 * sample_rate)), Q);
             xducer.prepare(sample_rate);
         }
     }

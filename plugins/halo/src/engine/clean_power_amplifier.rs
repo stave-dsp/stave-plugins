@@ -1,5 +1,6 @@
 use stave::dsp::db_to_amp;
 use stave::dsp::{tau_coeff64, Koren, PushPull, Stage};
+use stave::dsp::units::{db, seconds};
 
 use crate::controls::DynamicSettings;
 
@@ -48,7 +49,7 @@ impl BiasWalk {
     }
 
     fn prepare(&mut self, sample_rate: f32) {
-        self.coeff = tau_coeff64(Self::SECONDS, f64::from(sample_rate));
+        self.coeff = tau_coeff64(seconds(Self::SECONDS), f64::from(sample_rate));
         self.position = 0.0;
     }
 
@@ -111,9 +112,9 @@ impl CleanPowerAmplifier {
     }
 
     pub fn apply_settings(&mut self, settings: DynamicSettings) {
-        self.power_pair.set_drive_db(settings.power_pair_drive_db);
+        self.power_pair.set_drive(db(settings.power_pair_drive_db));
         self.power_pair
-            .set_feedback_db(settings.negative_feedback_db);
+            .set_feedback(db(settings.negative_feedback_db));
         self.bias_walk.volts = f64::from(settings.bloom_amount) * 0.45;
         self.power_supply.apply_settings(settings);
         self.harmonic_controller.apply_settings(settings);
@@ -133,7 +134,7 @@ impl CleanPowerAmplifier {
             .power_supply
             .process_sample(power_pair_input, plate_draw);
         self.power_pair.set_supply_scale(selected_supply_voltage);
-        let small_signal_gain = db_to_amp(self.power_pair.small_signal_gain_db());
+        let small_signal_gain = db_to_amp(self.power_pair.small_signal_gain().get());
         let output = self.harmonic_controller.process_sample(
             power_pair_input,
             physical_output,
@@ -155,9 +156,9 @@ impl CleanPowerAmplifier {
     /// live gain follows the sagging supply; calibrating makeup against
     /// that would step the level whenever a dynamics knob moved mid-note.
     pub fn idle_small_signal_gain_db(&mut self) -> f32 {
-        let supply_scale = 10f32.powf(self.power_pair.ceiling_db() / 20.0);
+        let supply_scale = 10f32.powf(self.power_pair.ceiling().get() / 20.0);
         self.power_pair.set_supply_scale(1.0);
-        let gain_db = self.power_pair.small_signal_gain_db();
+        let gain_db = self.power_pair.small_signal_gain().get();
         self.power_pair.set_supply_scale(supply_scale);
         POWER_PAIR_INPUT_GAIN_DB + gain_db
     }

@@ -7,6 +7,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, Stage};
+use stave::dsp::units::{hz};
 
 use super::reservoir::Reservoir;
 
@@ -83,10 +84,10 @@ impl FrequencySelectivePowerSupply {
     pub fn prepare(&mut self, sample_rate: f32) {
         self.low_frequency_detector.prepare(sample_rate);
         self.low_frequency_detector
-            .set(FilterSpec::Lowpass { hz: 220.0, q: 0.71 });
+            .set(FilterSpec::Lowpass { frequency: hz(220.0), q: 0.71 });
         self.high_frequency_detector.prepare(sample_rate);
         self.high_frequency_detector.set(FilterSpec::Highpass {
-            hz: 1_600.0,
+            frequency: hz(1_600.0),
             q: 0.71,
         });
         self.low_frequency_envelope.prepare(sample_rate);
@@ -236,7 +237,7 @@ impl AdaptiveHarmonicController {
         self.even_harmonic_direct_current_blocker
             .prepare(sample_rate);
         self.even_harmonic_direct_current_blocker
-            .set(FilterSpec::Highpass { hz: 8.0, q: 0.71 });
+            .set(FilterSpec::Highpass { frequency: hz(8.0), q: 0.71 });
     }
 
     pub fn apply_settings(&mut self, settings: DynamicSettings) {

@@ -8,6 +8,7 @@
 use std::println;
 
 use stave::dsp::{Stage, Svf};
+use stave::dsp::units::Hz;
 
 use super::bench::{load, Rig, Src};
 
@@ -29,7 +30,7 @@ impl Bank {
         let f = (0..n)
             .map(|i| {
                 let hz = lo * (hi / lo).powf(i as f32 / (n - 1) as f32);
-                let mut s = Svf::new(hz, q);
+                let mut s = Svf::new(Hz::new(hz), q);
                 s.prepare(SR);
                 s
             })

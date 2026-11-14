@@ -16,6 +16,7 @@
 //! Both scale with `gen` (0 = untouched).
 
 use stave::dsp::{Stage, Svf};
+use stave::dsp::units::{hz};
 
 use super::space::{Anatomy, OCTAVES};
 
@@ -61,7 +62,7 @@ pub(super) fn colour(a: &Anatomy) -> (f32, f32) {
 
 impl Voicing {
     pub(super) fn new() -> Self {
-        Self { low: [Svf::new(CROSSOVER_HZ.0, BUTTERWORTH); 2], high: [Svf::new(CROSSOVER_HZ.1, BUTTERWORTH); 2], gain: [1.0; 2], mid: 1.0, width: 1.0, gain_step: [0.0; 2], mid_step: 0.0, width_step: 0.0 }
+        Self { low: [Svf::new(hz(CROSSOVER_HZ.0), BUTTERWORTH); 2], high: [Svf::new(hz(CROSSOVER_HZ.1), BUTTERWORTH); 2], gain: [1.0; 2], mid: 1.0, width: 1.0, gain_step: [0.0; 2], mid_step: 0.0, width_step: 0.0 }
     }
 
     pub(super) fn prepare(&mut self, sr: f32) {

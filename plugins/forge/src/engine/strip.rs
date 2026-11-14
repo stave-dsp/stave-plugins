@@ -5,6 +5,7 @@ use stave::dsp::{
     shapes, Biquad, Compensator, CurveStage, FilterSpec, Frame, Hysteresis, NonlinearRc,
     Oversampled2x, RcClipperConfig, Slew, StageKind, SwapPoint,
 };
+use stave::dsp::units::{db, hz};
 
 use crate::engine::voicing::conduction_sense;
 
@@ -23,9 +24,9 @@ stave::dsp::chain! {
             shapes::knee(1.0),
             conduction_sense,
         ),
-        voicing: Filter = Biquad::new(FilterSpec::HighShelf { hz: 900.0, db: 0.0 }),
+        voicing: Filter = Biquad::new(FilterSpec::HighShelf { frequency: hz(900.0), gain: db(0.0) }),
         second: Curve = CurveStage::from_fn(-4.0, 4.0, 0.0, shapes::knee(2.5)),
-        post: Filter = Biquad::new(FilterSpec::Peak { hz: 1_000.0, db: 0.0, q: 1.0 }),
+        post: Filter = Biquad::new(FilterSpec::Peak { frequency: hz(1_000.0), gain: db(0.0), q: 1.0 }),
         grit: Slew = Slew::new(200.0, 200.0),
         iron: Hysteresis = Hysteresis::new(0.4, 0.0),
     }

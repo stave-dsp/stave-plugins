@@ -25,6 +25,7 @@
 use core::f32::consts::TAU;
 
 use stave::dsp::{tau_coeff, DelayAllpass, DelayLine, Stage};
+use stave::dsp::units::{ms};
 
 use super::decay_eq::{DecayEq, Design, OCTAVES};
 
@@ -77,8 +78,8 @@ fn diffuser_len(i: usize, j: usize, sr: f32) -> f32 {
 
 /// Line `i`'s diffuser `j`: a Schroeder allpass of gain DIFFUSE.
 fn diffuser(i: usize, j: usize) -> DelayAllpass {
-    let ms = diffuser_ms(i, j);
-    DelayAllpass::new(ms, ms, DIFFUSE)
+    let t = diffuser_ms(i, j);
+    DelayAllpass::new(ms(f64::from(t)), ms(f64::from(t)), DIFFUSE)
 }
 
 /// The knobs' damping one-pole's gain at `hz`, dB.
@@ -256,8 +257,8 @@ impl Room {
         }
         self.lp = [0.0; LINES];
         self.energy = [0.0; LINES];
-        self.energy_k = tau_coeff(0.08, sr);
-        self.glide = tau_coeff(0.04, sr);
+        self.energy_k = tau_coeff(ms(80.0), sr);
+        self.glide = tau_coeff(ms(40.0), sr);
         self.share = self.share_to;
         self.mix = self.mix_to;
         self.design = Design::new(sr);

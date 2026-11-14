@@ -26,6 +26,7 @@ use stave::dsp::db_to_amp;
 use stave::dsp::{
     Coupler, CurveStage, EnvelopeFollower, EnvelopeTimes, Frame, Koren, LevelPolicy, Stage, Triode,
 };
+use stave::dsp::units::{hz};
 
 /// Maximum cascade depth (fixed so there's no audio-thread allocation).
 pub const MAXIMUM_STAGE_COUNT: usize = 4;
@@ -113,7 +114,7 @@ impl Default for RcCoupledTriodeCascade {
 impl RcCoupledTriodeCascade {
     pub fn new() -> Self {
         let triode_prototype = Triode::new();
-        let couplers = core::array::from_fn(|_| Coupler::new(8.0));
+        let couplers = core::array::from_fn(|_| Coupler::new(hz(8.0)));
         let curve_table = triode_prototype.to_curve_stage();
         let curve_table_tube = triode_prototype.tube();
         let curves = core::array::from_fn(|_| curve_table.clone());
@@ -172,7 +173,7 @@ impl RcCoupledTriodeCascade {
             } else {
                 self.coupling_hz
             };
-            self.couplers[stage_index] = Coupler::new(coupling_frequency_hz);
+            self.couplers[stage_index] = Coupler::new(hz(coupling_frequency_hz));
             Stage::prepare(&mut self.couplers[stage_index], self.sample_rate);
         }
         // ONE table set for the whole cascade: every stage is the
@@ -269,7 +270,7 @@ impl RcCoupledTriodeCascade {
         self.coupling_hz = frequency_hz.clamp(1.0, 200.0);
         for stage_index in 0..self.stage_count {
             if self.stage_coupling_frequencies_hz[stage_index] <= 0.0 {
-                self.couplers[stage_index].set_hz(self.coupling_hz);
+                self.couplers[stage_index].set_frequency(hz(self.coupling_hz));
             }
         }
         self.update_time_constants();
@@ -321,7 +322,7 @@ impl RcCoupledTriodeCascade {
     /// re-limited by it). With `linear_gain_db` this locates the rig's
     /// knee: consumers compute makeup as min(level+gain, ceiling).
     pub fn ceiling_db(&self) -> f32 {
-        self.triode_prototype.ceiling_db()
+        self.triode_prototype.ceiling().get()
     }
     /// The cascade's REPORTED small-signal insertion gain (dB) at the
     /// current settings: n·(stage gain) + (n−1)·interstage. Consumers
@@ -336,7 +337,7 @@ impl RcCoupledTriodeCascade {
     /// walking a level through the cascade stage by stage (cumulative
     /// knee compression, which a single lumped knee can't model).
     pub fn stage_gain_db(&self) -> f32 {
-        self.triode_prototype.small_signal_gain_db()
+        self.triode_prototype.small_signal_gain().get()
     }
     /// The interstage divider (dB), as set.
     pub fn interstage_db(&self) -> f32 {

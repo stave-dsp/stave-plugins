@@ -16,6 +16,7 @@
 //!   mechanism (block-rate targets, per-sample linear steps).
 
 use stave::dsp::{t60_gain, DcBlocker, DelayLine, Stage};
+use stave::dsp::units::{hz};
 
 /// SIXTEEN lines — the published floor for high-quality FDNs, and
 /// the cure for the tail's slow envelope beating (finite mode
@@ -146,7 +147,7 @@ impl Line {
             step: 0.0,
             g: 0.5,
             lp: 0.0,
-            dc: DcBlocker::new(20.0),
+            dc: DcBlocker::new(hz(20.0)),
             ap: DelayLine::new(),
             ap_len: 100.0,
             ap2: DelayLine::new(),

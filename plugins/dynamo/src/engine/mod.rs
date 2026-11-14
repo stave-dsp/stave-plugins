@@ -29,7 +29,7 @@
 use core::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use stave::dsp::{
-    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
+    hz_of_key, mod_lfo_rate, rise, standard_sources, sympathy, tau_coeff, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Steal, Voice, VoiceEvent, VoiceRack, Xorshift32,
 };
 use stave::prelude::*;
@@ -341,7 +341,7 @@ impl Voice for DynamoVoice {
     fn prepare(&mut self, sample_rate: f32) {
         self.sr = sample_rate;
         // ~5 ms displacement glide (block-rate targets, no zipper).
-        self.glide = tau_coeff(0.005, sample_rate);
+        self.glide = tau_coeff(ms(5.0), sample_rate);
         self.env.prepare(sample_rate);
         self.wires[0].prepare(sample_rate);
         self.wires[1].prepare(sample_rate);
@@ -415,7 +415,7 @@ impl Voice for DynamoVoice {
         // The pallet's inertia tracks THIS note's swing.
         self.esc_sense_k = 1.0 - (-core::f32::consts::TAU * hz * 1.2 / self.sr).exp();
         self.env.gate_on();
-        self.sources.note_on(hz, velocity);
+        self.sources.note_on(Hz::new(hz), velocity);
     }
     fn note_off(&mut self) {
         self.env.gate_off();
@@ -749,7 +749,7 @@ impl Plugin for Dynamo {
                 })
             },
             voicing: Watch::new(),
-            lfo: ModLfo::new(833.0, 0xC0FF_EE01),
+            lfo: ModLfo::new(ms(833.0), 0xC0FF_EE01),
             ensemble: Ensemble::default(),
             pressure: 1.0,
             hum_phase: 0.0,
@@ -811,13 +811,13 @@ impl Plugin for Dynamo {
             .transport()
             .and_then(|t| t.tempo_bpm)
             .unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        let hz = mod_lfo_rate(p.lfo_rate.value_as(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo.set(
             hz,
             ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize),
         );
         let global_lfo = self.lfo.tick_frames(frames);
-        self.ensemble.leak(block_s);
+        self.ensemble.leak(seconds(f64::from(block_s)));
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
         };
@@ -898,8 +898,8 @@ impl Plugin for Dynamo {
                 } else {
                     global_lfo
                 };
-                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], block_s);
-                let ramp = rise(v.sources.age, rise_ms, sr);
+                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], seconds(f64::from(block_s)));
+                let ramp = rise(v.sources.age, ms(f64::from(rise_ms)), sr);
                 let sv: matrix::SrcValues = standard_sources(
                     raw_lfo * ramp,
                     &v.sources,
@@ -958,7 +958,7 @@ impl Plugin for Dynamo {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
                 if let VoiceEvent::On { hz, velocity, .. } = voice {
-                    ensemble.note_on(hz, velocity);
+                    ensemble.note_on(Hz::new(hz), velocity);
                 }
                 rack.dispatch(voice);
             }

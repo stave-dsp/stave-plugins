@@ -1,5 +1,6 @@
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Stage};
+use stave::dsp::units::{hz};
 
 use crate::controls::InputSettings;
 
@@ -31,11 +32,11 @@ impl InputConditioner {
 
     pub fn apply_settings(&mut self, settings: InputSettings) {
         self.subsonic_highpass.set(FilterSpec::Highpass {
-            hz: settings.highpass_cutoff_hz,
+            frequency: hz(settings.highpass_cutoff_hz),
             q: core::f32::consts::FRAC_1_SQRT_2,
         });
         self.radio_frequency_lowpass.set(FilterSpec::Lowpass {
-            hz: settings.lowpass_cutoff_hz,
+            frequency: hz(settings.lowpass_cutoff_hz),
             q: core::f32::consts::FRAC_1_SQRT_2,
         });
     }

@@ -4,6 +4,7 @@
 //! signal flows. Everything here is pure data → shape/spec; no state.
 
 use stave::dsp::{shapes, FilterSpec};
+use stave::dsp::units::{db, hz};
 
 // ---------------------------------------------------------------------------
 
@@ -172,35 +173,35 @@ pub(crate) fn voice_spec(v: usize, tone: f32) -> FilterSpec {
     match v {
         // FLAT — the classic interstage tilt (TONE is the whole filter).
         0 => FilterSpec::HighShelf {
-            hz: 900.0,
-            db: tone * 12.0,
+            frequency: hz(900.0),
+            gain: db(tone * 12.0),
         },
         // SCOOP — mid dip between the stages; TONE eases/deepens it.
         1 => FilterSpec::Peak {
-            hz: 750.0,
-            db: -7.0 + tone * 3.0,
+            frequency: hz(750.0),
+            gain: db(-7.0 + tone * 3.0),
             q: 1.1,
         },
         // BUMP — pushed mids into the second clipper.
         2 => FilterSpec::Peak {
-            hz: 950.0,
-            db: 5.0 + tone * 3.0,
+            frequency: hz(950.0),
+            gain: db(5.0 + tone * 3.0),
             q: 1.2,
         },
         // BRIGHT — presence shelf into the second stage.
         3 => FilterSpec::HighShelf {
-            hz: 2_200.0,
-            db: 6.0 + tone * 4.0,
+            frequency: hz(2_200.0),
+            gain: db(6.0 + tone * 4.0),
         },
         // DARK — lowpass into the second stage.
         4 => FilterSpec::Lowpass {
-            hz: oct(5_000.0, 1.0),
+            frequency: hz(oct(5_000.0, 1.0)),
             q: 0.8,
         },
         // HONK — cocked-wah bell.
         _ => FilterSpec::Peak {
-            hz: 1_400.0,
-            db: 8.0 + tone * 3.0,
+            frequency: hz(1_400.0),
+            gain: db(8.0 + tone * 3.0),
             q: 2.2,
         },
     }
@@ -212,27 +213,27 @@ pub(crate) fn post_spec(c: usize) -> FilterSpec {
     match c {
         // FLAT — out of the way.
         0 => FilterSpec::Peak {
-            hz: 1_000.0,
-            db: 0.0,
+            frequency: hz(1_000.0),
+            gain: db(0.0),
             q: 1.0,
         },
         // AIR — +2.5 dB high shelf at 2.5 kHz.
         1 => FilterSpec::HighShelf {
-            hz: 2_500.0,
-            db: 2.5,
+            frequency: hz(2_500.0),
+            gain: db(2.5),
         },
         // LOW CUT — 90 Hz highpass (clears saturation mud).
-        2 => FilterSpec::Highpass { hz: 90.0, q: 0.8 },
+        2 => FilterSpec::Highpass { frequency: hz(90.0), q: 0.8 },
         // WARM — +3 dB low shelf at 180 Hz.
-        3 => FilterSpec::LowShelf { hz: 180.0, db: 3.0 },
+        3 => FilterSpec::LowShelf { frequency: hz(180.0), gain: db(3.0) },
         // HI CUT — 5.5 kHz lowpass with a resonant edge.
         4 => FilterSpec::Lowpass {
-            hz: 5_500.0,
+            frequency: hz(5_500.0),
             q: 1.1,
         },
         // DARK — deeper 4 kHz roll-off.
         _ => FilterSpec::Lowpass {
-            hz: 4_000.0,
+            frequency: hz(4_000.0),
             q: 0.8,
         },
     }

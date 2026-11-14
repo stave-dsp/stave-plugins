@@ -11,6 +11,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Stage};
+use stave::dsp::units::{db, hz, Db, Hz};
 
 /// The corpus capture distance: the distilled signatures already
 /// CARRY proximity at ~3 cm (York's close-mic practice) — the shelf
@@ -121,24 +122,24 @@ impl Microphone {
         for (k, (kind, hz, q)) in MIC_SECTIONS.iter().enumerate() {
             match kind {
                 0 => self.sections[k].set(FilterSpec::LowShelfRbj {
-                    hz: *hz,
-                    db: gains[k],
+                    frequency: Hz::new(*hz),
+                    gain: db(gains[k]),
                 }),
                 2 => self.sections[k].set(FilterSpec::HighShelfRbj {
-                    hz: *hz,
-                    db: gains[k],
+                    frequency: Hz::new(*hz),
+                    gain: db(gains[k]),
                 }),
                 _ => self.sections[k].set(FilterSpec::Peak {
-                    hz: *hz,
-                    db: gains[k],
+                    frequency: Hz::new(*hz),
+                    gain: db(gains[k]),
                     q: *q,
                 }),
             }
         }
         let (corner, gain) = proximity_shelf(model, mic_r_m);
         self.proximity.set(FilterSpec::LowShelfRbj {
-            hz: corner,
-            db: gain,
+            frequency: hz(corner),
+            gain: db(gain),
         });
     }
 
@@ -159,27 +160,27 @@ pub(crate) fn response_db(model: usize, mic_r_m: f32, hz: f32, rate: f32) -> f32
     bq.prepare(rate);
     let (corner, gain) = proximity_shelf(model, mic_r_m);
     bq.set(FilterSpec::LowShelfRbj {
-        hz: corner,
-        db: gain,
+        frequency: Hz::new(corner),
+        gain: db(gain),
     });
-    let mut db = 20.0 * bq.magnitude_at(hz).max(1e-12).log10();
+    let mut db = 20.0 * bq.magnitude_at(Hz::new(hz)).max(1e-12).log10();
     for (k, (kind, f0, q)) in MIC_SECTIONS.iter().enumerate() {
         match kind {
             0 => bq.set(FilterSpec::LowShelfRbj {
-                hz: *f0,
-                db: gains[k],
+                frequency: Hz::new(*f0),
+                gain: Db::new(gains[k]),
             }),
             2 => bq.set(FilterSpec::HighShelfRbj {
-                hz: *f0,
-                db: gains[k],
+                frequency: Hz::new(*f0),
+                gain: Db::new(gains[k]),
             }),
             _ => bq.set(FilterSpec::Peak {
-                hz: *f0,
-                db: gains[k],
+                frequency: Hz::new(*f0),
+                gain: Db::new(gains[k]),
                 q: *q,
             }),
         }
-        db += 20.0 * bq.magnitude_at(hz).max(1e-12).log10();
+        db += 20.0 * bq.magnitude_at(Hz::new(hz)).max(1e-12).log10();
     }
     db
 }

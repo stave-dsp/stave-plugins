@@ -18,8 +18,8 @@ pub struct HighBandLimiter {
 impl HighBandLimiter {
     pub fn new() -> Self {
         Self {
-            lowpass: LinkwitzRiley4::lowpass(HIGH_BAND_LIMITER_CROSSOVER_HZ),
-            highpass: LinkwitzRiley4::highpass(HIGH_BAND_LIMITER_CROSSOVER_HZ),
+            lowpass: LinkwitzRiley4::lowpass(hz(HIGH_BAND_LIMITER_CROSSOVER_HZ)),
+            highpass: LinkwitzRiley4::highpass(hz(HIGH_BAND_LIMITER_CROSSOVER_HZ)),
         }
     }
 

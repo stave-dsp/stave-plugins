@@ -20,6 +20,7 @@
 use core::f32::consts::TAU;
 
 use stave::dsp::{DelayLine, Stage, Svf, Xorshift32};
+use stave::dsp::units::{hz};
 
 /// The longest excursion either side, ms (WOBBLE 1, slowest RPM).
 const WOBBLE_MS: f32 = 6.0;
@@ -204,9 +205,9 @@ impl Media {
             f.prepare(host_hz);
         }
         for f in &mut self.hiss_tilt {
-            f.set(2_500.0, q_of(0.0));
+            f.set(hz(2_500.0), q_of(0.0));
         }
-        self.rumble_lp.set(60.0, q_of(0.4));
+        self.rumble_lp.set(hz(60.0), q_of(0.4));
         self.rng = Xorshift32::new(0x51A6_E10F);
         self.phase = 0.0;
         self.drift_from = 0.0;
@@ -240,8 +241,8 @@ impl Media {
         let lp = 20_000.0f32.min(nyq) * (v.lp_hz / 20_000.0).powf(age);
         let hp = 10.0 * (v.hp_hz / 10.0).powf(age);
         for ch in 0..2 {
-            self.lp[ch].set(lp, q_of(0.15 * age));
-            self.hp[ch].set(hp, q_of(0.1));
+            self.lp[ch].set(hz(lp), q_of(0.15 * age));
+            self.hp[ch].set(hz(hp), q_of(0.1));
         }
     }
 

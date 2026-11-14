@@ -17,6 +17,7 @@ use stave_anvil_vst3::RcCoupledTriodeCascade;
 use stave_dsp::{Bias, EnvelopeFollower, EnvelopeTimes, SmoothSat, Source, Stage, Triode};
 use stave_measure::dynamics::time_to_fraction;
 use stave_measure::tone_window::ToneWindow;
+use stave::dsp::units::{db};
 
 /// The cathode self-bias `time_ms` sets the PHYSICAL cathode RC. Measure
 /// the observed bias-shift decay in silence, at three rates.
@@ -184,7 +185,7 @@ fn smoothsat_chain_is_block_size_invariant() {
             s.set_even(0.15);
             s.set_odd(0.10);
             s.set_smoothness(0.7);
-            s.set_hf_smoothing(6.0);
+            s.set_hf_smoothing(db(6.0));
         };
         let mut out = Vec::with_capacity(n);
         for i in 0..n {

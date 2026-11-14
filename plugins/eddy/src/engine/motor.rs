@@ -13,6 +13,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, EnvelopeFollower, EnvelopeTimes, Lag, Slew, Stage};
+use stave::dsp::units::{hz, ms};
 
 use super::diffusion::Diffusion;
 use super::echo::Echo;
@@ -52,7 +53,7 @@ impl Motor {
                 release_ms: 250.0,
                 slow_release_ms: None,
             }),
-            inertia: Lag::new(300.0, 300.0),
+            inertia: Lag::new(ms(300.0), ms(300.0)),
             tape: stave::dsp::PerChannel::new(|_| LaneTape {
                 mag: stave::dsp::Hysteresis::new(2.2, 0.5),
                 slew: Slew::new(120.0, 120.0),
@@ -76,7 +77,7 @@ impl Motor {
             lane.loss.prepare(sr);
             lane.loss.set(
                 FilterSpec::Lowpass {
-                    hz: 6_500.0,
+                    frequency: hz(6_500.0),
                     q: 0.707,
                 });
         }
@@ -85,8 +86,8 @@ impl Motor {
 
     /// Block-rate: INERTIA maps to the platter time constant.
     pub(super) fn begin_block(&mut self, inertia: f32) {
-        let ms = 60.0 + 1_500.0 * inertia.clamp(0.0, 1.0);
-        self.inertia.set_times(ms, ms);
+        let t = ms(f64::from(60.0 + 1_500.0 * inertia.clamp(0.0, 1.0)));
+        self.inertia.set_times(t, t);
     }
 
     /// One stereo frame: the sagged time through the classic law.

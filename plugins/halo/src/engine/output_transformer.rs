@@ -2,6 +2,7 @@
 
 use stave::dsp::FilterSpec;
 use stave::dsp::{Biquad, Hysteresis, Stage};
+use stave::dsp::units::{hz};
 
 #[derive(Clone)]
 pub struct OutputTransformer {
@@ -29,11 +30,11 @@ impl OutputTransformer {
     pub fn prepare(&mut self, sample_rate: f32) {
         self.low_frequency_bandwidth.prepare(sample_rate);
         self.low_frequency_bandwidth
-            .set(FilterSpec::Highpass { hz: 11.0, q: 0.62 });
+            .set(FilterSpec::Highpass { frequency: hz(11.0), q: 0.62 });
         self.magnetization.prepare(sample_rate);
         self.high_frequency_bandwidth.prepare(sample_rate);
         self.high_frequency_bandwidth.set(FilterSpec::Lowpass {
-            hz: 21_500.0,
+            frequency: hz(21_500.0),
             q: 0.71,
         });
     }

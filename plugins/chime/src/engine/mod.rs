@@ -26,7 +26,7 @@
 //!   strings; a lone voice hears none).
 
 use stave::dsp::{
-    hz_of_key, mod_lfo_hz, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, ModLfo,
+    hz_of_key, mod_lfo_rate, rise, standard_sources, sympathy, Adsr, AdsrConfig, Ensemble, ModLfo,
     ModLfoShape, NoteSources, Osc, Steal, Voice, VoiceEvent, VoiceRack, Waveform,
 };
 use stave::prelude::*;
@@ -152,10 +152,10 @@ impl Voice for ChimeVoice {
     }
     fn note_on(&mut self, hz: f32, velocity: f32) {
         self.hz = hz;
-        self.osc.set_hz(hz);
+        self.osc.set_frequency(Hz::new(hz));
         self.osc.reset(); // same attack every time: reproducible by construction
         self.env.gate_on();
-        self.sources.note_on(hz, velocity);
+        self.sources.note_on(Hz::new(hz), velocity);
     }
     fn note_off(&mut self) {
         self.env.gate_off();
@@ -177,7 +177,7 @@ impl Voice for ChimeVoice {
         self.pitch_st += self.glide * (self.pitch_st_target - self.pitch_st);
         self.level_db += self.glide * (self.level_db_target - self.level_db);
         if self.pitch_st.abs() > 1e-4 {
-            self.osc.set_hz(self.hz * (self.pitch_st / 12.0).exp2());
+            self.osc.set_frequency(hz(self.hz * (self.pitch_st / 12.0).exp2()));
         }
         let g = if self.level_db.abs() > 1e-4 {
             db_to_amp(self.level_db)
@@ -251,7 +251,7 @@ impl Plugin for Chime {
                 ChimeVoice::with_seed(0x9E37_79B9 ^ (i as u32).wrapping_mul(0x9E37_79B1))
             }),
             voicing: Watch::new(),
-            lfo: ModLfo::new(833.0, 0xC0FF_EE01),
+            lfo: ModLfo::new(ms(833.0), 0xC0FF_EE01),
             ensemble: Ensemble::default(),
             taps: ChimeTaps::new(telemetry),
         }
@@ -297,11 +297,11 @@ impl Plugin for Chime {
         //     advance the global clocks, then evaluate per voice.
         let block_s = block.frames() as f32 / self.sample_rate;
         let tempo = block.transport().and_then(|t| t.tempo_bpm).unwrap_or(120.0) as f32;
-        let hz = mod_lfo_hz(p.lfo_rate.value(), p.lfo_sync.value().to_index() as usize, tempo);
+        let hz = mod_lfo_rate(p.lfo_rate.value_as(), p.lfo_sync.value().to_index() as usize, tempo);
         self.lfo
             .set(hz, ModLfoShape::from_index(p.lfo_shape.value().to_index() as usize));
         let global_lfo = self.lfo.tick_frames(block.frames());
-        self.ensemble.leak(block_s);
+        self.ensemble.leak(seconds(f64::from(block_s)));
         let routes = Routes {
             slots: p.routes.each_ref().map(|r| r.slot(block_s)),
         };
@@ -324,8 +324,8 @@ impl Plugin for Chime {
                 } else {
                     global_lfo
                 };
-                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], block_s);
-                let ramp = rise(v.sources.age, rise_ms, sample_rate);
+                v.sources.lfo_phases[0] = lfo.advance_phase(v.sources.lfo_phases[0], seconds(f64::from(block_s)));
+                let ramp = rise(v.sources.age, ms(f64::from(rise_ms)), sample_rate);
                 let sv: matrix::SrcValues = standard_sources(
                     raw_lfo * ramp,
                     &v.sources,
@@ -359,7 +359,7 @@ impl Plugin for Chime {
                 let EventKind::Note(note) = event.kind;
                 let voice = note.voice_event(hz_of_key);
                 if let VoiceEvent::On { hz, velocity, .. } = voice {
-                    ensemble.note_on(hz, velocity);
+                    ensemble.note_on(Hz::new(hz), velocity);
                 }
                 rack.dispatch(voice);
             }

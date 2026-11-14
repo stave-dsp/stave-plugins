@@ -20,6 +20,7 @@ use stave_dsp::{
     StageTarget, Target, Triode,
 };
 use stave_multiband_comp_vst3::saturation::BandSaturator;
+use stave::dsp::units::{db, hz};
 
 const BASE: f32 = 48_000.0;
 /// ns available per base sample at 48 kHz.
@@ -121,8 +122,8 @@ fn component_cost_table() {
     rows.push(time_fn("Triode curve @4x", 4.0, |x| cs.tick(x)));
 
     let mut fs = Biquad::new(FilterSpec::HighShelf {
-        hz: 900.0,
-        db: -6.0,
+        frequency: hz(900.0),
+        gain: db(-6.0),
     });
     fs.prepare(os_rate);
     rows.push(time_fn("Biquad shelf @4x", 4.0, |x| fs.tick(x)));
@@ -172,8 +173,8 @@ fn component_cost_table() {
     )))
     .unwrap();
     ch.push(StageKind::Filter(Biquad::new(FilterSpec::HighShelf {
-        hz: 900.0,
-        db: -6.0,
+        frequency: hz(900.0),
+        gain: db(-6.0),
     })))
     .unwrap();
     ch.push(StageKind::Curve(CurveStage::from_fn(
@@ -266,8 +267,8 @@ fn component_cost_table() {
     )))
     .unwrap();
     chb.push(StageKind::Filter(Biquad::new(FilterSpec::HighShelf {
-        hz: 900.0,
-        db: -6.0,
+        frequency: hz(900.0),
+        gain: db(-6.0),
     })))
     .unwrap();
     chb.push(StageKind::Curve(CurveStage::from_fn(
